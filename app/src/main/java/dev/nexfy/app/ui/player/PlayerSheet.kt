@@ -1,5 +1,9 @@
 package dev.nexfy.app.ui.player
 
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.draw.drawWithContent
@@ -326,6 +330,9 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val breath = animateFloatAsState(if (s.playing || !expanded || showLyrics) 1f else 0.84f, Motion.settle(169f), label = "breath")
             // Throwable cover: a strong horizontal drag skips, a weak one springs back.
             val throwX = remember { Animatable(0f) }
+            val currentUri by rememberUpdatedState(track.uri)
+            // Plain holder: set by a throw, read once by the cover transition.
+            val thrown = remember { booleanArrayOf(false) }
             var tapHint by remember { mutableStateOf<Pair<Long, Int>?>(null) }
 
             var lyrics by remember(track.uri) { mutableStateOf<LyricsState>(LyricsState.Loading) }
@@ -393,8 +400,13 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                     if (go != 0 && (go == -1 || hasNext)) {
                                         haptics.press()
                                         // Skip first: the next song loads while the cover flies out.
+                                        val before = currentUri
+                                        thrown[0] = true
                                         if (go == 1) controls.next() else controls.previous()
                                         throwX.animateTo(-go * fullW * 1.2f, tween(170, easing = Motion.EmphasizedAccelerate))
+                                        // Come back in with the new song's cover, not the old one.
+                                        withTimeoutOrNull(700) { snapshotFlow { currentUri }.first { it != before } }
+                                            ?: run { thrown[0] = false }
                                         throwX.snapTo(go * fullW * .8f)
                                     }
                                     throwX.animateTo(0f, Motion.settle(520f))
@@ -415,7 +427,15 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             val r = lyricsIn.value * 70f
                             renderEffect = if (r > .5f && Build.VERSION.SDK_INT >= 31) BlurEffect(r, r, TileMode.Clamp) else null
                         },
-                        transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) },
+                        // A thrown cover comes back already showing the new art; other changes cross-fade.
+                        transitionSpec = {
+                            if (thrown[0]) {
+                                thrown[0] = false
+                                EnterTransition.None togetherWith ExitTransition.None
+                            } else {
+                                fadeIn(tween(420)) togetherWith fadeOut(tween(420))
+                            }
+                        },
                         label = "cover",
                     ) { url ->
                         AsyncImage(url, null, Modifier.fillMaxSize().kenBurns(s.playing && settled && !showLyrics), contentScale = ContentScale.Crop)

@@ -7,6 +7,7 @@ import android.provider.Settings
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
 import coil3.request.crossfade
 import androidx.core.content.ContextCompat
 import dev.nexfy.app.playback.CoreBridge
@@ -106,6 +107,11 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                     if (uris.isEmpty()) return@collect
                     runCatching { core.tracksInfo(uris) }.onSuccess { tracks ->
                         bridge.setNeighbours(tracks.find { it.uri == next }, tracks.find { it.uri == previous })
+                        // Their covers too, so a skip shows the new art at once.
+                        val images = SingletonImageLoader.get(this@NexfyApp)
+                        tracks.mapNotNull { it.imageUrl }.forEach { url ->
+                            images.enqueue(ImageRequest.Builder(this@NexfyApp).data(url).build())
+                        }
                     }
                 }
         }
