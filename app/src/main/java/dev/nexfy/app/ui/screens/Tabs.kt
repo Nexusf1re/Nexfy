@@ -32,8 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -134,13 +134,16 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant)
-                    TextField(
-                        query, { query = it }, Modifier.weight(1f), singleLine = true,
-                        placeholder = { Text("Músicas, artistas, álbuns", color = c.onSurfaceVariant, maxLines = 1) },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = c.surfaceVariant, unfocusedContainerColor = c.surfaceVariant,
-                            focusedIndicatorColor = c.surfaceVariant, unfocusedIndicatorColor = c.surfaceVariant,
-                        ),
+                    BasicTextField(
+                        query, { query = it }, Modifier.weight(1f).padding(horizontal = 12.dp), singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.onSurface),
+                        cursorBrush = SolidColor(c.onSurface),
+                        decorationBox = { field ->
+                            if (query.isEmpty()) {
+                                Text("Músicas, artistas, álbuns", color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                            }
+                            field()
+                        },
                     )
                     if (searching) {
                         CircularProgressIndicator(Modifier.size(44.dp).padding(12.dp), strokeWidth = 2.dp, color = c.onSurface)
