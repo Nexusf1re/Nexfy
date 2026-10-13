@@ -79,8 +79,10 @@ import dev.sonata.app.ui.screens.SettingsScreen
 import dev.sonata.app.ui.theme.accentColor
 import dev.sonata.app.ui.theme.isDark
 import kotlinx.coroutines.launch
+import uniffi.sonata_core.Lyrics
 import uniffi.sonata_core.RepeatMode
 import uniffi.sonata_core.Track
+import uniffi.sonata_core.TrackInfo
 
 enum class Tab(val label: String, val icon: ImageVector) {
     Home("Início", Icons.Rounded.Home),
@@ -179,6 +181,9 @@ class AppActions(
     override fun setShuffle(on: Boolean) {
         controller()?.shuffleModeEnabled = on
     }
+
+    override suspend fun lyrics(track: TrackInfo): Lyrics? =
+        core.lyrics(track.uri, track.title, track.artists, track.album, track.durationMs)
 
     override fun setRepeat(mode: RepeatMode) {
         controller()?.repeatMode = when (mode) {

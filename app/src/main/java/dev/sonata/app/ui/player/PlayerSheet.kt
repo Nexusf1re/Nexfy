@@ -1,6 +1,12 @@
 package dev.sonata.app.ui.player
 
+import android.os.Build
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.rounded.Lyrics
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animate
@@ -102,7 +108,9 @@ import dev.sonata.app.ui.theme.isDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import uniffi.sonata_core.Lyrics
 import uniffi.sonata_core.RepeatMode
+import uniffi.sonata_core.TrackInfo
 
 /** What the player can ask playback to do. */
 interface PlayerControls {
@@ -112,6 +120,9 @@ interface PlayerControls {
     fun seek(positionMs: Long)
     fun setShuffle(on: Boolean)
     fun setRepeat(mode: RepeatMode)
+
+    /** Lyrics for [track], or null when nobody has them. */
+    suspend fun lyrics(track: TrackInfo): Lyrics?
 }
 
 private val settle = Motion.settle<Float>(247f)
@@ -254,6 +265,21 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val throwX = remember { Animatable(0f) }
             var tapHint by remember { mutableStateOf<Pair<Long, Int>?>(null) }
 
+            // Lyrics replace the cover in place; they load the first time they are shown.
+            var showLyrics by remember { mutableStateOf(false) }
+            var lyrics by remember(track.uri) { mutableStateOf<LyricsState>(LyricsState.Loading) }
+            LaunchedEffect(track.uri, showLyrics) {
+                if (!showLyrics || lyrics != LyricsState.Loading) return@LaunchedEffect
+                lyrics = try {
+                    controls.lyrics(track)?.let { LyricsState.Found(it) } ?: LyricsState.None
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    LyricsState.Failed
+                }
+            }
+            val artAlpha = animateFloatAsState(if (showLyrics && settled) 0f else 1f, Motion.standard(), label = "art")
+
             fun GraphicsLayerScope.artMove(extra: Float) {
                 val p = pf()
                 val k = lerp(miniArt / artFullPx, 1f, p)
@@ -273,13 +299,14 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         val k = lerp(miniArt / artFullPx, 1f, p)
                         artMove(lerp(1f, breath.value, p) * (1f - kotlin.math.abs(throwX.value) / fullW * .15f))
                         rotationZ = throwX.value / fullW * 14f
+                        alpha = artAlpha.value
                         // Corners and shadow compensate the scale: 12 dp mini, 28 dp full.
                         shape = RoundedCornerShape((lerp(12f, 28f, p) * density.density / k.coerceAtLeast(.05f)).coerceAtLeast(0f))
                         clip = true
                         shadowElevation = lerp(0f, 24f, p) * density.density
                     }
                     .then(
-                        if (settled) {
+                        if (settled && !showLyrics) {
                             Modifier.pointerInput(track.uri) {
                                 detectTapGestures(onDoubleTap = { o ->
                                     val dir = if (o.x < size.width / 2) -1 else 1
@@ -292,7 +319,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         },
                     )
                     .then(
-                        if (settled) {
+                        if (settled && !showLyrics) {
                             Modifier.draggable(
                                 rememberDraggableState { d -> scope.snapNow(throwX, throwX.value + d) },
                                 Orientation.Horizontal,
@@ -369,7 +396,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         Spacer(Modifier.weight(1f))
                         Spacer(Modifier.width(48.dp))
                     }
-                    Spacer(Modifier.height(artSpace))
+                    Box(Modifier.fillMaxWidth().height(artSpace)) {
+                        if (showLyrics) {
+                            LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(vertical = 8.dp))
+                        }
+                    }
                     Column(
                         Modifier.wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged {
                             val h = with(density) { it.height.toDp() }
@@ -433,6 +464,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             }
                             Spacer(Modifier.weight(1f))
                             if (count > 1) Text("${index + 1} de $count", color = Color.White.copy(.5f), fontSize = 12.sp)
+                            Spacer(Modifier.weight(1f))
+                            ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) { showLyrics = !showLyrics }
                         }
                         Spacer(Modifier.height(12.dp))
                     }
@@ -538,6 +571,87 @@ private fun BoxScope.SeekRipple(id: Long, dir: Int) {
                 scaleY = sc
                 translationX = dir * v.value * 40f
             },
+        )
+    }
+}
+
+sealed interface LyricsState {
+    data object Loading : LyricsState
+    data object None : LyricsState
+    data object Failed : LyricsState
+    data class Found(val lyrics: Lyrics) : LyricsState
+}
+
+/**
+ * Scrolling lyrics: the current line is large and sharp and stays near the
+ * top third; the others shrink, fade and blur with their distance. Tapping
+ * a timed line seeks to it.
+ */
+@Composable
+private fun LyricsView(state: LyricsState, position: Long, controls: PlayerControls, modifier: Modifier) {
+    val found = state as? LyricsState.Found
+    if (found == null || found.lyrics.instrumental || found.lyrics.lines.isEmpty()) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text(
+                when {
+                    state == LyricsState.Loading -> "Procurando a letra…"
+                    found?.lyrics?.instrumental == true -> "Instrumental"
+                    state == LyricsState.Failed -> "Não deu para buscar a letra agora"
+                    else -> "Letra não encontrada"
+                },
+                color = Color.White.copy(.6f),
+                fontSize = 16.sp,
+            )
+        }
+        return
+    }
+    val lyrics = found.lyrics
+    val lines = lyrics.lines
+    val current = if (lyrics.synced) {
+        lines.indexOfLast { (it.atMs?.toLong() ?: Long.MAX_VALUE) <= position + 250 }
+    } else {
+        -1
+    }
+    val list = rememberLazyListState()
+    LaunchedEffect(current) {
+        if (current >= 0) list.animateScrollToItem((current - 2).coerceAtLeast(0))
+    }
+    Column(modifier) {
+        LazyColumn(Modifier.weight(1f), state = list, verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            items(lines.size) { i ->
+                val line = lines[i]
+                val active = !lyrics.synced || i == current
+                val focus by animateFloatAsState(if (active) 1f else 0f, Motion.settle(169f), label = "focus")
+                val distance = if (current < 0) 0 else kotlin.math.abs(i - current).coerceAtMost(4)
+                val blur = if (Build.VERSION.SDK_INT >= 31 && lyrics.synced) (distance * 1.6f * (1f - focus)).dp else 0.dp
+                Text(
+                    line.text,
+                    Modifier.fillMaxWidth()
+                        .graphicsLayer {
+                            val sc = .86f + .14f * focus
+                            scaleX = sc
+                            scaleY = sc
+                            alpha = .32f + .68f * focus
+                            transformOrigin = TransformOrigin(0f, .5f)
+                        }
+                        .then(if (blur > 0.dp) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
+                        .clickable(
+                            enabled = line.atMs != null,
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) { line.atMs?.let { controls.seek(it.toLong()) } },
+                    color = Color.White,
+                    fontSize = if (lyrics.synced) 28.sp else 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = if (lyrics.synced) 34.sp else 28.sp,
+                )
+            }
+        }
+        Text(
+            "Letra: ${lyrics.source}",
+            color = Color.White.copy(.4f),
+            fontSize = 11.sp,
+            modifier = Modifier.padding(top = 6.dp),
         )
     }
 }

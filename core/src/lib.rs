@@ -4,6 +4,7 @@
 mod auth;
 #[cfg(target_os = "android")]
 mod android;
+mod lyrics;
 mod queue;
 mod session_reads;
 mod webapi;
@@ -24,6 +25,7 @@ use librespot_playback::mixer::VolumeGetter;
 use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel};
 use tokio::net::TcpListener;
 
+pub use lyrics::{Lyrics, LyricsLine};
 pub use queue::RepeatMode;
 use queue::Queue;
 pub use webapi::{
@@ -291,6 +293,30 @@ impl SonataCore {
 
     pub async fn top_artists(&self, refresh: bool) -> Result<Vec<Artist>, CoreError> {
         self.inner.web.top_artists(refresh).await.map_err(web_error)
+    }
+
+    /// Lyrics for a track: Spotify's, else LRCLIB's; None when nobody has them.
+    pub async fn lyrics(
+        &self,
+        track_uri: String,
+        title: String,
+        artists: String,
+        album: String,
+        duration_ms: u32,
+    ) -> Result<Option<Lyrics>, CoreError> {
+        // A dead session only costs the Spotify source; LRCLIB still answers.
+        let _ = self.inner.ensure_session().await;
+        let session = self.inner.with_session(Session::clone);
+        let query = lyrics::Query {
+            track_uri: &track_uri,
+            title: &title,
+            artist: &artists,
+            album: &album,
+            duration_ms,
+        };
+        lyrics::fetch(session.as_ref(), &self.inner.cache_dir, &query)
+            .await
+            .map_err(web_error)
     }
 
     pub async fn search(&self, query: String) -> Result<SearchResults, CoreError> {
