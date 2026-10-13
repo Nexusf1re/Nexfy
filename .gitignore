@@ -1,5 +1,6 @@
 # Rust
 /core/target/
+/core/uniffi-bindgen/target/
 
 # Android / Gradle
 .gradle/

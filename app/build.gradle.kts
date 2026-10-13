@@ -6,11 +6,19 @@ plugins {
 }
 
 // The Rust core (../core) builds into jniLibs and its UniFFI Kotlin bindings
-// into src/main/java/uniffi before every build. Both outputs are gitignored.
+// into src/main/java/uniffi before every build. Both outputs are gitignored,
+// and both tasks are skipped while their inputs are unchanged.
 val ndkVersionPinned = "30.0.16248370"
 val coreDir: File = rootProject.file("core")
 val jniLibsDir: File = file("src/main/jniLibs")
 val coreLibrary: File = jniLibsDir.resolve("arm64-v8a/libsonata_core.so")
+val bindingsDir: File = file("src/main/java/uniffi")
+
+// Full LTO only when a release APK is requested; debug builds use the
+// faster android-dev profile (see core/Cargo.toml).
+val rustProfile: String =
+    if (gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }) "release"
+    else "android-dev"
 
 val sdkDir: String = Properties()
     .apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) } }
@@ -26,21 +34,31 @@ val cargo: String = File(
 val buildRustCore by tasks.registering(Exec::class) {
     group = "rust"
     description = "Builds core/ for arm64 Android into jniLibs."
+    inputs.dir(coreDir.resolve("src"))
+    inputs.dir(coreDir.resolve("third_party"))
+    inputs.files(coreDir.resolve("Cargo.toml"), coreDir.resolve("Cargo.lock"))
+    inputs.property("profile", rustProfile)
+    outputs.file(coreLibrary)
     workingDir = coreDir
     environment("ANDROID_NDK_HOME", "$sdkDir/ndk/$ndkVersionPinned")
-    // Release even for debug APKs: a debug librespot cannot decode in real time.
-    commandLine(cargo, "ndk", "-t", "arm64-v8a", "--platform", "31", "-o", jniLibsDir.path, "build", "--release")
+    // Optimised even for debug APKs: a debug librespot cannot decode in real time.
+    commandLine(
+        cargo, "ndk", "-t", "arm64-v8a", "--platform", "31", "-o", jniLibsDir.path,
+        "build", "--profile", rustProfile,
+    )
 }
 
 val generateUniffiBindings by tasks.registering(Exec::class) {
     group = "rust"
     description = "Generates the Kotlin bindings for the core library."
     dependsOn(buildRustCore)
+    inputs.file(coreLibrary)
+    outputs.dir(bindingsDir)
     workingDir = coreDir
     commandLine(
-        cargo, "run", "--release", "--bin", "uniffi-bindgen", "--",
+        cargo, "run", "--release", "--manifest-path", "uniffi-bindgen/Cargo.toml", "--",
         "generate", "--library", coreLibrary.path,
-        "--language", "kotlin", "--out-dir", file("src/main/java").path, "--no-format",
+        "--language", "kotlin", "--out-dir", bindingsDir.parentFile.path, "--no-format",
     )
 }
 
@@ -96,6 +114,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.browser)
+    implementation(libs.androidx.media3.session)
     implementation(libs.kotlinx.coroutines.android)
     // UniFFI's Kotlin bindings call the core through JNA.
     implementation("${libs.jna.get()}@aar")

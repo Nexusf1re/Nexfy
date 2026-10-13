@@ -1,0 +1,13 @@
+# Generates the Kotlin bindings from the built libsonata_core.so.
+# Its own crate so it builds once and never pulls in librespot.
+[package]
+name = "uniffi-bindgen"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Same minor version as the core's uniffi dependency.
+uniffi = { version = "0.32", features = ["cli"] }
+
+[workspace]

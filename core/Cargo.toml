@@ -5,16 +5,13 @@ edition = "2024"
 publish = false
 
 [lib]
-# cdylib: the .so loaded by the Android app. lib: used by uniffi-bindgen.
+# cdylib: the .so loaded by the Android app. lib: for `cargo test`.
 crate-type = ["cdylib", "lib"]
 name = "sonata_core"
 
-[[bin]]
-name = "uniffi-bindgen"
-path = "src/bin/uniffi-bindgen.rs"
-
 [dependencies]
-uniffi = { version = "0.32", features = ["tokio", "cli"] }
+# Keep the minor version in step with uniffi-bindgen/Cargo.toml.
+uniffi = { version = "0.32", features = ["tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
 thiserror = "2"
 log = "0.4"
@@ -47,3 +44,11 @@ lto = true
 codegen-units = 1
 # Keep the symbol table: uniffi-bindgen reads its metadata from it.
 strip = "debuginfo"
+
+# Debug APKs: still optimised (librespot must decode in real time) but
+# without full LTO and with parallel codegen, so a change relinks in seconds.
+[profile.android-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
