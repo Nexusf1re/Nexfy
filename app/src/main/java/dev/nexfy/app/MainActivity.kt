@@ -53,9 +53,11 @@ class MainActivity : ComponentActivity() {
         val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val future = MediaController.Builder(this, token).buildAsync()
         future.addListener({ controller = future.get() }, ContextCompat.getMainExecutor(this))
+        (application as NexfyApp).visible.value = true
     }
 
     override fun onStop() {
+        (application as NexfyApp).visible.value = false
         controller?.release()
         controller = null
         super.onStop()

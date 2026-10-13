@@ -984,3 +984,24 @@ mod tests {
         assert_eq!(pick_image(&images[2..]).as_deref(), Some("64"));
     }
 }
+
+/// A track object from any endpoint (e.g. the player's `item`).
+pub fn parse_track(value: serde_json::Value) -> Option<Track> {
+    serde_json::from_value::<RawTrack>(value).ok()?.into_track(None)
+}
+
+impl WebApi {
+    /// Access tokens for the player endpoints, personal app first.
+    pub async fn player_tokens(&self) -> Vec<String> {
+        let mut tokens = Vec::new();
+        for app in [WebApp::Personal, WebApp::Shared] {
+            if self.signed_in(app).await {
+                match self.token(app, false).await {
+                    Ok(token) => tokens.push(token),
+                    Err(error) => log::info!("{app:?} has no player token: {error:#}"),
+                }
+            }
+        }
+        tokens
+    }
+}

@@ -66,6 +66,7 @@ import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.springPress
 import dev.nexfy.app.ui.player.PlayerControls
+import dev.nexfy.app.ui.player.DevicesSheet
 import dev.nexfy.app.ui.player.PlayerSheet
 import dev.nexfy.app.ui.screens.AlbumScreen
 import dev.nexfy.app.ui.screens.ArtistScreen
@@ -81,7 +82,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import uniffi.nexfy_core.Lyrics
+import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.QueueEntry
+import uniffi.nexfy_core.RemoteCommand
+import uniffi.nexfy_core.RemoteState
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
 import uniffi.nexfy_core.TrackInfo
@@ -170,7 +174,7 @@ class AppActions(
      * album or liked songs, unfiltered) Spotify plays the context itself:
      * its queue, shuffle and autoplay after the end. Otherwise exactly
      * these tracks play. [source] is the library key counted for the
-     * "most played" order.
+     * "most played" order. While another device is playing, it plays there.
      */
     fun play(
         tracks: List<Track>,
@@ -182,6 +186,18 @@ class AppActions(
         if (tracks.isEmpty()) return
         source?.let(app.library::recordPlay)
         val start = index.coerceIn(0, tracks.lastIndex)
+        if (remote != null) {
+            command {
+                if (shuffle) core.remoteCommand(RemoteCommand.Shuffle(true))
+                if (contextUri != null) {
+                    core.remoteCommand(RemoteCommand.PlayContext(contextUri, tracks[start].uri.takeUnless { shuffle }))
+                } else {
+                    core.remoteCommand(RemoteCommand.PlayTracks(tracks.map { it.uri }, start.toUInt()))
+                }
+            }
+            app.refreshRemoteSoon()
+            return
+        }
         command {
             if (contextUri != null) {
                 core.playContext(contextUri, tracks[start].uri.takeUnless { shuffle }, shuffle)
@@ -193,29 +209,74 @@ class AppActions(
 
     /** Add a song to Spotify's queue; it plays after the current one. */
     fun addToQueue(track: Track) {
-        command { core.addToQueue(track.uri) }
+        if (remote != null) remoteCommand(RemoteCommand.Queue(track.uri)) else command { core.addToQueue(track.uri) }
         android.widget.Toast.makeText(app, "Adicionada à fila: ${track.title}", android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    override fun playPause() = command {
-        if (app.bridge.state.value.playing) core.pause() else core.resume()
+    /** The device playing elsewhere, if any: playback commands go to it. */
+    private val remote get() = app.bridge.state.value.remote
+
+    /** Send a command to the remote device, showing its effect at once. */
+    private fun remoteCommand(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) {
+        show?.let(app.bridge::updateRemote)
+        command { core.remoteCommand(cmd) }
+        app.refreshRemoteSoon()
+    }
+
+    override fun playPause() {
+        val playing = app.bridge.state.value.playing
+        if (remote != null) {
+            remoteCommand(if (playing) RemoteCommand.Pause else RemoteCommand.Play) { it.copy(playing = !playing) }
+            return
+        }
+        command { if (playing) core.pause() else core.resume() }
     }
 
     override fun next() {
+        if (remote != null) return remoteCommand(RemoteCommand.Next)
         app.bridge.preview(forward = true)
         command { core.next() }
     }
 
     override fun previous() {
+        if (remote != null) return remoteCommand(RemoteCommand.Previous)
         app.bridge.preview(forward = false)
         command { core.previous() }
     }
 
-    override fun seek(positionMs: Long) = command { core.seek(positionMs.coerceAtLeast(0).toUInt()) }
+    override fun seek(positionMs: Long) {
+        val at = positionMs.coerceAtLeast(0).toUInt()
+        if (remote != null) return remoteCommand(RemoteCommand.Seek(at)) { it.copy(progressMs = at) }
+        command { core.seek(at) }
+    }
 
-    override fun setShuffle(on: Boolean) = command { core.setShuffle(on) }
+    override fun setShuffle(on: Boolean) {
+        if (remote != null) return remoteCommand(RemoteCommand.Shuffle(on)) { it.copy(shuffle = on) }
+        command { core.setShuffle(on) }
+    }
 
-    override fun setRepeat(mode: RepeatMode) = command { core.setRepeat(mode) }
+    override fun setRepeat(mode: RepeatMode) {
+        if (remote != null) return remoteCommand(RemoteCommand.Repeat(mode)) { it.copy(repeat = mode) }
+        command { core.setRepeat(mode) }
+    }
+
+    override suspend fun devices(): List<Device> = core.devices()
+
+    /** Whether the devices sheet is open; any screen can open it. */
+    val showDevices = mutableStateOf(false)
+
+    override fun openDevices() {
+        showDevices.value = true
+    }
+
+    /** Move playback to [device]; the phone's own entry brings it back here. */
+    override fun transfer(device: Device) {
+        if (device.isSelf) app.bridge.movedHere()
+        command { core.transfer(device.id, true) }
+        app.refreshRemoteSoon()
+    }
+
+    override fun setVolume(percent: Int) = remoteCommand(RemoteCommand.Volume(percent.coerceIn(0, 100).toUInt()))
 
     /**
      * Jump to a queue entry [ahead] positions after the current song.
@@ -291,6 +352,7 @@ fun NexfyRoot(
             )
 
             PlayerSheet(snapshot, actions)
+            if (actions.showDevices.value) DevicesSheet(snapshot, actions) { actions.showDevices.value = false }
         }
     }
 }

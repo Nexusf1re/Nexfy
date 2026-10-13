@@ -9,6 +9,7 @@ mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod lyrics;
+mod remote;
 mod session_reads;
 mod webapi;
 
@@ -38,6 +39,7 @@ pub use webapi::{
     SearchResults, Track, TrackPage, WebApp, WebStatus,
 };
 use webapi::WebApi;
+pub use remote::{Device, RemoteCommand, RemoteState};
 
 uniffi::setup_scaffolding!();
 
@@ -544,6 +546,30 @@ impl NexfyCore {
         let cache = self.inner.track_cache.lock().unwrap();
         Ok(uris.iter().filter_map(|uri| cache.get(uri).cloned()).collect())
     }
+
+    // ------------------------------------------------- other devices --
+
+    /// The account's Spotify Connect devices, this phone included.
+    pub async fn devices(&self) -> Result<Vec<Device>, CoreError> {
+        let session = self.inner.live_session().await?;
+        remote::devices(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
+    }
+
+    /// What is playing on any device; None when nothing is.
+    pub async fn remote_state(&self) -> Result<Option<RemoteState>, CoreError> {
+        let session = self.inner.live_session().await?;
+        remote::state(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
+    }
+
+    /// Move playback to another device (or back to this phone).
+    pub async fn transfer(&self, device_id: String, play: bool) -> Result<(), CoreError> {
+        remote::transfer(&self.inner.web.player_tokens().await, &device_id, play).await.map_err(web_error)
+    }
+
+    /// Control the device that is playing.
+    pub async fn remote_command(&self, command: RemoteCommand) -> Result<(), CoreError> {
+        remote::command(&self.inner.web.player_tokens().await, command).await.map_err(web_error)
+    }
 }
 
 impl Inner {
@@ -733,6 +759,13 @@ impl Inner {
             .map(|connected| connected.spirc.clone())
             .ok_or_else(|| CoreError::Playback("não conectado".into()))?;
         action(&spirc).map_err(|e| CoreError::Playback(e.to_string()))
+    }
+
+    /// A connected session, reconnecting first if it dropped.
+    async fn live_session(&self) -> Result<Session, CoreError> {
+        self.ensure_session().await?;
+        self.with_session(Session::clone)
+            .ok_or_else(|| CoreError::Session("não conectado".into()))
     }
 
     fn with_session<T>(&self, action: impl FnOnce(&Session) -> T) -> Option<T> {

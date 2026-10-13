@@ -1,5 +1,8 @@
 package dev.nexfy.app.ui.player
 
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import android.os.Build
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -23,6 +26,7 @@ import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.theme.accentColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
@@ -131,6 +135,7 @@ import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.Lyrics
 import uniffi.nexfy_core.QueueEntry
 import uniffi.nexfy_core.RepeatMode
@@ -151,6 +156,18 @@ interface PlayerControls {
 
     /** Jump to a queue entry [ahead] positions after the current song. */
     fun skipTo(entry: QueueEntry, ahead: Int)
+
+    /** The account's Spotify Connect devices, this phone included. */
+    suspend fun devices(): List<Device>
+
+    /** Move playback to [device]. */
+    fun transfer(device: Device)
+
+    /** Volume of the device playing elsewhere, 0 to 100. */
+    fun setVolume(percent: Int)
+
+    /** Show the devices sheet. */
+    fun openDevices()
 
     /** Metadata for queue entries, in order. */
     suspend fun tracksInfo(uris: List<String>): List<Track>
@@ -414,6 +431,9 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Column {
                                 Text(t.title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(t.artists, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                s.remote?.let { d ->
+                                    Text("Em ${d.name}", color = accentColor(), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
@@ -443,7 +463,9 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         Spacer(Modifier.weight(1f))
                         Box(Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape).background(Color.White.copy(.35f)))
                         Spacer(Modifier.weight(1f))
-                        Spacer(Modifier.width(48.dp))
+                        IconButton({ controls.openDevices() }) {
+                            Icon(Icons.Rounded.Devices, "Dispositivos", tint = if (s.remote != null) accentColor() else Color.White)
+                        }
                     }
                     Box(Modifier.fillMaxWidth().height(artSpace)) {
                         if (showLyrics) {
@@ -483,6 +505,18 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Text(fmt(shown), color = Color.White.copy(.6f), fontSize = 12.sp)
                             Spacer(Modifier.weight(1f))
                             Text("-" + fmt(duration - shown), color = Color.White.copy(.6f), fontSize = 12.sp)
+                        }
+                        s.remote?.let { d ->
+                            // Playing on another device: say where, and tap to change it.
+                            Row(
+                                Modifier.padding(top = 10.dp).clip(CircleShape).clickable { controls.openDevices() }
+                                    .padding(horizontal = 4.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(deviceIcon(d.kind), null, tint = accentColor(), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Tocando em ${d.name}", color = accentColor(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                         Spacer(Modifier.height(24.dp))
                         Row(
@@ -779,37 +813,62 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
     }
     val list = rememberLazyListState()
     LaunchedEffect(current) {
-        if (current >= 0) list.animateScrollToItem((current - 2).coerceAtLeast(0))
+        if (current >= 0) list.animateScrollToItem(current)
     }
     Column(modifier) {
-        LazyColumn(Modifier.weight(1f), state = list, verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            items(lines.size) { i ->
-                val line = lines[i]
-                val active = !lyrics.synced || i == current
-                val focus by animateFloatAsState(if (active) 1f else 0f, Motion.settle(169f), label = "focus")
-                val distance = if (current < 0) 0 else kotlin.math.abs(i - current).coerceAtMost(4)
-                val blur = if (Build.VERSION.SDK_INT >= 31 && lyrics.synced) (distance * 1.6f * (1f - focus)).dp else 0.dp
-                Text(
-                    line.text,
-                    Modifier.fillMaxWidth()
-                        .graphicsLayer {
-                            val sc = .86f + .14f * focus
-                            scaleX = sc
-                            scaleY = sc
-                            alpha = .32f + .68f * focus
-                            transformOrigin = TransformOrigin(0f, .5f)
-                        }
-                        .then(if (blur > 0.dp) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
-                        .clickable(
-                            enabled = line.atMs != null,
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                        ) { line.atMs?.let { controls.seek(it.toLong()) } },
-                    color = Color.White,
-                    fontSize = if (lyrics.synced) 28.sp else 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    lineHeight = if (lyrics.synced) 34.sp else 28.sp,
-                )
+        BoxWithConstraints(Modifier.weight(1f)) {
+            // The padding puts the scrolled-to line a third of the way down,
+            // and leaves room for the blur and scale to spread without clipping.
+            val top = maxHeight * .3f
+            LazyColumn(
+                Modifier.fillMaxSize()
+                    // Lines fade out at the edges instead of being cut.
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            Brush.verticalGradient(0f to Color.Transparent, .12f to Color.Black, .8f to Color.Black, 1f to Color.Transparent),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+                state = list,
+                contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = top, bottom = maxHeight - top),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+            ) {
+                items(lines.size) { i ->
+                    val line = lines[i]
+                    // Distance from the current line, animated so blur, fade and
+                    // size glide as the song moves on.
+                    val target = when {
+                        !lyrics.synced -> 0f
+                        current < 0 -> 1f
+                        else -> kotlin.math.abs(i - current).coerceAtMost(4).toFloat()
+                    }
+                    val d by animateFloatAsState(target, Motion.settle(169f), label = "distance")
+                    val focus = (1f - d).coerceIn(0f, 1f)
+                    val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.8f).dp else 0.dp
+                    Text(
+                        line.text,
+                        Modifier.fillMaxWidth()
+                            .graphicsLayer {
+                                val sc = .88f + .12f * focus
+                                scaleX = sc
+                                scaleY = sc
+                                alpha = (1f - .2f * d).coerceIn(.3f, 1f) * (.55f + .45f * focus)
+                                transformOrigin = TransformOrigin(0f, .5f)
+                            }
+                            .then(if (blur > 0.dp) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
+                            .clickable(
+                                enabled = line.atMs != null,
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                            ) { line.atMs?.let { controls.seek(it.toLong()) } },
+                        color = Color.White,
+                        fontSize = if (lyrics.synced) 28.sp else 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        lineHeight = if (lyrics.synced) 34.sp else 28.sp,
+                    )
+                }
             }
         }
         Text(

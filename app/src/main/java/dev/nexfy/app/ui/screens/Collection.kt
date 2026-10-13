@@ -40,6 +40,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
@@ -98,6 +99,7 @@ fun RootHeader(title: String, collapse: State<Float>, actions: AppActions) {
                 style = MaterialTheme.typography.titleLarge,
                 letterSpacing = (-1).sp,
             )
+            RoundIconButton(Icons.Rounded.Devices, "Dispositivos", { actions.openDevices() }, container = c.background)
             RoundIconButton(Icons.Rounded.Settings, "Ajustes", { actions.open(Route.Settings) }, container = c.background)
         }
         Text(

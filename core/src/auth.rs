@@ -39,6 +39,9 @@ pub const WEB_SCOPES: &[&str] = &[
     "user-read-private",
     "user-read-recently-played",
     "user-top-read",
+    "user-read-playback-state",
+    "user-modify-playback-state",
+    "user-read-currently-playing",
 ];
 
 const REDIRECT_PATH: &str = "/login";

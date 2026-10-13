@@ -43,7 +43,7 @@ class NexfyPlayer(
 
     init {
         scope.launch {
-            bridge.state.collect { snapshot ->
+            bridge.local.collect { snapshot ->
                 if (snapshot.playing) playWhenReady = true
                 if (snapshot.stopped) playWhenReady = false
                 invalidateState()
@@ -53,13 +53,13 @@ class NexfyPlayer(
 
     /** The queue as Media3 items: previous, current, next. */
     private fun entries(): Pair<List<QueueEntry>, Int> {
-        val q = bridge.state.value.queue
+        val q = bridge.local.value.queue
         val current = q.current ?: return emptyList<QueueEntry>() to 0
         return (q.previous + current + q.next) to q.previous.size
     }
 
     override fun getState(): State {
-        val s = bridge.state.value
+        val s = bridge.local.value
         val (entries, current) = entries()
 
         val playlist = entries.mapIndexed { index, entry ->
@@ -117,7 +117,7 @@ class NexfyPlayer(
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         this.playWhenReady = playWhenReady
-        val s = bridge.state.value
+        val s = bridge.local.value
         return runCore {
             when {
                 s.queue.current == null -> Unit
