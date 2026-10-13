@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
@@ -318,14 +320,14 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val miniX = margin + with(density) { 10.dp.toPx() }
             val miniY = with(density) { 10.dp.toPx() }
 
-            // The cover breathes: full while playing, recedes when paused.
-            val breath = animateFloatAsState(if (s.playing || !expanded) 1f else 0.84f, Motion.settle(169f), label = "breath")
+            // Lyrics show over the cover in place; they load the first time they are shown.
+            var showLyrics by remember { mutableStateOf(false) }
+            // The cover breathes: full while playing, recedes when paused (not under lyrics).
+            val breath = animateFloatAsState(if (s.playing || !expanded || showLyrics) 1f else 0.84f, Motion.settle(169f), label = "breath")
             // Throwable cover: a strong horizontal drag skips, a weak one springs back.
             val throwX = remember { Animatable(0f) }
             var tapHint by remember { mutableStateOf<Pair<Long, Int>?>(null) }
 
-            // Lyrics replace the cover in place; they load the first time they are shown.
-            var showLyrics by remember { mutableStateOf(false) }
             var lyrics by remember(track.uri) { mutableStateOf<LyricsState>(LyricsState.Loading) }
             LaunchedEffect(track.uri, showLyrics) {
                 if (!showLyrics || lyrics != LyricsState.Loading) return@LaunchedEffect
@@ -337,7 +339,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     LyricsState.Failed
                 }
             }
-            val artAlpha = animateFloatAsState(if (showLyrics && settled) 0f else 1f, Motion.standard(), label = "art")
+            // 0 to 1 as lyrics come in: the cover blurs and darkens behind them.
+            val lyricsIn = animateFloatAsState(if (showLyrics && settled) 1f else 0f, Motion.settle(169f), label = "lyrics")
 
             fun GraphicsLayerScope.artMove(extra: Float) {
                 val p = pf()
@@ -358,7 +361,6 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         val k = lerp(miniArt / artFullPx, 1f, p)
                         artMove(lerp(1f, breath.value, p) * (1f - kotlin.math.abs(throwX.value) / fullW * .15f))
                         rotationZ = throwX.value / fullW * 14f
-                        alpha = artAlpha.value
                         // Corners and shadow compensate the scale: 12 dp mini, 28 dp full.
                         shape = RoundedCornerShape((lerp(12f, 28f, p) * density.density / k.coerceAtLeast(.05f)).coerceAtLeast(0f))
                         clip = true
@@ -390,11 +392,12 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                     }
                                     if (go != 0 && (go == -1 || hasNext)) {
                                         haptics.press()
-                                        throwX.animateTo(-go * fullW * 1.3f, Motion.settle(325f))
+                                        // Skip first: the next song loads while the cover flies out.
                                         if (go == 1) controls.next() else controls.previous()
-                                        throwX.snapTo(go * fullW * 1.1f)
+                                        throwX.animateTo(-go * fullW * 1.2f, tween(170, easing = Motion.EmphasizedAccelerate))
+                                        throwX.snapTo(go * fullW * .8f)
                                     }
-                                    throwX.animateTo(0f, Motion.settle(208f))
+                                    throwX.animateTo(0f, Motion.settle(520f))
                                 },
                             )
                         } else {
@@ -406,12 +409,22 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             ) {
                 if (!track.coverUrl.isNullOrBlank()) {
                     // Cross-fade covers: the old one stays until the new one is in.
-                    AnimatedContent(track.coverUrl, transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) }, label = "cover") { url ->
-                        AsyncImage(url, null, Modifier.fillMaxSize().kenBurns(s.playing && settled), contentScale = ContentScale.Crop)
+                    AnimatedContent(
+                        track.coverUrl,
+                        Modifier.fillMaxSize().graphicsLayer {
+                            val r = lyricsIn.value * 70f
+                            renderEffect = if (r > .5f && Build.VERSION.SDK_INT >= 31) BlurEffect(r, r, TileMode.Clamp) else null
+                        },
+                        transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) },
+                        label = "cover",
+                    ) { url ->
+                        AsyncImage(url, null, Modifier.fillMaxSize().kenBurns(s.playing && settled && !showLyrics), contentScale = ContentScale.Crop)
                     }
                 } else {
                     Icon(Icons.Rounded.MusicNote, null, tint = c.onSurfaceVariant, modifier = Modifier.fillMaxSize(.4f))
                 }
+                // Darkens the blurred cover so the lyrics read on any art.
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = lyricsIn.value }.background(Color.Black.copy(.58f)))
                 tapHint?.let { (id, dir) -> SeekRipple(id, dir) }
             }
 
@@ -474,9 +487,14 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Icon(Icons.Rounded.Devices, "Dispositivos", tint = if (s.remote != null) accentColor() else Color.White)
                         }
                     }
-                    Box(Modifier.fillMaxWidth().height(artSpace)) {
+                    // Lyrics sit inside the cover's square, over the blurred art.
+                    Box(Modifier.fillMaxWidth().height(artSpace), contentAlignment = Alignment.Center) {
                         if (showLyrics) {
-                            LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(vertical = 8.dp))
+                            LyricsView(
+                                lyrics, position, controls,
+                                Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value }
+                                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                            )
                         }
                     }
                     Column(
@@ -791,7 +809,7 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
         Column(modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             repeat(6) { i ->
-                Bone(Modifier.fillMaxWidth(boneWidth(i)).height(28.dp), RoundedCornerShape(8.dp), light = true)
+                Bone(Modifier.fillMaxWidth(boneWidth(i)).height(24.dp), RoundedCornerShape(8.dp), light = true)
             }
         }
         return
@@ -848,7 +866,8 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
                     // size glide as the song moves on.
                     val target = when {
                         !lyrics.synced -> 0f
-                        current < 0 -> 1f
+                        // Before the first line: it waits nearly lit, the rest behind it.
+                        current < 0 -> (i + .35f).coerceAtMost(4f)
                         else -> kotlin.math.abs(i - current).coerceAtMost(4).toFloat()
                     }
                     val d by animateFloatAsState(target, Motion.settle(169f), label = "distance")
@@ -871,9 +890,9 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
                                 interactionSource = remember { MutableInteractionSource() },
                             ) { line.atMs?.let { controls.seek(it.toLong()) } },
                         color = Color.White,
-                        fontSize = if (lyrics.synced) 28.sp else 22.sp,
+                        fontSize = if (lyrics.synced) 24.sp else 19.sp,
                         fontWeight = FontWeight.Bold,
-                        lineHeight = if (lyrics.synced) 34.sp else 28.sp,
+                        lineHeight = if (lyrics.synced) 30.sp else 25.sp,
                     )
                 }
             }
