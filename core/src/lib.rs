@@ -32,8 +32,6 @@ pub enum CoreError {
 }
 
 struct Connected {
-    // Not read yet; Web API calls and Spotify Connect will use it.
-    #[allow(dead_code)]
     session: Session,
     player: Arc<Player>,
 }
@@ -100,8 +98,9 @@ impl SonataCore {
     }
 
     /// Play a track from a `spotify:track:…` URI or an open.spotify.com link.
-    pub fn play_track(&self, uri: String) -> Result<(), CoreError> {
+    pub async fn play_track(&self, uri: String) -> Result<(), CoreError> {
         let track = parse_track(&uri)?;
+        self.ensure_session().await?;
         self.with_player(|player| player.load(track, true, 0))
     }
 
@@ -109,7 +108,8 @@ impl SonataCore {
         self.with_player(|player| player.pause())
     }
 
-    pub fn resume(&self) -> Result<(), CoreError> {
+    pub async fn resume(&self) -> Result<(), CoreError> {
+        self.ensure_session().await?;
         self.with_player(|player| player.play())
     }
 
@@ -126,10 +126,11 @@ impl SonataCore {
             .map_err(|e| CoreError::Session(e.to_string()))
     }
 
-    async fn connect(&self, credentials: Credentials) -> Result<String, CoreError> {
-        // On Android librespot defaults to Spotify's Android client id, but
-        // our token comes from the desktop (keymaster) client; login5 rejects
-        // the mismatch with INVALID_CREDENTIALS unless the session uses it too.
+    /// A new session signed in with `credentials`. librespot does not
+    /// reconnect a dropped session, so each connection gets a fresh one.
+    async fn open_session(&self, credentials: Credentials) -> Result<Session, CoreError> {
+        // Our token comes from the desktop (keymaster) client; the session
+        // must use the same id or login5 rejects it.
         let config = SessionConfig {
             client_id: auth::PLAYBACK_CLIENT_ID.to_owned(),
             ..SessionConfig::default()
@@ -139,6 +140,39 @@ impl SonataCore {
             .connect(credentials, true)
             .await
             .map_err(|e| CoreError::Session(e.to_string()))?;
+        Ok(session)
+    }
+
+    /// Replace a session the server closed (backgrounded app, Wi-Fi power
+    /// saving) before using it; a dead one fails key requests and leaves the
+    /// player decoding encrypted audio.
+    async fn ensure_session(&self) -> Result<(), CoreError> {
+        let player = {
+            let connected = self.connected.lock().unwrap();
+            let connected = connected
+                .as_ref()
+                .ok_or_else(|| CoreError::Session("não conectado".into()))?;
+            if !connected.session.is_invalid() {
+                return Ok(());
+            }
+            connected.player.clone()
+        };
+
+        log::warn!("session closed by the server, reconnecting");
+        let credentials = self
+            .cache()?
+            .credentials()
+            .ok_or_else(|| CoreError::Session("credencial salva não encontrada".into()))?;
+        let session = self.open_session(credentials).await?;
+        player.set_session(session.clone());
+        if let Some(connected) = self.connected.lock().unwrap().as_mut() {
+            connected.session = session;
+        }
+        Ok(())
+    }
+
+    async fn connect(&self, credentials: Credentials) -> Result<String, CoreError> {
+        let session = self.open_session(credentials).await?;
 
         let backend = audio_backend::find(None)
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;

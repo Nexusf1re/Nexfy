@@ -77,11 +77,13 @@ private fun SpikeScreen(core: SonataCore, openBrowser: (String) -> Unit, modifie
         }
     }
 
-    fun run(label: String, action: () -> Unit) {
-        status = try {
-            action(); label
-        } catch (e: Exception) {
-            "Erro: ${e.message}"
+    fun run(label: String, action: suspend () -> Unit) {
+        scope.launch {
+            status = try {
+                action(); label
+            } catch (e: Exception) {
+                "Erro: ${e.message}"
+            }
         }
     }
 
