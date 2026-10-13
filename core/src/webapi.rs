@@ -559,7 +559,13 @@ impl WebApi {
                 }
                 status => {
                     let detail = response.text().await.unwrap_or_default();
-                    bail!("HTTP {status}: {}", detail.chars().take(200).collect::<String>());
+                    log::debug!("HTTP {status} for {url}: {}", detail.chars().take(200).collect::<String>());
+                    match status {
+                        403 => bail!("o Spotify não liberou isto para o app conectado (403)"),
+                        404 => bail!("não encontrado no Spotify (404)"),
+                        500..=599 => bail!("o Spotify está com problemas agora ({status})"),
+                        _ => bail!("o Spotify recusou o pedido ({status})"),
+                    }
                 }
             }
         }
@@ -649,32 +655,51 @@ impl WebApi {
         Ok(dedupe(playlists, |p: &Playlist| &p.id))
     }
 
-    pub async fn playlist(&self, id: &str, refresh: bool) -> Result<PlaylistDetail> {
-        let ttl = Duration::from_secs(600);
+    pub async fn playlist_meta(&self, id: &str, refresh: bool) -> Result<Playlist> {
         let raw: RawPlaylist = self
             .cached(
                 &format!("/playlists/{id}?fields=id,uri,name,description,images,owner(id,display_name),tracks(total),items(total)"),
                 Route::Personal,
-                ttl,
+                Duration::from_secs(600),
                 refresh,
             )
             .await?;
+        Ok(raw.into_playlist())
+    }
+
+    /// Fails with 403 for playlists the user does not own when only a
+    /// development-mode app answers; the caller then reads them over the
+    /// playback session.
+    pub async fn playlist_items(&self, id: &str, refresh: bool) -> Result<Vec<Track>> {
         let first: Paging<SavedTrack> = self
             .cached(
                 &format!("/playlists/{id}/items?limit=100&market=from_token"),
                 Route::Personal,
-                ttl,
+                Duration::from_secs(600),
                 refresh,
             )
             .await?;
         let (items, _) = self.all_pages(first, Route::Personal).await?;
-        Ok(PlaylistDetail {
-            playlist: raw.into_playlist(),
-            tracks: items
-                .into_iter()
-                .filter_map(|saved| saved.item?.into_track(None))
-                .collect(),
-        })
+        Ok(items
+            .into_iter()
+            .filter_map(|saved| saved.item?.into_track(None))
+            .collect())
+    }
+
+    /// Disk cache for data that does not come from the Web API.
+    pub fn load_local<T: DeserializeOwned>(&self, key: &str, ttl: Duration) -> Option<T> {
+        let (saved, value): (u64, serde_json::Value) =
+            serde_json::from_slice(&std::fs::read(self.cache_file(key)).ok()?).ok()?;
+        if now_secs().saturating_sub(saved) >= ttl.as_secs() {
+            return None;
+        }
+        serde_json::from_value(value).ok()
+    }
+
+    pub fn save_local<T: Serialize>(&self, key: &str, value: &T) {
+        if let Ok(bytes) = serde_json::to_vec(&(now_secs(), value)) {
+            let _ = std::fs::write(self.cache_file(key), bytes);
+        }
     }
 
     pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage> {

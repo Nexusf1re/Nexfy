@@ -185,7 +185,10 @@ fun motionAllowed(context: Context): Boolean {
     return scale > 0f && !saver
 }
 
-/** Slow Ken Burns drift of a still cover (scale 1→1.08 with a gentle pan, 24 s loop). */
+/**
+ * Slow Ken Burns drift of a still cover (24 s loop). The cover is always
+ * zoomed past the pan, so the drift never uncovers the edges.
+ */
 @Composable
 fun Modifier.kenBurns(enabled: Boolean): Modifier {
     val context = LocalContext.current
@@ -195,7 +198,8 @@ fun Modifier.kenBurns(enabled: Boolean): Modifier {
         .animateFloat(0f, 1f, infiniteRepeatable(tween(24_000, easing = LinearEasing)), label = "kb")
     return graphicsLayer {
         val e = (1 - cos(t * 2 * Math.PI).toFloat()) / 2
-        val s = 1f + .08f * e
+        // Pan reaches 2.5 % per side; 1.06 leaves 3 % of margin on each side.
+        val s = 1.06f + .06f * e
         scaleX = s
         scaleY = s
         translationX = .025f * sin(t * 2 * Math.PI).toFloat() * size.width

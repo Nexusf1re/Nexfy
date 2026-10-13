@@ -5,6 +5,7 @@ mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod queue;
+mod session_reads;
 mod webapi;
 
 use std::path::PathBuf;
@@ -36,7 +37,9 @@ uniffi::setup_scaffolding!();
 /// Volume while another app's sound has focus (navigation, notifications).
 const DUCKED_VOLUME: f64 = 0.2;
 
+/// Flat: Kotlin sees each variant with its Display text as the message.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
 pub enum CoreError {
     #[error("login: {0}")]
     Login(String),
@@ -214,8 +217,52 @@ impl SonataCore {
         self.inner.web.my_playlists(refresh).await.map_err(web_error)
     }
 
+    /// Web API first; playlists it refuses (other people's, for
+    /// development-mode apps) are read over the playback session.
     pub async fn playlist(&self, id: String, refresh: bool) -> Result<PlaylistDetail, CoreError> {
-        self.inner.web.playlist(&id, refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let meta = web.playlist_meta(&id, refresh).await;
+        let tracks = match web.playlist_items(&id, refresh).await {
+            Ok(tracks) => tracks,
+            Err(error) => {
+                log::info!("playlist {id} via session: {error:#}");
+                let key = format!("session:playlist:{id}");
+                let ttl = std::time::Duration::from_secs(600);
+                match web.load_local::<Vec<Track>>(&key, ttl).filter(|_| !refresh) {
+                    Some(tracks) => tracks,
+                    None => {
+                        self.inner.ensure_session().await?;
+                        let session = self
+                            .inner
+                            .with_session(Session::clone)
+                            .ok_or_else(|| CoreError::Session("não conectado".into()))?;
+                        let data = session_reads::playlist(&session, &id).await.map_err(web_error)?;
+                        web.save_local(&key, &data.tracks);
+                        if meta.is_err() {
+                            return Ok(PlaylistDetail {
+                                playlist: Playlist {
+                                    id: id.clone(),
+                                    uri: format!("spotify:playlist:{id}"),
+                                    name: data.name,
+                                    description: data.description,
+                                    owner: String::new(),
+                                    owner_id: String::new(),
+                                    image_url: data.tracks.first().and_then(|t| t.image_url.clone()),
+                                    track_count: data.tracks.len() as u32,
+                                },
+                                tracks: data.tracks,
+                            });
+                        }
+                        data.tracks
+                    }
+                }
+            }
+        };
+        let mut playlist = meta.map_err(web_error)?;
+        if playlist.image_url.is_none() {
+            playlist.image_url = tracks.first().and_then(|t| t.image_url.clone());
+        }
+        Ok(PlaylistDetail { playlist, tracks })
     }
 
     pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage, CoreError> {
