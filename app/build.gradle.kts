@@ -117,6 +117,9 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+    implementation(libs.haze)
+    implementation(libs.androidx.palette)
+    implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
     // UniFFI's Kotlin bindings call the core through JNA.
     implementation("${libs.jna.get()}@aar")

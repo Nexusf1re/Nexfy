@@ -1,17 +1,20 @@
 package dev.sonata.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,14 +26,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.sonata.app.ui.AppActions
+import dev.sonata.app.ui.design.LocalBottomSpace
+import dev.sonata.app.ui.design.PillButton
+import dev.sonata.app.ui.design.RoundIconButton
+import dev.sonata.app.ui.theme.accentColor
 import kotlinx.coroutines.launch
 import uniffi.sonata_core.WebApp
 import uniffi.sonata_core.WebStatus
 
 @Composable
-fun SettingsScreen(actions: AppActions) {
+fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val core = actions.core
     var user by remember { mutableStateOf<String?>(null) }
@@ -53,98 +63,97 @@ fun SettingsScreen(actions: AppActions) {
                 finish()
                 "$label conectado"
             } catch (e: Exception) {
-                "Erro: ${e.message}"
+                e.message ?: "Erro no login"
             }
             reload++
         }
     }
 
     Column(
-        modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
+            .padding(bottom = LocalBottomSpace.current),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
-        message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+        Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            RoundIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", { actions.back() }, container = c.background)
+        }
+        Text("Ajustes", fontSize = 34.sp, style = MaterialTheme.typography.headlineLarge)
+        message?.let { Text(it, color = accentColor()) }
 
-        Text("Reprodução", style = MaterialTheme.typography.titleMedium)
-        Text(user?.let { "Conectado como $it" } ?: "Não conectado")
-        if (user == null) {
-            Button(onClick = {
-                signIn("Reprodução", { core.beginLogin() }, { core.finishLogin() })
-            }) { Text("Entrar com Spotify") }
+        Section("Reprodução", "Toca as músicas neste celular. Precisa de Spotify Premium.") {
+            StatusRow(if (user != null) "Conectado como $user" else "Não conectado", user != null)
+            if (user == null) {
+                PillButton("Entrar com Spotify", { signIn("Reprodução", { core.beginLogin() }, { core.finishLogin() }) })
+            }
         }
 
-        HorizontalDivider()
-        Text("Biblioteca e busca (Web API)", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "O app pessoal tem cota só tua. O compartilhado cobre playlists da Spotify e a busca de playlists.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
         val status = web
-        AppRow(
-            title = "App pessoal",
-            signedIn = status?.personalSignedIn == true,
-            enabled = status?.personalClientId != null,
-            onSignIn = {
-                signIn("App pessoal", { core.beginWebLogin(WebApp.PERSONAL) }, { core.finishWebLogin(WebApp.PERSONAL) })
-            },
-            onSignOut = { scope.launch { core.webSignOut(WebApp.PERSONAL); reload++ } },
-        )
-        OutlinedTextField(
-            value = clientId,
-            onValueChange = { clientId = it.trim() },
-            label = { Text("Client ID do app pessoal") },
-            supportingText = { Text("Redirect URI no app: http://127.0.0.1:8989/login") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(onClick = {
-            scope.launch {
-                core.setPersonalClientId(clientId.ifBlank { null })
-                message = "Client ID salvo"
-                reload++
+        Section("App pessoal", "Tua própria cota da Web API: biblioteca e busca mais rápidas.") {
+            OutlinedTextField(
+                value = clientId,
+                onValueChange = { clientId = it.trim() },
+                label = { Text("Client ID") },
+                supportingText = { Text("Redirect URI: http://127.0.0.1:8989/login") },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = c.primary, unfocusedBorderColor = c.outline, focusedLabelColor = c.onSurface),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PillButton("Salvar", {
+                    scope.launch {
+                        core.setPersonalClientId(clientId.ifBlank { null })
+                        message = "Client ID salvo"
+                        reload++
+                    }
+                }, filled = false)
+                AccountButton(
+                    signedIn = status?.personalSignedIn == true,
+                    enabled = status?.personalClientId != null,
+                    onSignIn = { signIn("App pessoal", { core.beginWebLogin(WebApp.PERSONAL) }, { core.finishWebLogin(WebApp.PERSONAL) }) },
+                    onSignOut = { scope.launch { core.webSignOut(WebApp.PERSONAL); reload++ } },
+                )
             }
-        }) { Text("Salvar Client ID") }
+        }
 
-        AppRow(
-            title = "App compartilhado",
-            signedIn = status?.sharedSignedIn == true,
-            enabled = true,
-            onSignIn = {
-                signIn("App compartilhado", { core.beginWebLogin(WebApp.SHARED) }, { core.finishWebLogin(WebApp.SHARED) })
-            },
-            onSignOut = { scope.launch { core.webSignOut(WebApp.SHARED); reload++ } },
-        )
+        Section("App compartilhado", "Playlists da própria Spotify (Daily Mix, editoriais) e busca de playlists.") {
+            StatusRow(if (status?.sharedSignedIn == true) "Conectado" else "Não conectado", status?.sharedSignedIn == true)
+            AccountButton(
+                signedIn = status?.sharedSignedIn == true,
+                enabled = true,
+                onSignIn = { signIn("App compartilhado", { core.beginWebLogin(WebApp.SHARED) }, { core.finishWebLogin(WebApp.SHARED) }) },
+                onSignOut = { scope.launch { core.webSignOut(WebApp.SHARED); reload++ } },
+            )
+        }
     }
 }
 
 @Composable
-private fun AppRow(
-    title: String,
-    signedIn: Boolean,
-    enabled: Boolean,
-    onSignIn: () -> Unit,
-    onSignOut: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+private fun Section(title: String, description: String, content: @Composable () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(c.surfaceVariant).padding(18.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(title)
-            Text(
-                if (signedIn) "Conectado" else "Não conectado",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (signedIn) {
-            OutlinedButton(onClick = onSignOut) { Text("Sair") }
-        } else {
-            Button(enabled = enabled, onClick = onSignIn) { Text("Entrar") }
-        }
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        Text(description, color = c.onSurfaceVariant, fontSize = 13.sp)
+        content()
     }
+}
+
+@Composable
+private fun StatusRow(text: String, ok: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        androidx.compose.foundation.layout.Box(
+            Modifier.padding(end = 8.dp).clip(CircleShape)
+                .background(if (ok) accentColor() else MaterialTheme.colorScheme.outline)
+                .padding(4.dp),
+        )
+        Text(text, fontSize = 14.sp)
+    }
+}
+
+@Composable
+private fun AccountButton(signedIn: Boolean, enabled: Boolean, onSignIn: () -> Unit, onSignOut: () -> Unit) {
+    if (signedIn) PillButton("Sair", onSignOut, filled = false) else PillButton("Entrar", onSignIn, enabled = enabled)
 }
