@@ -108,8 +108,8 @@ fun ArtistScreen(actions: AppActions, id: String, list: LazyListState, modifier:
                         SectionTitle("Discografia")
                         Carousel(actions.nav.list("row:ar-$id")) {
                             items(d.albums, key = { it.id }) { album ->
-                                CoverCard(album.imageUrl, album.name, album.year.orEmpty(), "al-${album.id}") {
-                                    actions.open(Route.Album(album.id), Peek(album.name, d.artist.name, album.imageUrl))
+                                CoverCard(album.imageUrl, album.name, album.year.orEmpty(), "al-${album.id}", shared = "disc-$id/${album.id}") {
+                                    actions.open(Route.Album(album.id), Peek(album.name, d.artist.name, album.imageUrl), "disc-$id/${album.id}")
                                 }
                             }
                         }

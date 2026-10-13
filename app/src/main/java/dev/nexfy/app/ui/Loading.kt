@@ -24,18 +24,24 @@ data class Loaded<T>(val value: T? = null, val error: String? = null, val loadin
 
 class LoadHandle<T>(val state: Loaded<T>, val refresh: () -> Unit)
 
+/** Last value of every load, so a screen that comes back shows it at once. */
+private val lastValues = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
 /**
  * Run [load] when [keys] change. The first load may come from the core's
- * cache; [LoadHandle.refresh] reloads from the network.
+ * cache; [LoadHandle.refresh] reloads from the network. A screen shown
+ * again starts from the last value while it reloads.
  */
+@Suppress("UNCHECKED_CAST")
 @Composable
 fun <T> rememberLoaded(vararg keys: Any?, load: suspend (refresh: Boolean) -> T): LoadHandle<T> {
-    var state by remember(*keys) { mutableStateOf(Loaded<T>()) }
+    val memoryKey = keys.joinToString("|")
+    var state by remember(*keys) { mutableStateOf(Loaded(value = lastValues[memoryKey] as T?)) }
     var refreshes by remember(*keys) { mutableIntStateOf(0) }
     LaunchedEffect(*keys, refreshes) {
         state = state.copy(loading = true, error = null)
         state = try {
-            Loaded(load(refreshes > 0), null, false)
+            Loaded(load(refreshes > 0).also { value -> value?.let { lastValues[memoryKey] = it } }, null, false)
         } catch (e: Exception) {
             state.copy(error = e.message ?: e.toString(), loading = false)
         }

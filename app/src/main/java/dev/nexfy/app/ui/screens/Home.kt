@@ -135,7 +135,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("recent", "Tocadas recentemente", recent.state.pending() || playlists.state.pending(), recentCards.takeIf { it.isNotEmpty() }) { cards ->
                 Carousel(actions.nav.list("row:home-recent"), cards.first().key) {
                     items(cards, key = { it.key }) { r ->
-                        CoverCard(r.imageUrl, r.title, r.subtitle, r.key) { actions.open(r.route, r.peek) }
+                        CoverCard(r.imageUrl, r.title, r.subtitle, r.key, shared = "home-recent/${r.key}") { actions.open(r.route, r.peek, "home-recent/${r.key}") }
                     }
                 }
             }
@@ -149,8 +149,8 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("playlists", "Tuas playlists", playlists.state.pending(), myPlaylists?.takeIf { it.isNotEmpty() }) { items ->
                 Carousel(actions.nav.list("row:home-pl"), items.first().id) {
                     items(items.take(20), key = { it.id }) { p ->
-                        CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}") {
-                            actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl))
+                        CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}", shared = "home-pl/${p.id}") {
+                            actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "home-pl/${p.id}")
                         }
                     }
                 }
@@ -158,8 +158,8 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("top-artists", "Artistas que tu mais ouve", topArtists.state.pending(), topArtists.state.value?.takeIf { it.isNotEmpty() }, circle = true) { artists ->
                 Carousel(actions.nav.list("row:home-artists"), artists.first().id) {
                     items(artists, key = { it.id }) { a ->
-                        CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) {
-                            actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl))
+                        CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true, shared = "home-ar/${a.id}") {
+                            actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl), "home-ar/${a.id}")
                         }
                     }
                 }
@@ -167,8 +167,8 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("albums", "Álbuns salvos", albums.state.pending(), albums.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "al:${it.id}" } }) { items ->
                 Carousel(actions.nav.list("row:home-al"), items.first().id) {
                     items(items.take(20), key = { it.id }) { a ->
-                        CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") {
-                            actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl))
+                        CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "home-al/${a.id}") {
+                            actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "home-al/${a.id}")
                         }
                     }
                 }

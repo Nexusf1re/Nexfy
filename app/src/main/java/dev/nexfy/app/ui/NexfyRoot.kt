@@ -1,5 +1,17 @@
 package dev.nexfy.app.ui
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.shape.RoundedCornerShape
+import dev.nexfy.app.ui.design.LocalScreenScope
+import dev.nexfy.app.ui.design.LocalSharedScope
+import kotlinx.coroutines.CancellationException
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.core.SeekableTransitionState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
@@ -111,7 +123,7 @@ sealed interface Route {
 data class Peek(val title: String, val subtitle: String? = null, val imageUrl: String? = null)
 
 /** What the screen shows: a tab and the top of its stack (null = the tab root). */
-data class Screen(val tab: Tab, val route: Route?)
+data class Screen(val tab: Tab, val route: Route?, val depth: Int = 0)
 
 /** Each tab keeps its own back stack and the scroll position of every screen. */
 @Stable
@@ -120,17 +132,25 @@ class NavState {
     private val stacks = mutableStateMapOf<Tab, List<Route>>()
     private val lists = HashMap<String, LazyListState>()
     private val peeks = HashMap<String, Peek>()
+    private val origins = HashMap<String, String>()
 
     fun stack(tab: Tab = this.tab) = stacks[tab].orEmpty()
     fun top(tab: Tab = this.tab) = stack(tab).lastOrNull()
-    val screen get() = Screen(tab, top())
+    val screen get() = Screen(tab, top(), stack().size)
 
-    fun push(route: Route, peek: Peek? = null) {
+    /** The screen under the current one, where back leads. */
+    fun parentScreen() = stack().let { Screen(tab, it.dropLast(1).lastOrNull(), it.size - 1) }
+
+    fun push(route: Route, peek: Peek? = null, origin: String? = null) {
         if (peek != null) peeks[route.key] = peek
+        if (origin != null) origins[route.key] = origin
         if (top() != route) stacks[tab] = stack() + route
     }
 
     fun peek(key: String): Peek? = peeks[key]
+
+    /** Shared-element key of the card a page was opened from, for its header cover. */
+    fun origin(key: String): String? = origins[key]
 
     fun pop(): Boolean {
         val s = stack()
@@ -155,7 +175,11 @@ class AppActions(
 ) : PlayerControls {
     val core get() = app.core
 
-    fun open(route: Route, peek: Peek? = null) = nav.push(route, peek)
+    /**
+     * Open [route]. [peek] is what the tapped card showed; [origin] is the
+     * card cover's shared-element key, so the cover travels to the header.
+     */
+    fun open(route: Route, peek: Peek? = null, origin: String? = null) = nav.push(route, peek, origin)
     fun back() = nav.pop()
 
     /** Run a playback command off the main thread, reporting failures. */
@@ -293,6 +317,7 @@ class AppActions(
     override suspend fun tracksInfo(uris: List<String>): List<Track> = core.tracksInfo(uris)
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun NexfyRoot(
     app: NexfyApp,
@@ -307,7 +332,22 @@ fun NexfyRoot(
     val haze = remember { HazeState() }
 
     ShimmerDriver()
-    BackHandler(enabled = nav.stack().isNotEmpty()) { nav.pop() }
+    // Screens move through a seekable transition: navigation animates it,
+    // the back gesture drags it (the page shrinks into a card over the one
+    // underneath) and letting go finishes or cancels it.
+    val target = nav.screen
+    val screens = remember { SeekableTransitionState(target) }
+    LaunchedEffect(target) { screens.animateTo(target) }
+    PredictiveBackHandler(enabled = nav.stack().isNotEmpty()) { events ->
+        val parent = nav.parentScreen()
+        try {
+            events.collect { screens.seekTo(it.progress, parent) }
+            nav.pop()
+        } catch (e: CancellationException) {
+            scope.launch { screens.animateTo(screens.currentState) }
+            throw e
+        }
+    }
     BackHandler(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
 
     val bottomSpace = if (snapshot.track != null) 176.dp else 104.dp
@@ -315,19 +355,33 @@ fun NexfyRoot(
         Box(Modifier.fillMaxSize().background(c.background)) {
             // Everything behind the dock and the mini player is what their glass blurs.
             Box(Modifier.fillMaxSize().glassSource(haze)) {
-                AnimatedContent(
-                    targetState = nav.screen,
-                    modifier = Modifier.fillMaxSize(),
-                    transitionSpec = {
-                        if (initialState.tab != targetState.tab) {
-                            Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
-                        } else {
-                            Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
+                SharedTransitionLayout(Modifier.fillMaxSize()) {
+                    CompositionLocalProvider(LocalSharedScope provides this) {
+                        rememberTransition(screens, label = "screen").AnimatedContent(
+                            modifier = Modifier.fillMaxSize(),
+                            transitionSpec = {
+                                when {
+                                    initialState.tab != targetState.tab ->
+                                        Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
+                                    targetState.depth < initialState.depth -> Motion.pageBack
+                                    else -> Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
+                                }
+                            },
+                        ) { screen ->
+                            // Pages leaving or arriving show as rounded cards.
+                            val corner by transition.animateDp(label = "corner") { if (it == EnterExitState.Visible) 0.dp else 32.dp }
+                            CompositionLocalProvider(LocalScreenScope provides this) {
+                                Box(
+                                    Modifier.fillMaxSize().graphicsLayer {
+                                        shape = RoundedCornerShape(corner)
+                                        clip = corner > 0.5.dp
+                                    }.background(c.background),
+                                ) {
+                                    ScreenContent(screen, actions, Modifier.fillMaxSize())
+                                }
+                            }
                         }
-                    },
-                    label = "screen",
-                ) { screen ->
-                    ScreenContent(screen, actions, Modifier.fillMaxSize())
+                    }
                 }
             }
 

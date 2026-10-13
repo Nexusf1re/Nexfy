@@ -1,5 +1,8 @@
 package dev.nexfy.app.ui.design
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -73,6 +76,20 @@ object Motion {
         fadeIn(tween(420, delayMillis = Stagger, easing = Standard)) +
             slideInVertically(spring(dampingRatio = 0.8f, stiffness = 230f)) { it / 28 }
     val pageExit: ExitTransition = fadeOut(tween(240, easing = EmphasizedAccelerate))
+
+    /**
+     * Back: the page shrinks into a fading card above the one underneath,
+     * which settles in from slightly smaller. Linear, so a back gesture
+     * drags it evenly with the finger.
+     */
+    val pageBack: ContentTransform = ContentTransform(
+        fadeIn(tween(360, easing = LinearEasing), initialAlpha = .35f) +
+            scaleIn(tween(360, easing = LinearEasing), initialScale = .92f),
+        scaleOut(tween(360, easing = LinearEasing), targetScale = .8f) +
+            // The card stays solid while it shrinks and only fades at the end.
+            fadeOut(tween(360, easing = CubicBezierEasing(.8f, 0f, 1f, 1f))),
+        targetContentZIndex = -1f,
+    )
 
     /** Tab switch: the new tab slides in from its side; the old one just fades. */
     fun tabSwitch(direction: Int): ContentTransform {

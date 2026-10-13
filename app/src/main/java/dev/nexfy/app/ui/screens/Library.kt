@@ -154,7 +154,8 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     LibraryRow(
                         e.imageUrl, e.title, e.subtitle,
                         pinned = e.key in pinned,
-                        onClick = { actions.open(e.route, e.peek) },
+                        sharedKey = "lib/${e.key}",
+                        onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
                         onLongClick = { menuFor = e },
                     )
                 }
@@ -235,6 +236,7 @@ private fun LibraryRow(
     subtitle: String,
     pinned: Boolean = false,
     liked: Boolean = false,
+    sharedKey: String? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
@@ -266,7 +268,7 @@ private fun LibraryRow(
                 contentAlignment = Alignment.Center,
             ) { Icon(Icons.Rounded.Favorite, null, tint = Color.White) }
         } else {
-            Cover(imageUrl, Modifier.size(64.dp), 12.dp)
+            Cover(imageUrl, Modifier.size(64.dp), 12.dp, sharedKey = sharedKey)
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {

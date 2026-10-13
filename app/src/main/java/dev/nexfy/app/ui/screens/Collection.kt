@@ -207,7 +207,7 @@ fun CollectionScreen(
                         if (loading && imageUrl == null) {
                             Bone(coverModifier, RoundedCornerShape(coverRadius), light = true)
                         } else {
-                            Cover(imageUrl, coverModifier, radius = coverRadius, motion = true)
+                            Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
                         }
                         Spacer(Modifier.height(16.dp))
                         if (loading && title.isBlank()) {

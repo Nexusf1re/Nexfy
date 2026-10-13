@@ -189,7 +189,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Artistas", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-ar")) {
                                 items(r.artists, key = { it.id }) { a ->
-                                    CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) { actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl)) }
+                                    CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true, shared = "search-ar/${a.id}") { actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl), "search-ar/${a.id}") }
                                 }
                             }
                         }
@@ -201,7 +201,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Álbuns", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-al")) {
                                 items(r.albums, key = { it.id }) { a ->
-                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl)) }
+                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "search-al/${a.id}") { actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "search-al/${a.id}") }
                                 }
                             }
                         }
@@ -213,7 +213,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Playlists", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-pl")) {
                                 items(r.playlists, key = { it.id }) { p ->
-                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}") { actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl)) }
+                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}", shared = "search-pl/${p.id}") { actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "search-pl/${p.id}") }
                                 }
                             }
                         }

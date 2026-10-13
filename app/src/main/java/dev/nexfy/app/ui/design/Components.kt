@@ -287,9 +287,10 @@ fun ThinSlider(
 // --------------------------------------------------------------- media --
 
 @Composable
-fun Cover(url: String?, modifier: Modifier, radius: Dp = 14.dp, motion: Boolean = false) {
+fun Cover(url: String?, modifier: Modifier, radius: Dp = 14.dp, motion: Boolean = false, sharedKey: String? = null) {
     val c = MaterialTheme.colorScheme
-    Box(modifier.clip(RoundedCornerShape(radius)).background(c.surfaceVariant), contentAlignment = Alignment.Center) {
+    val shape = RoundedCornerShape(radius)
+    Box(modifier.sharedCover(sharedKey, shape).clip(shape).background(c.surfaceVariant), contentAlignment = Alignment.Center) {
         if (url.isNullOrBlank()) {
             Icon(Icons.Rounded.MusicNote, null, tint = c.onSurfaceVariant, modifier = Modifier.fillMaxSize(.4f))
         } else {
@@ -306,6 +307,8 @@ fun CoverCard(
     subtitle: String,
     key: String,
     circle: Boolean = false,
+    /** Shared-element key of the cover, so it travels to the page it opens. */
+    shared: String? = null,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -321,7 +324,7 @@ fun CoverCard(
             }
             .padding(bottom = if (circle) 0.dp else 10.dp),
     ) {
-        Cover(imageUrl, Modifier.size(156.dp), if (circle) 78.dp else 14.dp)
+        Cover(imageUrl, Modifier.size(156.dp), if (circle) 78.dp else 14.dp, sharedKey = shared)
         Spacer(Modifier.height(8.dp))
         Column(Modifier.padding(horizontal = if (circle) 0.dp else 10.dp)) {
             val align = if (circle) TextAlign.Center else null
