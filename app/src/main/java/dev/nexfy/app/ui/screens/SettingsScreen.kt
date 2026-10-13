@@ -1,5 +1,14 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.design.PillSelector
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -125,6 +134,8 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
                 onSignOut = { scope.launch { core.webSignOut(WebApp.SHARED); reload++ } },
             )
         }
+
+        StorageSection(actions)
     }
 }
 
@@ -156,4 +167,67 @@ private fun StatusRow(text: String, ok: Boolean) {
 @Composable
 private fun AccountButton(signedIn: Boolean, enabled: Boolean, onSignIn: () -> Unit, onSignOut: () -> Unit) {
     if (signedIn) PillButton("Sair", onSignOut, filled = false) else PillButton("Entrar", onSignIn, enabled = enabled)
+}
+
+private val Limits = listOf(1L, 2L, 5L, 10L).map { it * 1024 * 1024 * 1024 }
+
+private fun gb(bytes: Long) = "%.1f GB".format(bytes / (1024.0 * 1024 * 1024)).replace('.', ',')
+
+/** The audio cache: what it holds, its size, queue prefetch and clearing it. */
+@Composable
+private fun StorageSection(actions: AppActions) {
+    val c = MaterialTheme.colorScheme
+    val core = actions.core
+    val library = actions.app.library
+    var info by remember { mutableStateOf(core.cacheInfo()) }
+    var chosen by remember { mutableStateOf(info.limitBytes.toLong()) }
+    var confirmClear by remember { mutableStateOf(false) }
+    val prefetch by library.prefetchQueue.collectAsState()
+    // Downloads fill it in the background: keep the numbers live.
+    LaunchedEffect(Unit) {
+        while (true) {
+            info = core.cacheInfo()
+            delay(3_000)
+        }
+    }
+    Section(
+        "Músicas no aparelho",
+        "No Wi-Fi, o Nexfy baixa as próximas músicas e as playlists que tu mantiveres no aparelho. Elas começam na hora e tocam com internet fraca; ainda precisam de conexão para tocar.",
+    ) {
+        val used = info.usedBytes.toLong()
+        Text("${gb(used)} de ${gb(chosen)}", style = MaterialTheme.typography.titleMedium)
+        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.outline)) {
+            Box(
+                Modifier.fillMaxWidth((used.toFloat() / chosen).coerceIn(0f, 1f)).fillMaxHeight()
+                    .clip(CircleShape).background(accentColor()),
+            )
+        }
+        PillSelector(Limits, chosen, { gb(it).removeSuffix(",0 GB") + " GB" }, {
+            chosen = it
+            core.setCacheLimit(it.toULong())
+        }, Modifier.fillMaxWidth())
+        if (chosen != info.limitBytes.toLong()) {
+            Text("O novo tamanho vale na próxima vez que o app abrir.", color = c.onSurfaceVariant, fontSize = 13.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Baixar as próximas da fila no Wi-Fi", Modifier.weight(1f), fontSize = 14.sp)
+            Switch(prefetch, library::setPrefetchQueue)
+        }
+        PillButton("Apagar músicas baixadas", { confirmClear = true }, filled = false)
+    }
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Apagar músicas baixadas?") },
+            text = { Text("Libera ${gb(info.usedBytes.toLong())}. As playlists mantidas no aparelho voltam a baixar no Wi-Fi.") },
+            confirmButton = {
+                TextButton({
+                    core.clearAudioCache()
+                    info = core.cacheInfo()
+                    confirmClear = false
+                }) { Text("Apagar") }
+            },
+            dismissButton = { TextButton({ confirmClear = false }) { Text("Cancelar") } },
+        )
+    }
 }

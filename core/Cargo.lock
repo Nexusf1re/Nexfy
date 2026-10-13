@@ -1620,6 +1620,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "jni",
+ "librespot-audio",
  "librespot-connect",
  "librespot-core",
  "librespot-metadata",

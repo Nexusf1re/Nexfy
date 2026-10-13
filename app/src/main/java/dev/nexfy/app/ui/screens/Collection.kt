@@ -1,5 +1,9 @@
 package dev.nexfy.app.ui.screens
 
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.material.icons.rounded.DownloadForOffline
+import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.BasicTextField
@@ -156,6 +160,17 @@ fun CollectionScreen(
     val loading = tracks == null
     val all = tracks.orEmpty()
     val nowPlaying by actions.app.bridge.state.collectAsState()
+    // Kept on the phone: downloaded on Wi-Fi; count what is there already.
+    val keptAll by actions.app.library.kept.collectAsState()
+    val keepKey = source?.takeIf { it.startsWith("pl:") || it.startsWith("al:") }
+    val kept = keepKey != null && keepKey in keptAll
+    var onPhone by remember { mutableIntStateOf(0) }
+    LaunchedEffect(kept, all.size) {
+        while (kept && all.isNotEmpty()) {
+            onPhone = actions.core.cachedCount(all.map { it.uri }).toInt()
+            delay(4_000)
+        }
+    }
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(TrackSort.Original) }
     LaunchedEffect(query.isNotBlank()) { onFiltering(query.isNotBlank()) }
@@ -246,6 +261,24 @@ fun CollectionScreen(
                                     Text("Tocar", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                                 }
                             }
+                            if (keepKey != null) {
+                                GlassIcon(if (kept) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline, if (kept) "Tirar do aparelho" else "Manter no aparelho", {
+                                    haptics.press()
+                                    actions.app.library.toggleKept(keepKey)
+                                    android.widget.Toast.makeText(
+                                        actions.app,
+                                        if (kept) "Não fica mais no aparelho" else "Mantida no aparelho: baixa no Wi-Fi",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }, enabled = all.isNotEmpty())
+                            }
+                        }
+                        if (kept && all.isNotEmpty()) {
+                            Text(
+                                if (onPhone >= all.size) "Todas no aparelho" else "$onPhone de ${all.size} no aparelho · baixando no Wi-Fi",
+                                Modifier.padding(top = 10.dp),
+                                color = Color.White.copy(.7f), fontSize = 12.sp,
+                            )
                         }
                     }
                 }

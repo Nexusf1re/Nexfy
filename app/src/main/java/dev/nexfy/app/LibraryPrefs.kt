@@ -72,7 +72,7 @@ enum class AlbumSort(val label: String) {
 /**
  * Library choices kept on this phone: pinned playlists and albums (in the
  * order they were pinned), each shelf's sort, and how often each playlist
- * or album was played in Nexfy.
+ * or album was played in Nexfy, and what is kept on the phone.
  */
 class LibraryPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
@@ -104,6 +104,27 @@ class LibraryPrefs(context: Context) {
     /** Plays started in Nexfy, by library key. */
     val plays: StateFlow<Map<String, Int>> = _plays
 
+    private val _kept = MutableStateFlow(prefs.getStringSet(KEPT, null).orEmpty().toSet())
+
+    /** Playlists and albums kept on the phone (`pl:<id>`, `al:<id>`): downloaded on Wi-Fi. */
+    val kept: StateFlow<Set<String>> = _kept
+
+    private val _prefetchQueue = MutableStateFlow(prefs.getBoolean(PREFETCH_QUEUE, true))
+
+    /** Download the next songs of the queue ahead, on Wi-Fi. */
+    val prefetchQueue: StateFlow<Boolean> = _prefetchQueue
+
+    fun toggleKept(key: String) {
+        val now = _kept.value.let { if (key in it) it - key else it + key }
+        _kept.value = now
+        prefs.edit { putStringSet(KEPT, now) }
+    }
+
+    fun setPrefetchQueue(on: Boolean) {
+        _prefetchQueue.value = on
+        prefs.edit { putBoolean(PREFETCH_QUEUE, on) }
+    }
+
     fun togglePin(key: String) {
         val now = _pinned.value.let { if (key in it) it - key else it + key }
         _pinned.value = now
@@ -131,5 +152,7 @@ class LibraryPrefs(context: Context) {
         const val PLAYLIST_SORT = "playlist_sort"
         const val ALBUM_SORT = "album_sort"
         const val PLAYS = "plays"
+        const val KEPT = "kept"
+        const val PREFETCH_QUEUE = "prefetch_queue"
     }
 }

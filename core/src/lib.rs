@@ -9,6 +9,7 @@ mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod lyrics;
+mod offline;
 mod remote;
 mod session_reads;
 mod webapi;
@@ -39,6 +40,7 @@ pub use webapi::{
     SearchResults, Track, TrackPage, WebApp, WebStatus,
 };
 use webapi::WebApi;
+pub use offline::CacheInfo;
 pub use remote::{Device, RemoteCommand, RemoteState};
 
 uniffi::setup_scaffolding!();
@@ -211,6 +213,7 @@ struct Inner {
     device_name: String,
     pending_login: Mutex<Option<PendingLogin>>,
     web: WebApi,
+    offline: offline::Offline,
     connected: Mutex<Option<Connected>>,
     queue: Mutex<QueueState>,
     /// Metadata for queue entries, fetched once per track.
@@ -236,6 +239,7 @@ impl NexfyCore {
         Arc::new(Self {
             inner: Arc::new(Inner {
                 web: WebApi::new(&cache_dir),
+                offline: offline::Offline::new(&cache_dir),
                 cache_dir,
                 device_name,
                 pending_login: Mutex::new(None),
@@ -547,6 +551,48 @@ impl NexfyCore {
         Ok(uris.iter().filter_map(|uri| cache.get(uri).cloned()).collect())
     }
 
+
+    // ---------------------------------------------- songs on the phone --
+
+    /// How much the audio cache holds and may hold.
+    pub fn cache_info(&self) -> CacheInfo {
+        self.inner.offline.info()
+    }
+
+    /// Audio cache size; takes effect on the next app start.
+    pub fn set_cache_limit(&self, bytes: u64) {
+        self.inner.offline.set_limit(bytes)
+    }
+
+    pub fn clear_audio_cache(&self) {
+        self.inner.offline.clear()
+    }
+
+    /// How many of these songs are on the phone already.
+    pub fn cached_count(&self, uris: Vec<String>) -> u32 {
+        self.inner
+            .with_session(|session| self.inner.offline.cached_count(session, &uris))
+            .unwrap_or(0)
+    }
+
+    /// Download songs into the audio cache, one at a time with a pause
+    /// between downloads, like a listener would fetch them. Returns how
+    /// many were downloaded now.
+    pub async fn cache_tracks(&self, uris: Vec<String>) -> Result<u32, CoreError> {
+        let session = self.inner.live_session().await?;
+        let mut downloaded = 0;
+        for uri in uris {
+            match self.inner.offline.download(&session, &uri).await {
+                Ok(true) => {
+                    downloaded += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Ok(false) => {}
+                Err(error) => log::info!("could not cache {uri}: {error:#}"),
+            }
+        }
+        Ok(downloaded)
+    }
     // ------------------------------------------------- other devices --
 
     /// The account's Spotify Connect devices, this phone included.
@@ -610,7 +656,7 @@ impl Inner {
     fn cache(&self) -> Result<Cache, CoreError> {
         let credentials = self.cache_dir.join("credentials");
         let audio = self.cache_dir.join("audio");
-        Cache::new(Some(credentials), None, Some(audio), Some(512 * 1024 * 1024))
+        Cache::new(Some(credentials), None, Some(audio), Some(self.offline.limit()))
             .map_err(|e| CoreError::Session(e.to_string()))
     }
 

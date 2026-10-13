@@ -23,6 +23,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import android.util.Log
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import uniffi.nexfy_core.NexfyCore
 
 /** Owns the single Rust core, shared by the UI and the playback service. */
@@ -67,6 +76,25 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
+        // Songs on the phone: on Wi-Fi, download the next songs of the queue
+        // and every kept playlist and album into the audio cache.
+        scope.launch {
+            combine(bridge.local.map { s -> s.queue.next.take(5).map { it.uri } }.distinctUntilChanged(), library.prefetchQueue, unmetered) { next, on, wifi ->
+                if (on && wifi) next else emptyList()
+            }.collectLatest { next ->
+                if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
+            }
+        }
+        scope.launch {
+            combine(library.kept, unmetered) { kept, wifi -> if (wifi) kept else emptySet() }.collectLatest { kept ->
+                if (kept.isEmpty() || !awaitConnected()) return@collectLatest
+                delay(3_000)
+                for (key in kept) {
+                    runCatching { core.cacheTracks(keptTracks(key)) }
+                        .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
+                }
+            }
+        }
         // Fetch the songs either side of the current one ahead, so a skip
         // can show the new song at once.
         scope.launch {
@@ -81,6 +109,43 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                     }
                 }
         }
+    }
+
+    /** Whether the network is unmetered (Wi-Fi), where songs are downloaded ahead. */
+    val unmetered: StateFlow<Boolean> by lazy {
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        callbackFlow {
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    trySend(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED))
+                }
+
+                override fun onLost(network: Network) {
+                    trySend(false)
+                }
+            }
+            connectivity.registerDefaultNetworkCallback(callback)
+            awaitClose { connectivity.unregisterNetworkCallback(callback) }
+        }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, false)
+    }
+
+    /** Wait for the Spotify session (restored at start); false if it never comes. */
+    private suspend fun awaitConnected(): Boolean {
+        repeat(60) {
+            if (core.isConnected()) return true
+            delay(2_000)
+        }
+        return false
+    }
+
+    /** The songs of a kept playlist (`pl:<id>`) or album (`al:<id>`). */
+    suspend fun keptTracks(key: String): List<String> {
+        val id = key.substringAfter(':')
+        return when {
+            key.startsWith("pl:") -> core.playlist(id, false).tracks
+            key.startsWith("al:") -> core.album(id, false).tracks
+            else -> emptyList()
+        }.map { it.uri }
     }
 
     /** Whether a screen of the app is showing; remote playback is only polled then. */
