@@ -130,8 +130,8 @@ async fn send(
         let mut request = http().request(method.clone(), &url).bearer_auth(token);
         request = match &body {
             Some(json) => request.json(json),
-            // Spotify wants a length on bodiless PUTs and POSTs.
-            None => request.body(Vec::new()),
+            // Spotify answers 411 to bodiless PUTs and POSTs without a length.
+            None => request.header(reqwest::header::CONTENT_LENGTH, "0"),
         };
         let response = request.send().await?;
         let status = response.status().as_u16();
@@ -143,7 +143,7 @@ async fn send(
             return Ok(if text.trim().is_empty() { None } else { Some(serde_json::from_str(&text)?) });
         }
         let detail = response.text().await.unwrap_or_default();
-        log::warn!("player {method} {path} via app {i}: HTTP {status}: {}", detail.chars().take(160).collect::<String>());
+        log::warn!("player {method} {path} via app {i}: HTTP {status}: {}", detail.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect::<String>());
         last = match status {
             404 => bail!("nenhum dispositivo ativo agora"),
             // Grants from before the player scopes were added need a new sign-in.

@@ -430,9 +430,16 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         AnimatedContent(track, transitionSpec = { songChange() }, label = "mini") { t ->
                             Column {
                                 Text(t.title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(t.artists, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                s.remote?.let { d ->
-                                    Text("Em ${d.name}", color = accentColor(), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                val d = s.remote
+                                if (d == null) {
+                                    Text(t.artists, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                } else {
+                                    // Playing elsewhere: where it plays takes the artist's line.
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(deviceIcon(d.kind), null, tint = accentColor(), modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(d.name, color = accentColor(), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
                                 }
                             }
                         }
