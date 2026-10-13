@@ -2,6 +2,20 @@ package dev.sonata.app.ui.screens
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.automirrored.rounded.Sort
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -113,6 +127,8 @@ fun CollectionScreen(
     onSubtitle: (() -> Unit)? = null,
     /** Library key counted when playing from here (`pl:<id>`, `al:<id>`, `liked`). */
     source: String? = null,
+    /** Told whether a search is active (liked songs then load every page). */
+    onFiltering: (Boolean) -> Unit = {},
     footer: LazyListScope.() -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
@@ -125,6 +141,13 @@ fun CollectionScreen(
         Unit
     }
     val nowPlaying by actions.app.bridge.state.collectAsState()
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(TrackSort.Original) }
+    LaunchedEffect(query.isNotBlank()) { onFiltering(query.isNotBlank()) }
+    // What the list shows (and what plays from it), with each track's position in the original.
+    // tracks.size: liked songs grow the same list instance page by page.
+    val shown = remember(tracks, tracks.size, query, sort) { sort.apply(filterTracks(tracks, query)) }
+    val shownTracks = remember(shown) { shown.map { it.value } }
 
     Box(modifier) {
         CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
@@ -194,18 +217,34 @@ fun CollectionScreen(
                         }
                     }
                 }
-                itemsIndexed(tracks) { i, track ->
+                if (tracks.size > 1) {
+                    item(key = "tools") {
+                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, tracks.size)
+                    }
+                }
+                if (shown.isEmpty() && query.isNotBlank()) {
+                    item(key = "none") {
+                        Text(
+                            "Nada encontrado para “${query.trim()}”",
+                            Modifier.fillMaxWidth().padding(32.dp),
+                            color = c.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+                itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
+                    val track = entry.value
                     Box(Modifier.padding(horizontal = 16.dp)) {
                         TrackRow(
                             track,
-                            { actions.play(tracks, i, source = source) },
-                            number = if (numbered) i + 1 else null,
+                            { actions.play(shownTracks, i, source = source) },
+                            number = if (numbered) entry.index + 1 else null,
                             playing = nowPlaying.track?.uri == track.uri,
                             // Long press opens the track's album.
                             onLongClick = track.albumId?.let { id -> { actions.open(Route.Album(id)) } },
                         )
                     }
-                    if (i < tracks.lastIndex) {
+                    if (i < shown.lastIndex) {
                         HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
                     }
                 }
@@ -214,6 +253,115 @@ fun CollectionScreen(
         }
         Box(Modifier.statusBarsPadding()) {
             DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source) }
+        }
+    }
+}
+
+enum class TrackSort(val label: String) {
+    Original("Ordem original"),
+    Title("Título"),
+    Artist("Artista"),
+    Album("Álbum"),
+    Duration("Duração"),
+    ;
+
+    fun apply(tracks: List<IndexedValue<Track>>): List<IndexedValue<Track>> = when (this) {
+        Original -> tracks
+        Title -> tracks.sortedBy { fold(it.value.title) }
+        Artist -> tracks.sortedWith(compareBy({ fold(it.value.artists) }, { fold(it.value.album) }, { it.index }))
+        Album -> tracks.sortedWith(compareBy({ fold(it.value.album) }, { it.index }))
+        Duration -> tracks.sortedBy { it.value.durationMs }
+    }
+}
+
+/** Lower case without accents, for matching and sorting "Á" with "a". */
+private fun fold(text: String): String =
+    java.text.Normalizer.normalize(text.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
+/** Tracks whose title, artists or album contain every word of [query]. */
+private fun filterTracks(tracks: List<Track>, query: String): List<IndexedValue<Track>> {
+    val words = fold(query).split(' ').filter(String::isNotBlank)
+    val indexed = tracks.withIndex().toList()
+    if (words.isEmpty()) return indexed
+    return indexed.filter { (_, t) ->
+        val haystack = fold("${t.title} ${t.artists} ${t.album}")
+        words.all(haystack::contains)
+    }
+}
+
+/** Search field and sort menu above a track list. */
+@Composable
+private fun TrackTools(
+    query: String,
+    onQuery: (String) -> Unit,
+    sort: TrackSort,
+    onSort: (TrackSort) -> Unit,
+    shown: Int,
+    total: Int,
+) {
+    val c = MaterialTheme.colorScheme
+    var menu by remember { mutableStateOf(false) }
+    Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.weight(1f).height(48.dp).clip(CircleShape).background(c.surfaceVariant).padding(start = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                BasicTextField(
+                    query,
+                    onQuery,
+                    Modifier.weight(1f).padding(horizontal = 10.dp),
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.onSurface),
+                    cursorBrush = SolidColor(c.onSurface),
+                    decorationBox = { field ->
+                        if (query.isEmpty()) Text("Buscar nesta lista", color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                        field()
+                    },
+                )
+                if (query.isNotEmpty()) {
+                    IconButton({ onQuery("") }) { Icon(Icons.Rounded.Close, "Limpar", tint = c.onSurfaceVariant) }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Box {
+                Box(
+                    Modifier.size(48.dp).clip(CircleShape)
+                        .background(if (sort != TrackSort.Original) c.primary else c.surfaceVariant)
+                        .clickable { menu = true },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Rounded.Sort, "Ordenar",
+                        tint = if (sort != TrackSort.Original) c.onPrimary else c.onSurface,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+                DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(18.dp)) {
+                    TrackSort.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.label) },
+                            onClick = {
+                                menu = false
+                                onSort(option)
+                            },
+                            trailingIcon = { if (option == sort) Icon(Icons.Rounded.Check, null) },
+                        )
+                    }
+                }
+            }
+        }
+        if (query.isNotBlank() || sort != TrackSort.Original) {
+            Text(
+                listOfNotNull(
+                    if (query.isNotBlank()) "$shown de $total" else null,
+                    if (sort != TrackSort.Original) "por ${sort.label.lowercase()}" else null,
+                ).joinToString(" · "),
+                color = c.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 16.dp, top = 6.dp),
+            )
         }
     }
 }

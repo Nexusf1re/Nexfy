@@ -117,6 +117,8 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
     var nextOffset by remember { mutableStateOf<UInt?>(0u) }
     var total by rememberSaveable { mutableStateOf(0) }
     var loading by remember { mutableStateOf(false) }
+    // While searching, keep loading pages so the search covers every song.
+    var filtering by remember { mutableStateOf(false) }
 
     val nearEnd by remember {
         derivedStateOf {
@@ -124,9 +126,9 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
             (info.visibleItemsInfo.lastOrNull()?.index ?: 0) >= info.totalItemsCount - 12
         }
     }
-    LaunchedEffect(nearEnd, nextOffset) {
+    LaunchedEffect(nearEnd, nextOffset, filtering) {
         val offset = nextOffset ?: return@LaunchedEffect
-        if (!nearEnd && tracks.isNotEmpty() || loading) return@LaunchedEffect
+        if (!nearEnd && !filtering && tracks.isNotEmpty() || loading) return@LaunchedEffect
         loading = true
         try {
             val page = actions.core.likedTracks(offset, 50u, false)
@@ -149,6 +151,7 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
         tracks = tracks,
         modifier = modifier,
         source = "liked",
+        onFiltering = { filtering = it },
     ) {
         if (loading) {
             item(key = "loading") {
