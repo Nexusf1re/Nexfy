@@ -337,9 +337,19 @@ fun CoverCard(
     }
 }
 
-/** Horizontal row that bleeds to the screen edges and snaps cards to the left margin. */
+/**
+ * Horizontal row that bleeds to the screen edges and snaps cards to the left margin.
+ * When [firstKey] changes (items arrived at the front), the row returns to the start;
+ * a keyed LazyRow would otherwise stay anchored on the old first card.
+ */
 @Composable
-fun Carousel(state: LazyListState, content: LazyListScope.() -> Unit) {
+fun Carousel(state: LazyListState, firstKey: Any? = null, content: LazyListScope.() -> Unit) {
+    // Plain holder, not state: updated during composition without recomposing.
+    val shownFirst = remember { arrayOf(firstKey) }
+    if (firstKey != shownFirst[0]) {
+        shownFirst[0] = firstKey
+        if (!state.isScrollInProgress) state.requestScrollToItem(0)
+    }
     val bleed = 24.dp
     LazyRow(
         Modifier.layout { m, cs ->

@@ -122,7 +122,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 item(key = "recent") {
                     Column {
                         SectionTitle("Tocadas recentemente")
-                        Carousel(actions.nav.list("row:home-recent")) {
+                        Carousel(actions.nav.list("row:home-recent"), recentCards.first().key) {
                             items(recentCards, key = { it.key }) { r ->
                                 CoverCard(r.imageUrl, r.title, r.subtitle, r.key) { actions.open(r.route) }
                             }
@@ -134,7 +134,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 item(key = "top-tracks") {
                     Column {
                         SectionTitle("Tuas mais ouvidas")
-                        Carousel(actions.nav.list("row:home-top")) {
+                        Carousel(actions.nav.list("row:home-top"), tracks.first().uri) {
                             itemsIndexed(tracks, key = { _, t -> t.uri }) { i, t ->
                                 CoverCard(t.imageUrl, t.title, t.artists, "tt-${t.uri}") { actions.play(tracks, i) }
                             }
@@ -146,7 +146,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 item(key = "playlists") {
                     Column {
                         SectionTitle("Tuas playlists")
-                        Carousel(actions.nav.list("row:home-pl")) {
+                        Carousel(actions.nav.list("row:home-pl"), items.first().id) {
                             items(items.take(20), key = { it.id }) { p ->
                                 CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}") { actions.open(Route.Playlist(p.id)) }
                             }
@@ -158,7 +158,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 item(key = "top-artists") {
                     Column {
                         SectionTitle("Artistas que tu mais ouve")
-                        Carousel(actions.nav.list("row:home-artists")) {
+                        Carousel(actions.nav.list("row:home-artists"), artists.first().id) {
                             items(artists, key = { it.id }) { a ->
                                 CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) { actions.open(Route.Artist(a.id)) }
                             }
@@ -170,7 +170,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 item(key = "albums") {
                     Column {
                         SectionTitle("Álbuns salvos")
-                        Carousel(actions.nav.list("row:home-al")) {
+                        Carousel(actions.nav.list("row:home-al"), pinnedFirst(items, pinned) { "al:${it.id}" }.first().id) {
                             items(pinnedFirst(items, pinned) { "al:${it.id}" }.take(20), key = { it.id }) { a ->
                                 CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id)) }
                             }
