@@ -5,6 +5,7 @@ mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod queue;
+mod webapi;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,6 +25,11 @@ use tokio::net::TcpListener;
 
 pub use queue::RepeatMode;
 use queue::Queue;
+pub use webapi::{
+    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, Profile, SearchResults,
+    Track, TrackPage, WebApp, WebStatus,
+};
+use webapi::WebApi;
 
 uniffi::setup_scaffolding!();
 
@@ -38,6 +44,25 @@ pub enum CoreError {
     Session(String),
     #[error("reprodução: {0}")]
     Playback(String),
+    #[error("{0}")]
+    Web(String),
+}
+
+fn web_error(error: anyhow::Error) -> CoreError {
+    CoreError::Web(format!("{error:#}"))
+}
+
+/// Which grant a pending browser sign-in is for.
+enum LoginTarget {
+    Playback,
+    Web(WebApp),
+}
+
+struct PendingLogin {
+    target: LoginTarget,
+    grant: auth::Grant,
+    flow: auth::Flow,
+    listener: TcpListener,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -95,7 +120,8 @@ impl VolumeGetter for Gain {
 
 struct Inner {
     cache_dir: PathBuf,
-    pending_login: Mutex<Option<(auth::Flow, TcpListener)>>,
+    pending_login: Mutex<Option<PendingLogin>>,
+    web: WebApi,
     connected: Mutex<Option<Connected>>,
     queue: Mutex<Queue>,
     listener: Mutex<Option<Arc<dyn CoreListener>>>,
@@ -114,9 +140,11 @@ impl SonataCore {
     /// credential and the audio cache there.
     #[uniffi::constructor]
     pub fn new(cache_dir: String) -> Arc<Self> {
+        let cache_dir = PathBuf::from(cache_dir);
         Arc::new(Self {
             inner: Arc::new(Inner {
-                cache_dir: PathBuf::from(cache_dir),
+                web: WebApi::new(&cache_dir),
+                cache_dir,
                 pending_login: Mutex::new(None),
                 connected: Mutex::new(None),
                 queue: Mutex::new(Queue::default()),
@@ -131,38 +159,86 @@ impl SonataCore {
         *self.inner.listener.lock().unwrap() = Some(listener);
     }
 
-    /// Start a sign-in: reserves the redirect port and returns the URL the
-    /// app opens in the browser. Async so the listener binds inside Tokio.
+    /// Start the playback sign-in: reserves the redirect port and returns
+    /// the URL the app opens in the browser. Async so the listener binds
+    /// inside Tokio.
     pub async fn begin_login(&self) -> Result<String, CoreError> {
-        let grant = &auth::Grant::PLAYBACK;
-        let listener = auth::listen(grant).map_err(|e| CoreError::Login(format!("{e:#}")))?;
-        let flow = auth::begin(grant);
-        let url = flow.url.clone();
-        *self.inner.pending_login.lock().unwrap() = Some((flow, listener));
-        Ok(url)
+        self.inner.begin(LoginTarget::Playback, auth::Grant::playback())
     }
 
     /// Wait for the browser redirect, then open the Spotify session.
     /// Returns the account's username.
     pub async fn finish_login(&self) -> Result<String, CoreError> {
-        let (flow, listener) = self
-            .inner
-            .pending_login
-            .lock()
-            .unwrap()
-            .take()
-            .ok_or_else(|| CoreError::Login("nenhum login em andamento".into()))?;
-        let grant = &auth::Grant::PLAYBACK;
-        let code = auth::wait_for_code(listener, &flow)
-            .await
-            .map_err(|e| CoreError::Login(format!("{e:#}")))?;
-        let token = auth::exchange_code(grant, &flow, &code)
-            .await
-            .map_err(|e| CoreError::Login(format!("{e:#}")))?;
+        let token = self.inner.finish(|t| matches!(t, LoginTarget::Playback)).await?;
         self.inner
             .connect(Credentials::with_access_token(token.access_token))
             .await
     }
+
+    // -------------------------------------------------- Web API --
+
+    pub async fn web_status(&self) -> WebStatus {
+        self.inner.web.status().await
+    }
+
+    /// Set (or clear with None) the user's own Spotify developer app.
+    pub async fn set_personal_client_id(&self, client_id: Option<String>) {
+        self.inner.web.set_personal_client_id(client_id).await
+    }
+
+    /// Sign one Web API app in through the browser, like [Self::begin_login].
+    pub async fn begin_web_login(&self, app: WebApp) -> Result<String, CoreError> {
+        let grant = self.inner.web.login_grant(app).await.map_err(web_error)?;
+        self.inner.begin(LoginTarget::Web(app), grant)
+    }
+
+    pub async fn finish_web_login(&self, app: WebApp) -> Result<(), CoreError> {
+        let token = self
+            .inner
+            .finish(|t| matches!(t, LoginTarget::Web(a) if *a == app))
+            .await?;
+        self.inner.web.finish_login(app, token).await;
+        Ok(())
+    }
+
+    pub async fn web_sign_out(&self, app: WebApp) {
+        self.inner.web.sign_out(app).await
+    }
+
+    /// `refresh` skips the cache; otherwise recent results come from disk.
+    pub async fn profile(&self, refresh: bool) -> Result<Profile, CoreError> {
+        self.inner.web.profile(refresh).await.map_err(web_error)
+    }
+
+    pub async fn my_playlists(&self, refresh: bool) -> Result<Vec<Playlist>, CoreError> {
+        self.inner.web.my_playlists(refresh).await.map_err(web_error)
+    }
+
+    pub async fn playlist(&self, id: String, refresh: bool) -> Result<PlaylistDetail, CoreError> {
+        self.inner.web.playlist(&id, refresh).await.map_err(web_error)
+    }
+
+    pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage, CoreError> {
+        self.inner.web.liked_tracks(offset, limit, refresh).await.map_err(web_error)
+    }
+
+    pub async fn saved_albums(&self, refresh: bool) -> Result<Vec<Album>, CoreError> {
+        self.inner.web.saved_albums(refresh).await.map_err(web_error)
+    }
+
+    pub async fn album(&self, id: String, refresh: bool) -> Result<AlbumDetail, CoreError> {
+        self.inner.web.album(&id, refresh).await.map_err(web_error)
+    }
+
+    pub async fn artist(&self, id: String, refresh: bool) -> Result<ArtistDetail, CoreError> {
+        self.inner.web.artist(&id, refresh).await.map_err(web_error)
+    }
+
+    pub async fn search(&self, query: String) -> Result<SearchResults, CoreError> {
+        self.inner.web.search(&query).await.map_err(web_error)
+    }
+
+    // ------------------------------------------------- playback --
 
     /// Reconnect with the credential saved by an earlier sign-in.
     /// Returns the username, or None when no credential is stored.
@@ -253,6 +329,40 @@ impl SonataCore {
 }
 
 impl Inner {
+    fn begin(&self, target: LoginTarget, grant: auth::Grant) -> Result<String, CoreError> {
+        let listener = auth::listen(&grant).map_err(|e| CoreError::Login(format!("{e:#}")))?;
+        let flow = auth::begin(&grant);
+        let url = flow.url.clone();
+        *self.pending_login.lock().unwrap() = Some(PendingLogin {
+            target,
+            grant,
+            flow,
+            listener,
+        });
+        Ok(url)
+    }
+
+    /// Wait for the redirect of the pending sign-in `expected` matches and
+    /// trade its code for a token.
+    async fn finish(
+        &self,
+        expected: impl Fn(&LoginTarget) -> bool,
+    ) -> Result<auth::TokenResponse, CoreError> {
+        let pending = self
+            .pending_login
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|p| expected(&p.target))
+            .ok_or_else(|| CoreError::Login("nenhum login em andamento".into()))?;
+        let code = auth::wait_for_code(pending.listener, &pending.flow)
+            .await
+            .map_err(|e| CoreError::Login(format!("{e:#}")))?;
+        auth::exchange_code(&pending.grant, &pending.flow, &code)
+            .await
+            .map_err(|e| CoreError::Login(format!("{e:#}")))
+    }
+
     fn cache(&self) -> Result<Cache, CoreError> {
         let credentials = self.cache_dir.join("credentials");
         let audio = self.cache_dir.join("audio");

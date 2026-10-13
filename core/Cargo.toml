@@ -20,13 +20,13 @@ anyhow = "1"
 # PKCE sign-in against Spotify's accounts service.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 base64 = "0.22"
 rand = "0.9"
 urlencoding = "2"
 
-# Vendored copy of the fork and revision Spotifast pins
-# (github.com/crmne/librespot @ 4118319a), librespot's dev branch plus fixes
+# Vendored copy of github.com/crmne/librespot @ 4118319a: librespot's dev branch plus fixes
 # not yet merged upstream, with one Sonata patch in core/src/config.rs (OS).
 # Bundled webpki roots avoid Android's certificate store; rodio/cpal reaches
 # the speaker through AAudio.

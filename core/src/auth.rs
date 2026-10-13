@@ -21,6 +21,26 @@ pub const PLAYBACK_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 pub const PLAYBACK_REDIRECT_PORT: u16 = 8898;
 pub const PLAYBACK_SCOPES: &[&str] = &["streaming"];
 
+/// The public Web API app shared by several open-source players.
+/// Registered before Spotify's November 2024 restrictions, so it can still
+/// read Spotify-owned playlists.
+pub const SHARED_WEB_CLIENT_ID: &str = "d420a117a32841c2b3474932e49fb54b";
+/// Both Web API apps (shared and the user's personal one) register this.
+pub const WEB_REDIRECT_PORT: u16 = 8989;
+pub const WEB_SCOPES: &[&str] = &[
+    "playlist-read-private",
+    "playlist-read-collaborative",
+    "playlist-modify-private",
+    "playlist-modify-public",
+    "user-library-read",
+    "user-library-modify",
+    "user-follow-read",
+    "user-follow-modify",
+    "user-read-private",
+    "user-read-recently-played",
+    "user-top-read",
+];
+
 const REDIRECT_PATH: &str = "/login";
 const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
@@ -30,18 +50,29 @@ const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><meta name=viewport 
 <body style='font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:90vh'>\
 <p>Pronto. Pode voltar para o Sonata.</p>";
 
+#[derive(Debug, Clone)]
 pub struct Grant {
-    pub client_id: &'static str,
+    pub client_id: String,
     pub port: u16,
     pub scopes: &'static [&'static str],
 }
 
 impl Grant {
-    pub const PLAYBACK: Grant = Grant {
-        client_id: PLAYBACK_CLIENT_ID,
-        port: PLAYBACK_REDIRECT_PORT,
-        scopes: PLAYBACK_SCOPES,
-    };
+    pub fn playback() -> Self {
+        Self {
+            client_id: PLAYBACK_CLIENT_ID.to_owned(),
+            port: PLAYBACK_REDIRECT_PORT,
+            scopes: PLAYBACK_SCOPES,
+        }
+    }
+
+    pub fn web(client_id: &str) -> Self {
+        Self {
+            client_id: client_id.to_owned(),
+            port: WEB_REDIRECT_PORT,
+            scopes: WEB_SCOPES,
+        }
+    }
 
     fn redirect_uri(&self) -> String {
         format!("http://127.0.0.1:{}{REDIRECT_PATH}", self.port)
@@ -58,6 +89,15 @@ pub struct Flow {
 #[derive(Debug, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,
+    /// PKCE refresh tokens rotate: each refresh may return a new one.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default = "default_expiry")]
+    pub expires_in: u64,
+}
+
+fn default_expiry() -> u64 {
+    3600
 }
 
 fn random_token(bytes: usize) -> String {
@@ -147,21 +187,31 @@ async fn answer_redirect(mut stream: tokio::net::TcpStream, expected_state: &str
 }
 
 pub async fn exchange_code(grant: &Grant, flow: &Flow, code: &str) -> Result<TokenResponse> {
-    let response = reqwest::Client::new()
-        .post(TOKEN_URL)
-        .form(&[
-            ("client_id", grant.client_id),
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", grant.redirect_uri().as_str()),
-            ("code_verifier", flow.verifier.as_str()),
-        ])
-        .send()
-        .await?;
+    token_request(&[
+        ("client_id", grant.client_id.as_str()),
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", grant.redirect_uri().as_str()),
+        ("code_verifier", flow.verifier.as_str()),
+    ])
+    .await
+}
+
+pub async fn refresh(client_id: &str, refresh_token: &str) -> Result<TokenResponse> {
+    token_request(&[
+        ("client_id", client_id),
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ])
+    .await
+}
+
+async fn token_request(form: &[(&str, &str)]) -> Result<TokenResponse> {
+    let response = reqwest::Client::new().post(TOKEN_URL).form(form).send().await?;
     let status = response.status();
     if !status.is_success() {
         let detail = response.text().await.unwrap_or_default();
-        bail!("troca do código falhou ({status}): {detail}");
+        bail!("pedido de token falhou ({status}): {detail}");
     }
     Ok(response.json().await?)
 }
