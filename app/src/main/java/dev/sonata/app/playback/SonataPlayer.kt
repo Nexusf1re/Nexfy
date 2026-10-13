@@ -111,6 +111,7 @@ class SonataPlayer(
         val s = bridge.state.value
         return runCore {
             when {
+                s.queue.uris.isEmpty() -> Unit
                 !playWhenReady -> core.pause()
                 // Play after the queue finished starts it over.
                 s.ended -> core.skipTo(0u)

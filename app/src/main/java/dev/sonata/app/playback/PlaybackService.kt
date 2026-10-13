@@ -12,10 +12,13 @@ import android.net.wifi.WifiManager
 import android.os.PowerManager
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import dev.sonata.app.MainActivity
 import dev.sonata.app.SonataApp
 
@@ -91,7 +94,32 @@ class PlaybackService : MediaSessionService() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, player).setSessionActivity(openApp).build()
+        session = MediaSession.Builder(this, player)
+            .setSessionActivity(openApp)
+            .setCallback(SessionCallback)
+            .build()
+    }
+
+    /**
+     * Media3 refuses items without a playable URI unless the session says
+     * how to resolve them. Ours are Spotify track URIs in `mediaId`, which
+     * the core resolves itself, so they pass through unchanged.
+     */
+    private object SessionCallback : MediaSession.Callback {
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: MutableList<MediaItem>,
+        ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(mediaItems)
+
+        /** Play pressed with nothing queued (e.g. a headset button): nothing to resume yet. */
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            isForPlayback: Boolean,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = Futures.immediateFuture(
+            MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0),
+        )
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = session
