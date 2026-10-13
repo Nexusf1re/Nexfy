@@ -64,6 +64,8 @@ pub struct Track {
     pub duration_ms: u32,
     pub explicit: bool,
     pub playable: bool,
+    /// When it was added to the playlist or liked songs (Unix ms), if known.
+    pub added_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
@@ -204,6 +206,20 @@ struct RawTrack {
 struct SavedTrack {
     #[serde(alias = "track")]
     item: Option<RawTrack>,
+    added_at: Option<String>,
+}
+
+impl SavedTrack {
+    fn into_track(self) -> Option<Track> {
+        let added_at_ms = self
+            .added_at
+            .as_deref()
+            .and_then(|at| librespot_core::date::Date::from_iso8601(at).ok())
+            .map(|date| date.as_timestamp_ms());
+        let mut track = self.item?.into_track(None)?;
+        track.added_at_ms = added_at_ms;
+        Some(track)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,6 +348,7 @@ impl RawTrack {
             duration_ms: self.duration_ms,
             explicit: self.explicit,
             playable: self.is_playable.unwrap_or(true),
+            added_at_ms: None,
         })
     }
 }
@@ -704,7 +721,7 @@ impl WebApi {
         let (items, _) = self.all_pages(first, Route::Personal).await?;
         Ok(items
             .into_iter()
-            .filter_map(|saved| saved.item?.into_track(None))
+            .filter_map(SavedTrack::into_track)
             .collect())
     }
 
@@ -742,7 +759,7 @@ impl WebApi {
                 .items
                 .into_iter()
                 .flatten()
-                .filter_map(|saved| saved.item?.into_track(None))
+                .filter_map(SavedTrack::into_track)
                 .collect(),
         })
     }

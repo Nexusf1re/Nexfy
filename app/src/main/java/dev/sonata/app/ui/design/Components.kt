@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -475,10 +476,28 @@ fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier 
 @Composable
 fun DetailTopBar(title: String, collapse: State<Float>, onBack: () -> Unit, onPlay: (() -> Unit)?) {
     val c = MaterialTheme.colorScheme
-    val bar by remember { derivedStateOf { ((collapse.value - .6f) / .4f).coerceIn(0f, 1f) } }
+    // Appears only once the header has faded out, so the two never overlap.
+    val bar by remember { derivedStateOf { ((collapse.value - .7f) / .3f).coerceIn(0f, 1f) } }
+    val edge = 12.dp
     Row(
-        Modifier.fillMaxWidth().height(TopBarHeight)
-            .drawBehind { drawRect(c.background.copy(alpha = (bar * .92f).coerceIn(0f, 1f))) }
+        Modifier.fillMaxWidth()
+            // Opaque behind the status bar too, with a soft edge below instead of a hard line.
+            .drawBehind {
+                val solid = size.height - edge.toPx()
+                drawRect(c.background.copy(alpha = bar), size = Size(size.width, solid))
+                drawRect(
+                    Brush.verticalGradient(
+                        listOf(c.background.copy(alpha = bar), Color.Transparent),
+                        startY = solid,
+                        endY = size.height,
+                    ),
+                    topLeft = Offset(0f, solid),
+                    size = Size(size.width, edge.toPx()),
+                )
+            }
+            .statusBarsPadding()
+            .padding(bottom = edge)
+            .height(TopBarHeight)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

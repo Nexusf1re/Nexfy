@@ -161,7 +161,7 @@ fun CollectionScreen(
                     Column(
                         Modifier.fillMaxWidth().statusBarsPadding().padding(top = TopBarHeight)
                             .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
-                            .graphicsLayer { alpha = (1f - collapse.value * 1.2f).coerceIn(0f, 1f) },
+                            .graphicsLayer { alpha = (1f - collapse.value * 1.5f).coerceIn(0f, 1f) },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Cover(
@@ -219,7 +219,7 @@ fun CollectionScreen(
                 }
                 if (tracks.size > 1) {
                     item(key = "tools") {
-                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, tracks.size)
+                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, tracks.size, dated = tracks.any { it.addedAtMs != null })
                     }
                 }
                 if (shown.isEmpty() && query.isNotBlank()) {
@@ -251,14 +251,13 @@ fun CollectionScreen(
                 footer()
             }
         }
-        Box(Modifier.statusBarsPadding()) {
-            DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source) }
-        }
+        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source) }
     }
 }
 
 enum class TrackSort(val label: String) {
     Original("Ordem original"),
+    Added("Adicionadas recentemente"),
     Title("Título"),
     Artist("Artista"),
     Album("Álbum"),
@@ -267,6 +266,8 @@ enum class TrackSort(val label: String) {
 
     fun apply(tracks: List<IndexedValue<Track>>): List<IndexedValue<Track>> = when (this) {
         Original -> tracks
+        // Undated tracks (albums, artist pages) keep their order at the end.
+        Added -> tracks.sortedByDescending { it.value.addedAtMs ?: Long.MIN_VALUE }
         Title -> tracks.sortedBy { fold(it.value.title) }
         Artist -> tracks.sortedWith(compareBy({ fold(it.value.artists) }, { fold(it.value.album) }, { it.index }))
         Album -> tracks.sortedWith(compareBy({ fold(it.value.album) }, { it.index }))
@@ -298,6 +299,8 @@ private fun TrackTools(
     onSort: (TrackSort) -> Unit,
     shown: Int,
     total: Int,
+    /** Whether the tracks carry an added date (playlists, liked songs). */
+    dated: Boolean,
 ) {
     val c = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
@@ -339,7 +342,7 @@ private fun TrackTools(
                     )
                 }
                 DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(18.dp)) {
-                    TrackSort.entries.forEach { option ->
+                    TrackSort.entries.filter { dated || it != TrackSort.Added }.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option.label) },
                             onClick = {

@@ -46,24 +46,33 @@ fn to_track(track: SessionTrack) -> Track {
         duration_ms: track.duration.max(0) as u32,
         explicit: track.is_explicit,
         playable: true,
+        added_at_ms: None,
     }
 }
 
 pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData> {
     let uri = SpotifyUri::from_uri(&format!("spotify:playlist:{id}")).map_err(|e| anyhow!("{e}"))?;
     let playlist = SessionPlaylist::get(session, &uri).await?;
-    let uris: Vec<SpotifyUri> = playlist
-        .tracks()
-        .filter(|uri| matches!(uri, SpotifyUri::Track { .. }))
+    // Each track with when it was added to the playlist.
+    let items: Vec<(SpotifyUri, i64)> = playlist
+        .contents
+        .items
+        .iter()
+        .filter(|item| matches!(item.id, SpotifyUri::Track { .. }))
         .take(MAX_TRACKS)
-        .cloned()
+        .map(|item| (item.id.clone(), item.attributes.timestamp.as_timestamp_ms()))
         .collect();
 
     // Keep playlist order; a track that fails to load is left out.
-    let tracks = stream::iter(uris)
-        .map(|uri| async move { SessionTrack::get(session, &uri).await })
+    let tracks = stream::iter(items)
+        .map(|(uri, added)| async move { (SessionTrack::get(session, &uri).await, added) })
         .buffered(CONCURRENCY)
-        .filter_map(|result| async move { result.ok().map(to_track) })
+        .filter_map(|(result, added)| async move {
+            result.ok().map(|track| Track {
+                added_at_ms: Some(added).filter(|ms| *ms > 0),
+                ..to_track(track)
+            })
+        })
         .collect::<Vec<_>>()
         .await;
 
