@@ -51,7 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nexfy.app.ui.AppActions
-import dev.nexfy.app.ui.LoadedContent
+import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Carousel
 import dev.nexfy.app.ui.design.Cover
@@ -63,12 +63,13 @@ import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.SectionTitle
 import dev.nexfy.app.ui.design.TrackRow
+import dev.nexfy.app.ui.design.TrackRowSkeleton
+import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.cascade
 import dev.nexfy.app.ui.design.rememberCascade
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.rememberTitleCollapse
 import dev.nexfy.app.ui.design.weightedPress
-import dev.nexfy.app.ui.rememberLoaded
 import dev.nexfy.app.ui.theme.accentColor
 import uniffi.nexfy_core.SearchResults
 import java.time.LocalTime
@@ -156,6 +157,12 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
 
             val r = results
             if (r == null) {
+                // First search on its way (typing pause included): rows the size of the results.
+                if (query.trim().length >= 2 && error == null) {
+                    items(6, key = { "sk$it" }) { i ->
+                        TrackRowSkeleton(i, Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = skeletonFade()))
+                    }
+                }
                 if (query.isBlank()) {
                     item(key = "hint") {
                         Text(
@@ -182,7 +189,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Artistas", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-ar")) {
                                 items(r.artists, key = { it.id }) { a ->
-                                    CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) { actions.open(Route.Artist(a.id)) }
+                                    CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) { actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl)) }
                                 }
                             }
                         }
@@ -194,7 +201,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Álbuns", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-al")) {
                                 items(r.albums, key = { it.id }) { a ->
-                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id)) }
+                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl)) }
                                 }
                             }
                         }
@@ -206,7 +213,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Playlists", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-pl")) {
                                 items(r.playlists, key = { it.id }) { p ->
-                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}") { actions.open(Route.Playlist(p.id)) }
+                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}") { actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl)) }
                                 }
                             }
                         }

@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -64,6 +65,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Route
+import dev.nexfy.app.ui.LoadError
+import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.CollectionBackdrop
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.DetailTopBar
@@ -73,6 +76,8 @@ import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.RoundIconButton
 import dev.nexfy.app.ui.design.TopBarHeight
 import dev.nexfy.app.ui.design.TrackRow
+import dev.nexfy.app.ui.design.TrackRowSkeleton
+import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.collapseOf
 import dev.nexfy.app.ui.design.dragToDismiss
 import dev.nexfy.app.ui.design.rememberHaptics
@@ -120,8 +125,12 @@ fun CollectionScreen(
     subtitle: String?,
     meta: String,
     imageUrl: String?,
-    tracks: List<Track>,
+    /** Null while loading: the header shows what is known and the rows are skeletons. */
+    tracks: List<Track>?,
     modifier: Modifier = Modifier,
+    /** Why loading failed, shown in place of the rows with [onRetry]. */
+    error: String? = null,
+    onRetry: () -> Unit = {},
     numbered: Boolean = false,
     round: Boolean = false,
     onSubtitle: (() -> Unit)? = null,
@@ -142,13 +151,15 @@ fun CollectionScreen(
         actions.back()
         Unit
     }
+    val loading = tracks == null
+    val all = tracks.orEmpty()
     val nowPlaying by actions.app.bridge.state.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(TrackSort.Original) }
     LaunchedEffect(query.isNotBlank()) { onFiltering(query.isNotBlank()) }
     // What the list shows (and what plays from it), with each track's position in the original.
     // tracks.size: liked songs grow the same list instance page by page.
-    val shown = remember(tracks, tracks.size, query, sort) { sort.apply(filterTracks(tracks, query)) }
+    val shown = remember(all, all.size, query, sort) { sort.apply(filterTracks(all, query)) }
     val shownTracks = remember(shown) { shown.map { it.value } }
     // A filtered or re-sorted view plays as an explicit list, not as the context.
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
@@ -170,21 +181,28 @@ fun CollectionScreen(
                             .graphicsLayer { alpha = (1f - collapse.value * 1.5f).coerceIn(0f, 1f) },
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        Cover(
-                            imageUrl,
-                            Modifier.size(208.dp).graphicsLayer {
-                                val sc = 1f - .15f * collapse.value.coerceIn(0f, 1f)
-                                scaleX = sc
-                                scaleY = sc
-                            },
-                            radius = if (round) 104.dp else 10.dp,
-                            motion = true,
-                        )
+                        val coverModifier = Modifier.size(208.dp).graphicsLayer {
+                            val sc = 1f - .15f * collapse.value.coerceIn(0f, 1f)
+                            scaleX = sc
+                            scaleY = sc
+                        }
+                        val coverRadius = if (round) 104.dp else 10.dp
+                        if (loading && imageUrl == null) {
+                            Bone(coverModifier, RoundedCornerShape(coverRadius), light = true)
+                        } else {
+                            Cover(imageUrl, coverModifier, radius = coverRadius, motion = true)
+                        }
                         Spacer(Modifier.height(16.dp))
-                        Text(
-                            title, color = Color.White, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        )
+                        if (loading && title.isBlank()) {
+                            Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
+                                Bone(Modifier.size(180.dp, 22.dp), light = true)
+                            }
+                        } else {
+                            Text(
+                                title, color = Color.White, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Spacer(Modifier.height(4.dp))
                         if (!subtitle.isNullOrBlank()) {
                             Text(
@@ -196,21 +214,27 @@ fun CollectionScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        Text(
-                            meta.uppercase(), color = Color.White.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
-                            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
+                        if (loading && meta.isBlank()) {
+                            Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
+                                Bone(Modifier.size(132.dp, 10.dp), light = true)
+                            }
+                        } else {
+                            Text(
+                                meta.uppercase(), color = Color.White.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
+                                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                         Spacer(Modifier.height(16.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             GlassIcon(Icons.Rounded.Shuffle, "Aleatório", {
                                 haptics.press()
-                                actions.play(tracks, tracks.indices.random(), shuffle = true, source = source, contextUri = contextUri)
-                            }, enabled = tracks.isNotEmpty())
+                                actions.play(all, all.indices.random(), shuffle = true, source = source, contextUri = contextUri)
+                            }, enabled = all.isNotEmpty())
                             GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape) {
                                 Row(
-                                    Modifier.matchParentSize().clickable(enabled = tracks.isNotEmpty()) {
+                                    Modifier.matchParentSize().clickable(enabled = all.isNotEmpty()) {
                                         haptics.press()
-                                        actions.play(tracks, source = source, contextUri = contextUri)
+                                        actions.play(all, source = source, contextUri = contextUri)
                                     },
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
@@ -223,9 +247,23 @@ fun CollectionScreen(
                         }
                     }
                 }
-                if (tracks.size > 1) {
+                if (loading && error == null) {
+                    item(key = "tools") { TrackToolsSkeleton() }
+                } else if (all.size > 1) {
                     item(key = "tools") {
-                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, tracks.size, dated = tracks.any { it.addedAtMs != null })
+                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
+                    }
+                }
+                if (loading) {
+                    if (error != null) {
+                        item(key = "error") { LoadError(error, onRetry) }
+                    } else {
+                        items(10, key = { "sk$it" }) { i ->
+                            Column(Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = skeletonFade())) {
+                                TrackRowSkeleton(i, Modifier.padding(horizontal = 16.dp), numbered = numbered)
+                                HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
+                            }
+                        }
                     }
                 }
                 if (shown.isEmpty() && query.isNotBlank()) {
@@ -240,25 +278,27 @@ fun CollectionScreen(
                 }
                 itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
                     val track = entry.value
-                    Box(Modifier.padding(horizontal = 16.dp)) {
-                        TrackRow(
-                            track,
-                            { actions.play(shownTracks, i, source = source, contextUri = rowContext) },
-                            number = if (numbered) entry.index + 1 else null,
-                            // The queue keeps the URI as listed; the playing one may be relinked.
-                            playing = nowPlaying.queue.current?.uri == track.uri || nowPlaying.track?.uri == track.uri,
-                            onLongClick = { menuFor = track },
-                            onSwipe = { actions.addToQueue(track) },
-                        )
-                    }
-                    if (i < shown.lastIndex) {
-                        HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
+                    Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
+                        Box(Modifier.padding(horizontal = 16.dp)) {
+                            TrackRow(
+                                track,
+                                { actions.play(shownTracks, i, source = source, contextUri = rowContext) },
+                                number = if (numbered) entry.index + 1 else null,
+                                // The queue keeps the URI as listed; the playing one may be relinked.
+                                playing = nowPlaying.queue.current?.uri == track.uri || nowPlaying.track?.uri == track.uri,
+                                onLongClick = { menuFor = track },
+                                onSwipe = { actions.addToQueue(track) },
+                            )
+                        }
+                        if (i < shown.lastIndex) {
+                            HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
+                        }
                     }
                 }
                 footer()
             }
         }
-        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source, contextUri = contextUri) }
+        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(all, source = source, contextUri = contextUri) }
     }
 }
 
@@ -373,5 +413,15 @@ private fun TrackTools(
                 modifier = Modifier.padding(start = 16.dp, top = 6.dp),
             )
         }
+    }
+}
+
+/** Same footprint as [TrackTools] while the list loads. */
+@Composable
+private fun TrackToolsSkeleton() {
+    Row(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Bone(Modifier.weight(1f).height(48.dp), CircleShape)
+        Spacer(Modifier.width(8.dp))
+        Bone(Modifier.size(48.dp), CircleShape)
     }
 }

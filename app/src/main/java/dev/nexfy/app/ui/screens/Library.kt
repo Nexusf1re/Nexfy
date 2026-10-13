@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,9 +57,12 @@ import dev.nexfy.app.PlaylistSort
 import dev.nexfy.app.pinnedFirst
 import dev.nexfy.app.playScores
 import dev.nexfy.app.ui.AppActions
+import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.LargeTitle
+import dev.nexfy.app.ui.design.ListRowSkeleton
+import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.cascade
@@ -72,7 +76,14 @@ import dev.nexfy.app.ui.theme.accentColor
 private enum class Shelf(val label: String) { Playlists("Playlists"), Albums("Álbuns") }
 
 /** A row of the library list. */
-private data class Entry(val key: String, val title: String, val subtitle: String, val imageUrl: String?, val route: Route)
+private data class Entry(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val route: Route,
+    val peek: Peek,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,12 +105,12 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
     val entries: List<Entry>? = when (shelf) {
         Shelf.Playlists -> playlists.state.value?.let { all ->
             pinnedFirst(playlistSort.apply(all, scores), pinned) { "pl:${it.id}" }.map {
-                Entry("pl:${it.id}", it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(it.id))
+                Entry("pl:${it.id}", it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(it.id), Peek(it.name, it.owner, it.imageUrl))
             }
         }
         Shelf.Albums -> albums.state.value?.let { all ->
             pinnedFirst(albumSort.apply(all, scores), pinned) { "al:${it.id}" }.map {
-                Entry("al:${it.id}", it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(it.id))
+                Entry("al:${it.id}", it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(it.id), Peek(it.name, it.artists, it.imageUrl))
             }
         }
     }
@@ -129,15 +140,21 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     LibraryRow(null, "Músicas curtidas", "Playlist", liked = true, onClick = { actions.open(Route.Liked) })
                 }
             }
-            if (entries == null && (if (shelf == Shelf.Playlists) playlists else albums).state.error != null) {
+            val shelfState = (if (shelf == Shelf.Playlists) playlists else albums).state
+            if (entries == null && shelfState.error != null) {
                 item(key = "connect") { ConnectPrompt(actions) }
+            }
+            if (entries == null && shelfState.loading) {
+                items(8, key = { "sk$it" }) { i ->
+                    ListRowSkeleton(i, Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = skeletonFade()))
+                }
             }
             itemsIndexed(entries.orEmpty(), key = { _, e -> e.key }) { i, e ->
                 Box(Modifier.cascade(i, cascadeClock)) {
                     LibraryRow(
                         e.imageUrl, e.title, e.subtitle,
                         pinned = e.key in pinned,
-                        onClick = { actions.open(e.route) },
+                        onClick = { actions.open(e.route, e.peek) },
                         onLongClick = { menuFor = e },
                     )
                 }
@@ -163,7 +180,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                 }
                 SheetAction(Icons.Rounded.OpenInNew, "Abrir") {
                     menuFor = null
-                    actions.open(entry.route)
+                    actions.open(entry.route, entry.peek)
                 }
             }
         }

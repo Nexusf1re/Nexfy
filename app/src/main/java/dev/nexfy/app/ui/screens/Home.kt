@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -38,13 +40,17 @@ import dev.nexfy.app.contextKey
 import dev.nexfy.app.pinnedFirst
 import dev.nexfy.app.playScores
 import dev.nexfy.app.ui.AppActions
+import dev.nexfy.app.ui.Loaded
+import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Carousel
+import dev.nexfy.app.ui.design.CarouselSkeleton
 import dev.nexfy.app.ui.design.CoverCard
 import dev.nexfy.app.ui.design.LargeTitle
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.SectionTitle
 import dev.nexfy.app.ui.design.rememberHaptics
+import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.rememberTitleCollapse
 import dev.nexfy.app.ui.design.weightedPress
 import dev.nexfy.app.ui.rememberLoaded
@@ -53,7 +59,14 @@ import uniffi.nexfy_core.Playlist
 import uniffi.nexfy_core.RecentPlay
 
 /** A playlist or album the user played recently, ready to show as a card. */
-private data class RecentContext(val key: String, val title: String, val subtitle: String, val imageUrl: String?, val route: Route)
+private data class RecentContext(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val route: Route,
+    val peek: Peek,
+)
 
 /**
  * Distinct playlists and albums from the recent plays, newest first.
@@ -68,10 +81,11 @@ private fun recentContexts(plays: List<RecentPlay>, playlists: List<Playlist>): 
                 val id = key.substringAfter(':')
                 when {
                     key.startsWith("pl:") -> byId[id]?.let {
-                        RecentContext(key, it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(id))
+                        RecentContext(key, it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(id), Peek(it.name, it.owner, it.imageUrl))
                     }
                     key.startsWith("al:") -> RecentContext(
                         key, play.track.album, "Álbum · ${play.track.artists}", play.track.imageUrl, Route.Album(id),
+                        Peek(play.track.album, play.track.artists, play.track.imageUrl),
                     )
                     else -> null
                 }
@@ -118,62 +132,43 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             if (playlists.state.error != null && playlists.state.value == null) {
                 item(key = "connect") { ConnectPrompt(actions) }
             }
-            if (recentCards.isNotEmpty()) {
-                item(key = "recent") {
-                    Column {
-                        SectionTitle("Tocadas recentemente")
-                        Carousel(actions.nav.list("row:home-recent"), recentCards.first().key) {
-                            items(recentCards, key = { it.key }) { r ->
-                                CoverCard(r.imageUrl, r.title, r.subtitle, r.key) { actions.open(r.route) }
-                            }
+            homeRow("recent", "Tocadas recentemente", recent.state.pending() || playlists.state.pending(), recentCards.takeIf { it.isNotEmpty() }) { cards ->
+                Carousel(actions.nav.list("row:home-recent"), cards.first().key) {
+                    items(cards, key = { it.key }) { r ->
+                        CoverCard(r.imageUrl, r.title, r.subtitle, r.key) { actions.open(r.route, r.peek) }
+                    }
+                }
+            }
+            homeRow("top-tracks", "Tuas mais ouvidas", topTracks.state.pending(), topTracks.state.value?.takeIf { it.isNotEmpty() }) { tracks ->
+                Carousel(actions.nav.list("row:home-top"), tracks.first().uri) {
+                    itemsIndexed(tracks, key = { _, t -> t.uri }) { i, t ->
+                        CoverCard(t.imageUrl, t.title, t.artists, "tt-${t.uri}") { actions.play(tracks, i) }
+                    }
+                }
+            }
+            homeRow("playlists", "Tuas playlists", playlists.state.pending(), myPlaylists?.takeIf { it.isNotEmpty() }) { items ->
+                Carousel(actions.nav.list("row:home-pl"), items.first().id) {
+                    items(items.take(20), key = { it.id }) { p ->
+                        CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}") {
+                            actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl))
                         }
                     }
                 }
             }
-            topTracks.state.value?.takeIf { it.isNotEmpty() }?.let { tracks ->
-                item(key = "top-tracks") {
-                    Column {
-                        SectionTitle("Tuas mais ouvidas")
-                        Carousel(actions.nav.list("row:home-top"), tracks.first().uri) {
-                            itemsIndexed(tracks, key = { _, t -> t.uri }) { i, t ->
-                                CoverCard(t.imageUrl, t.title, t.artists, "tt-${t.uri}") { actions.play(tracks, i) }
-                            }
+            homeRow("top-artists", "Artistas que tu mais ouve", topArtists.state.pending(), topArtists.state.value?.takeIf { it.isNotEmpty() }, circle = true) { artists ->
+                Carousel(actions.nav.list("row:home-artists"), artists.first().id) {
+                    items(artists, key = { it.id }) { a ->
+                        CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) {
+                            actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl))
                         }
                     }
                 }
             }
-            myPlaylists?.takeIf { it.isNotEmpty() }?.let { items ->
-                item(key = "playlists") {
-                    Column {
-                        SectionTitle("Tuas playlists")
-                        Carousel(actions.nav.list("row:home-pl"), items.first().id) {
-                            items(items.take(20), key = { it.id }) { p ->
-                                CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}") { actions.open(Route.Playlist(p.id)) }
-                            }
-                        }
-                    }
-                }
-            }
-            topArtists.state.value?.takeIf { it.isNotEmpty() }?.let { artists ->
-                item(key = "top-artists") {
-                    Column {
-                        SectionTitle("Artistas que tu mais ouve")
-                        Carousel(actions.nav.list("row:home-artists"), artists.first().id) {
-                            items(artists, key = { it.id }) { a ->
-                                CoverCard(a.imageUrl, a.name, "Artista", "ar-${a.id}", circle = true) { actions.open(Route.Artist(a.id)) }
-                            }
-                        }
-                    }
-                }
-            }
-            albums.state.value?.takeIf { it.isNotEmpty() }?.let { items ->
-                item(key = "albums") {
-                    Column {
-                        SectionTitle("Álbuns salvos")
-                        Carousel(actions.nav.list("row:home-al"), pinnedFirst(items, pinned) { "al:${it.id}" }.first().id) {
-                            items(pinnedFirst(items, pinned) { "al:${it.id}" }.take(20), key = { it.id }) { a ->
-                                CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id)) }
-                            }
+            homeRow("albums", "Álbuns salvos", albums.state.pending(), albums.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "al:${it.id}" } }) { items ->
+                Carousel(actions.nav.list("row:home-al"), items.first().id) {
+                    items(items.take(20), key = { it.id }) { a ->
+                        CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") {
+                            actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl))
                         }
                     }
                 }
@@ -181,6 +176,34 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
         }
     }
 }
+
+/** Still waiting for a first value. */
+private fun Loaded<*>.pending() = value == null && loading
+
+/**
+ * A titled home row: the cards once [data] is there, a skeleton of the same
+ * size while it is [pending], nothing otherwise. One fades into the other.
+ */
+private fun <T> LazyListScope.homeRow(
+    key: String,
+    title: String,
+    pending: Boolean,
+    data: T?,
+    circle: Boolean = false,
+    content: @Composable (T) -> Unit,
+) {
+    if (data == null && !pending) return
+    // One item for both states: the title stays put and only the cards cross-fade.
+    item(key = key) {
+        Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
+            SectionTitle(title)
+            Crossfade(data != null, animationSpec = skeletonFade(), label = key) { loaded ->
+                if (loaded && data != null) content(data) else CarouselSkeleton(circle)
+            }
+        }
+    }
+}
+
 
 /** Big gradient tile for liked songs. */
 @Composable

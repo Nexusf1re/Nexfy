@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nexfy.app.ui.AppActions
+import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Cover
 import uniffi.nexfy_core.Track
@@ -51,13 +52,13 @@ fun TrackMenu(track: Track, actions: AppActions, onDismiss: () -> Unit) {
             track.albumId?.let { id ->
                 MenuAction(Icons.Rounded.Album, "Ir para o álbum") {
                     onDismiss()
-                    actions.open(Route.Album(id))
+                    actions.open(Route.Album(id), Peek(track.album, track.artists, track.imageUrl))
                 }
             }
             track.artistIds.firstOrNull()?.let { id ->
                 MenuAction(Icons.Rounded.Person, "Ir para o artista") {
                     onDismiss()
-                    actions.open(Route.Artist(id))
+                    actions.open(Route.Artist(id), Peek(track.artists.substringBefore(", ")))
                 }
             }
         }

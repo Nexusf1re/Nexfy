@@ -4,6 +4,10 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import coil3.ImageLoader
+import coil3.PlatformContext
+import coil3.SingletonImageLoader
+import coil3.request.crossfade
 import androidx.core.content.ContextCompat
 import dev.nexfy.app.playback.CoreBridge
 import dev.nexfy.app.playback.PlaybackService
@@ -18,7 +22,7 @@ import kotlinx.coroutines.launch
 import uniffi.nexfy_core.NexfyCore
 
 /** Owns the single Rust core, shared by the UI and the playback service. */
-class NexfyApp : Application() {
+class NexfyApp : Application(), SingletonImageLoader.Factory {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     val core: NexfyCore by lazy {
@@ -29,6 +33,10 @@ class NexfyApp : Application() {
     val bridge: CoreBridge by lazy { CoreBridge(core) }
 
     val library: LibraryPrefs by lazy { LibraryPrefs(this) }
+
+    /** Covers fade in as they load instead of popping over their placeholder. */
+    override fun newImageLoader(context: PlatformContext): ImageLoader =
+        ImageLoader.Builder(context).crossfade(true).build()
 
     override fun onCreate() {
         super.onCreate()

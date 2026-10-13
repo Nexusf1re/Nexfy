@@ -60,6 +60,7 @@ import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.Motion
+import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.rememberHaptics
@@ -102,6 +103,9 @@ sealed interface Route {
     data object Settings : Route { override val key get() = "settings" }
 }
 
+/** What the tapped card already showed, drawn while the full page loads. */
+data class Peek(val title: String, val subtitle: String? = null, val imageUrl: String? = null)
+
 /** What the screen shows: a tab and the top of its stack (null = the tab root). */
 data class Screen(val tab: Tab, val route: Route?)
 
@@ -111,14 +115,18 @@ class NavState {
     var tab by mutableStateOf(Tab.Home)
     private val stacks = mutableStateMapOf<Tab, List<Route>>()
     private val lists = HashMap<String, LazyListState>()
+    private val peeks = HashMap<String, Peek>()
 
     fun stack(tab: Tab = this.tab) = stacks[tab].orEmpty()
     fun top(tab: Tab = this.tab) = stack(tab).lastOrNull()
     val screen get() = Screen(tab, top())
 
-    fun push(route: Route) {
+    fun push(route: Route, peek: Peek? = null) {
+        if (peek != null) peeks[route.key] = peek
         if (top() != route) stacks[tab] = stack() + route
     }
+
+    fun peek(key: String): Peek? = peeks[key]
 
     fun pop(): Boolean {
         val s = stack()
@@ -143,7 +151,7 @@ class AppActions(
 ) : PlayerControls {
     val core get() = app.core
 
-    fun open(route: Route) = nav.push(route)
+    fun open(route: Route, peek: Peek? = null) = nav.push(route, peek)
     fun back() = nav.pop()
 
     /** Run a playback command off the main thread, reporting failures. */
@@ -237,6 +245,7 @@ fun NexfyRoot(
     val snapshot by app.bridge.state.collectAsState()
     val haze = remember { HazeState() }
 
+    ShimmerDriver()
     BackHandler(enabled = nav.stack().isNotEmpty()) { nav.pop() }
     BackHandler(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
 

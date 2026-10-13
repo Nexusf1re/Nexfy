@@ -1,12 +1,9 @@
 package dev.nexfy.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,26 +43,19 @@ fun <T> rememberLoaded(vararg keys: Any?, load: suspend (refresh: Boolean) -> T)
     return LoadHandle(state) { refreshes++ }
 }
 
-/** Spinner, error with retry, or [content] once a value exists. */
+/** Why a load failed, with a retry button. */
 @Composable
-fun <T> LoadedContent(handle: LoadHandle<T>, content: @Composable (T) -> Unit) {
-    val state = handle.state
-    when {
-        state.value != null -> content(state.value)
-        state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurface)
-        }
-        else -> Column(
-            Modifier.fillMaxSize().padding(32.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                state.error ?: "Algo deu errado",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            PillButton("Tentar de novo", handle.refresh, filled = false)
-        }
+fun LoadError(message: String?, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier.fillMaxWidth().padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            message ?: "Algo deu errado",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        PillButton("Tentar de novo", onRetry, filled = false)
     }
 }

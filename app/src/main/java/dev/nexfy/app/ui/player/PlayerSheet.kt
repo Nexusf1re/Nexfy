@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
@@ -114,7 +115,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import coil3.compose.AsyncImage
 import dev.nexfy.app.playback.PlaybackSnapshot
+import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.GlassBox
+import dev.nexfy.app.ui.design.TextBone
+import dev.nexfy.app.ui.design.boneWidth
 import dev.nexfy.app.ui.design.LivingArtwork
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.ThinSlider
@@ -637,12 +641,14 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
     val uris = remember(next) { next.map { it.uri } }
     var info by remember { mutableStateOf<Map<String, Track>>(emptyMap()) }
     LaunchedEffect(uris) {
-        info = try {
-            controls.tracksInfo(uris).associateBy { it.uri }
+        // Only what is missing: rows already shown keep their details as the queue moves.
+        val missing = uris.filterNot { it in info }
+        if (missing.isEmpty()) return@LaunchedEffect
+        try {
+            info = info + controls.tracksInfo(missing).associateBy { it.uri }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            emptyMap()
         }
     }
     val queued = next.withIndex().filter { it.value.queued }
@@ -658,16 +664,14 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
             }
             if (queued.isNotEmpty()) item(key = "h-queued") { QueueHeading("Na fila") }
             items(queued, key = { "q${it.index}:${it.value.uri}" }) { (i, entry) ->
-                val t = info[entry.uri]
-                QueueRow(t?.imageUrl, t?.title ?: "…", t?.artists.orEmpty()) {
+                QueueEntryRow(info[entry.uri], i) {
                     controls.skipTo(entry, i)
                     onDismiss()
                 }
             }
             if (upcoming.isNotEmpty()) item(key = "h-next") { QueueHeading(if (queued.isEmpty()) "A seguir" else "Depois, da lista") }
             items(upcoming, key = { "n${it.index}:${it.value.uri}" }) { (i, entry) ->
-                val t = info[entry.uri]
-                QueueRow(t?.imageUrl, t?.title ?: "…", t?.artists.orEmpty()) {
+                QueueEntryRow(info[entry.uri], i) {
                     controls.skipTo(entry, i)
                     onDismiss()
                 }
@@ -682,6 +686,25 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
                     )
                 }
             }
+        }
+    }
+}
+
+/** A queue row, or its skeleton until the track's details arrive; one fades into the other. */
+@Composable
+private fun QueueEntryRow(track: Track?, seed: Int, onClick: () -> Unit) {
+    Crossfade(track, animationSpec = tween(Motion.Short), label = "queue-row") { t ->
+        if (t == null) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Bone(Modifier.size(48.dp), RoundedCornerShape(10.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    TextBone(boneWidth(seed), 24.dp, 14.dp)
+                    TextBone(boneWidth(seed, 1) * .7f, 24.dp, 11.dp)
+                }
+            }
+        } else {
+            QueueRow(t.imageUrl, t.title, t.artists, onClick = onClick)
         }
     }
 }
@@ -723,12 +746,20 @@ sealed interface LyricsState {
  */
 @Composable
 private fun LyricsView(state: LyricsState, position: Long, controls: PlayerControls, modifier: Modifier) {
+    if (state == LyricsState.Loading) {
+        // Lines the size of the real ones, so the lyrics fade in where they will sit.
+        Column(modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            repeat(6) { i ->
+                Bone(Modifier.fillMaxWidth(boneWidth(i)).height(28.dp), RoundedCornerShape(8.dp), light = true)
+            }
+        }
+        return
+    }
     val found = state as? LyricsState.Found
     if (found == null || found.lyrics.instrumental || found.lyrics.lines.isEmpty()) {
         Box(modifier, contentAlignment = Alignment.Center) {
             Text(
                 when {
-                    state == LyricsState.Loading -> "Procurando a letra…"
                     found?.lyrics?.instrumental == true -> "Instrumental"
                     state == LyricsState.Failed -> "Não deu para buscar a letra agora"
                     else -> "Letra não encontrada"
