@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Nexfy</string>
+    <string name="widget_description">Capa e controles da música que está tocando</string>
 </resources>

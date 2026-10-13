@@ -1,5 +1,9 @@
 package dev.nexfy.app.ui.player
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.rounded.CloseFullscreen
+import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.withTimeoutOrNull
@@ -228,7 +232,13 @@ private fun rememberPosition(s: PlaybackSnapshot): Long {
  */
 @Composable
 fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
-    val track = s.track ?: return
+    // Song changes can report no song for a moment (another device between
+    // songs): keep the last one so the player and its lyrics stay open.
+    val lastTrack = remember { arrayOfNulls<TrackInfo>(1) }
+    s.track?.let { lastTrack[0] = it }
+    var showLyrics by rememberSaveable { mutableStateOf(false) }
+    var lyricsFull by rememberSaveable { mutableStateOf(false) }
+    val track = s.track ?: lastTrack[0] ?: return
     val c = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val f = remember { Animatable(0f).apply { updateBounds(0f, 1f) } }
@@ -339,8 +349,6 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val miniX = margin + with(density) { 10.dp.toPx() }
             val miniY = with(density) { 10.dp.toPx() }
 
-            // Lyrics show over the cover in place; they load the first time they are shown.
-            var showLyrics by remember { mutableStateOf(false) }
             // The cover breathes: full while playing, recedes when paused (not under lyrics).
             val breath = animateFloatAsState(if (s.playing || !expanded || showLyrics) 1f else 0.84f, Motion.settle(169f), label = "breath")
             // Throwable cover: a strong horizontal drag skips, a weak one springs back.
@@ -363,6 +371,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             }
             // 0 to 1 as lyrics come in: the cover blurs and darkens behind them.
             val lyricsIn = animateFloatAsState(if (showLyrics && settled) 1f else 0f, Motion.settle(169f), label = "lyrics")
+            // 0 to 1 into full-screen lyrics.
+            val fullIn = animateFloatAsState(if (showLyrics && lyricsFull && settled) 1f else 0f, Motion.settle(169f), label = "full")
 
             fun GraphicsLayerScope.artMove(extra: Float) {
                 val p = pf()
@@ -383,6 +393,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         val k = lerp(miniArt / artFullPx, 1f, p)
                         artMove(lerp(1f, breath.value, p) * (1f - kotlin.math.abs(throwX.value) / fullW * .15f))
                         rotationZ = throwX.value / fullW * 14f
+                        alpha = 1f - fullIn.value
                         // Corners and shadow compensate the scale: 12 dp mini, 28 dp full.
                         shape = RoundedCornerShape((lerp(12f, 28f, p) * density.density / k.coerceAtLeast(.05f)).coerceAtLeast(0f))
                         clip = true
@@ -530,15 +541,16 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     // Lyrics sit inside the cover's square, over the blurred art.
                     Box(Modifier.fillMaxWidth().height(artSpace), contentAlignment = Alignment.Center) {
                         if (showLyrics) {
-                            LyricsView(
-                                lyrics, position, controls,
-                                Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value }
-                                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                            )
+                            Box(Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value * (1f - fullIn.value) }) {
+                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp))
+                                IconButton({ lyricsFull = true }, Modifier.align(Alignment.TopEnd)) {
+                                    Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = Color.White.copy(.8f), modifier = Modifier.size(20.dp))
+                                }
+                            }
                         }
                     }
                     Column(
-                        Modifier.wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged {
+                        Modifier.graphicsLayer { alpha = 1f - fullIn.value }.wrapContentHeight(Alignment.Top, unbounded = true).onSizeChanged {
                             val h = with(density) { it.height.toDp() }
                             if (kotlin.math.abs((h - controlsH).value) > 1f) controlsH = h
                         },
@@ -617,9 +629,37 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Spacer(Modifier.weight(1f))
                             ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
                             Spacer(Modifier.weight(1f))
-                            ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) { showLyrics = !showLyrics }
+                            ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
+                                showLyrics = !showLyrics
+                                if (!showLyrics) lyricsFull = false
+                            }
                         }
                         Spacer(Modifier.height(12.dp))
+                    }
+                }
+            }
+
+            // Full-screen lyrics: the cover and controls fade away; the song and
+            // play/pause stay at the bottom.
+            if (showFull && showLyrics && lyricsFull) {
+                BackHandler { lyricsFull = false }
+                Column(
+                    Modifier.fillMaxSize().safeDrawingPadding().padding(top = 56.dp)
+                        .graphicsLayer { alpha = fullIn.value }
+                        // Taps between lines must not reach the faded controls underneath.
+                        .pointerInput(Unit) { detectTapGestures { } }
+                        .padding(horizontal = 28.dp),
+                ) {
+                    LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true)
+                    Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(track.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(track.artists, color = Color.White.copy(.62f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        PlayButton(s, controls, 52.dp, Color.White, Color.Black)
+                        IconButton({ lyricsFull = false }) {
+                            Icon(Icons.Rounded.CloseFullscreen, "Sair da tela cheia", tint = Color.White)
+                        }
                     }
                 }
             }
@@ -902,7 +942,7 @@ sealed interface LyricsState {
  * a timed line seeks to it.
  */
 @Composable
-private fun LyricsView(state: LyricsState, position: Long, controls: PlayerControls, modifier: Modifier) {
+private fun LyricsView(state: LyricsState, position: Long, controls: PlayerControls, modifier: Modifier, large: Boolean = false) {
     if (state == LyricsState.Loading) {
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
         Column(modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -988,9 +1028,9 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
                                 interactionSource = remember { MutableInteractionSource() },
                             ) { line.atMs?.let { controls.seek(it.toLong()) } },
                         color = Color.White,
-                        fontSize = if (lyrics.synced) 24.sp else 19.sp,
+                        fontSize = when { large && lyrics.synced -> 30.sp; large -> 22.sp; lyrics.synced -> 24.sp; else -> 19.sp },
                         fontWeight = FontWeight.Bold,
-                        lineHeight = if (lyrics.synced) 30.sp else 25.sp,
+                        lineHeight = when { large && lyrics.synced -> 36.sp; large -> 28.sp; lyrics.synced -> 30.sp; else -> 25.sp },
                     )
                 }
             }

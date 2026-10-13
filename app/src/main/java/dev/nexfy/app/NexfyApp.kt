@@ -10,8 +10,11 @@ import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import androidx.core.content.ContextCompat
+import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
 import dev.nexfy.app.playback.PlaybackService
+import dev.nexfy.app.widget.NexfyWidget
+import androidx.glance.appwidget.updateAll
 import dev.nexfy.core.NativeInit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +50,9 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     val bridge: CoreBridge by lazy { CoreBridge(core) }
 
     val library: LibraryPrefs by lazy { LibraryPrefs(this) }
+
+    /** Playback commands for the screens and the widget. */
+    val commands: Commands by lazy { Commands(this, scope) }
 
     /** Covers fade in as they load instead of popping over their placeholder. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
@@ -95,6 +101,16 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                         .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
                 }
             }
+        }
+        // Keep the home-screen widget in step with what plays (here or elsewhere).
+        scope.launch {
+            bridge.state
+                .map { s -> listOf(s.track?.uri, s.track?.coverUrl, s.playing, s.remote?.name) }
+                .distinctUntilChanged()
+                .collectLatest {
+                    delay(250)
+                    runCatching { NexfyWidget().updateAll(this@NexfyApp) }
+                }
         }
         // Fetch the songs either side of the current one ahead, so a skip
         // can show the new song at once.

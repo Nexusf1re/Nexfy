@@ -183,15 +183,7 @@ class AppActions(
     fun back() = nav.pop()
 
     /** Run a playback command off the main thread, reporting failures. */
-    private fun command(action: suspend () -> Unit) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                action()
-            } catch (e: Exception) {
-                app.bridge.reportError(e.message ?: e.toString())
-            }
-        }
-    }
+    private fun command(action: suspend () -> Unit) = app.commands.run(action)
 
     /**
      * Play [tracks] from [index]. With a [contextUri] (a whole playlist,
@@ -238,35 +230,16 @@ class AppActions(
     }
 
     /** The device playing elsewhere, if any: playback commands go to it. */
-    private val remote get() = app.bridge.state.value.remote
+    private val remote get() = app.commands.remote
 
     /** Send a command to the remote device, showing its effect at once. */
-    private fun remoteCommand(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) {
-        show?.let(app.bridge::updateRemote)
-        command { core.remoteCommand(cmd) }
-        app.refreshRemoteSoon()
-    }
+    private fun remoteCommand(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) = app.commands.remote(cmd, show)
 
-    override fun playPause() {
-        val playing = app.bridge.state.value.playing
-        if (remote != null) {
-            remoteCommand(if (playing) RemoteCommand.Pause else RemoteCommand.Play) { it.copy(playing = !playing) }
-            return
-        }
-        command { if (playing) core.pause() else core.resume() }
-    }
+    override fun playPause() = app.commands.playPause()
 
-    override fun next() {
-        if (remote != null) return remoteCommand(RemoteCommand.Next)
-        app.bridge.preview(forward = true)
-        command { core.next() }
-    }
+    override fun next() = app.commands.next()
 
-    override fun previous() {
-        if (remote != null) return remoteCommand(RemoteCommand.Previous)
-        app.bridge.preview(forward = false)
-        command { core.previous() }
-    }
+    override fun previous() = app.commands.previous()
 
     override fun seek(positionMs: Long) {
         val at = positionMs.coerceAtLeast(0).toUInt()
