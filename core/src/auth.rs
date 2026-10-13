@@ -48,7 +48,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 
 const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>\
 <body style='font-family:sans-serif;background:#111;color:#eee;display:grid;place-items:center;height:90vh'>\
-<p>Pronto. Pode voltar para o Sonata.</p>";
+<p>Pronto. Pode voltar para o Nexfy.</p>";
 
 #[derive(Debug, Clone)]
 pub struct Grant {

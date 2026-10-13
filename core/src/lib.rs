@@ -1,4 +1,4 @@
-//! Sonata's Spotify core: sign-in, the librespot session, Spotify Connect
+//! Nexfy's Spotify core: sign-in, the librespot session, Spotify Connect
 //! playback and the Web API, exported to Kotlin through UniFFI.
 //!
 //! Playback runs through Spirc, Spotify's Connect state machine: the phone
@@ -154,12 +154,12 @@ struct Connected {
 /// ducking gain (another app speaking). The phone's own volume keys still
 /// work on top, through Android's stream volume.
 #[derive(Clone)]
-struct SonataMixer {
+struct NexfyMixer {
     volume: Arc<AtomicU64>,
     duck: Arc<AtomicU64>,
 }
 
-impl SonataMixer {
+impl NexfyMixer {
     fn new(duck: Arc<AtomicU64>) -> Self {
         Self {
             volume: Arc::new(AtomicU64::new(1.0f64.to_bits())),
@@ -168,7 +168,7 @@ impl SonataMixer {
     }
 }
 
-impl Mixer for SonataMixer {
+impl Mixer for NexfyMixer {
     fn open(_: MixerConfig) -> Result<Self, LibrespotError> {
         Ok(Self::new(Arc::new(AtomicU64::new(1.0f64.to_bits()))))
     }
@@ -219,12 +219,12 @@ struct Inner {
 }
 
 #[derive(uniffi::Object)]
-pub struct SonataCore {
+pub struct NexfyCore {
     inner: Arc<Inner>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
-impl SonataCore {
+impl NexfyCore {
     /// `cache_dir` is app-private storage; librespot keeps the reusable
     /// credential and the audio cache there. `device_name` is how the phone
     /// shows up in other Spotify apps' device lists.
@@ -659,7 +659,7 @@ impl Inner {
             emit_set_queue_events: true,
             ..ConnectConfig::default()
         };
-        let mixer: Arc<dyn Mixer> = Arc::new(SonataMixer::new(self.duck.clone()));
+        let mixer: Arc<dyn Mixer> = Arc::new(NexfyMixer::new(self.duck.clone()));
         let (spirc, task) = Spirc::new(config, session.clone(), credentials, player, mixer)
             .await
             .map_err(|e| CoreError::Session(e.to_string()))?;
@@ -672,7 +672,7 @@ impl Inner {
 
         let backend = audio_backend::find(None)
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
-        let mixer = SonataMixer::new(self.duck.clone());
+        let mixer = NexfyMixer::new(self.duck.clone());
         let player = Player::new(
             PlayerConfig::default(),
             session.clone(),

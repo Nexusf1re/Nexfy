@@ -144,7 +144,7 @@ impl Record {
 
 async fn from_lrclib(query: &Query<'_>) -> Result<Option<Lyrics>> {
     let http = reqwest::Client::builder()
-        .user_agent(concat!("Sonata/", env!("CARGO_PKG_VERSION"), " (personal Android player)"))
+        .user_agent(concat!("Nexfy/", env!("CARGO_PKG_VERSION"), " (personal Android player)"))
         .build()?;
     let title = clean_title(query.title);
     let artist = first_artist(query.artist);

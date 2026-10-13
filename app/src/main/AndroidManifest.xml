@@ -10,7 +10,7 @@
 
     <!-- No backup: files/spotify holds the reusable Spotify credential. -->
     <application
-        android:name=".SonataApp"
+        android:name=".NexfyApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -18,13 +18,13 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Sonata">
+        android:theme="@style/Theme.Nexfy">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:label="@string/app_name"
-            android:theme="@style/Theme.Sonata">
+            android:theme="@style/Theme.Nexfy">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

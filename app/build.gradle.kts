@@ -11,7 +11,7 @@ plugins {
 val ndkVersionPinned = "30.0.16248370"
 val coreDir: File = rootProject.file("core")
 val jniLibsDir: File = file("src/main/jniLibs")
-val coreLibrary: File = jniLibsDir.resolve("arm64-v8a/libsonata_core.so")
+val coreLibrary: File = jniLibsDir.resolve("arm64-v8a/libnexfy_core.so")
 val bindingsDir: File = file("src/main/java/uniffi")
 
 // Full LTO only when a release APK is requested; debug builds use the
@@ -65,7 +65,7 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
 tasks.named("preBuild") { dependsOn(generateUniffiBindings) }
 
 android {
-    namespace = "dev.sonata.app"
+    namespace = "dev.nexfy.app"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -74,7 +74,7 @@ android {
     ndkVersion = ndkVersionPinned
 
     defaultConfig {
-        applicationId = "dev.sonata.app"
+        applicationId = "dev.nexfy.app"
         minSdk = 31
         targetSdk = 36
         versionCode = 1

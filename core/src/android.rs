@@ -11,7 +11,7 @@ use jni::objects::{JClass, JObject};
 static INIT: Once = Once::new();
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_dev_sonata_core_NativeInit_init(
+pub extern "system" fn Java_dev_nexfy_core_NativeInit_init(
     env: JNIEnv,
     _class: JClass,
     context: JObject,
@@ -20,7 +20,7 @@ pub extern "system" fn Java_dev_sonata_core_NativeInit_init(
         android_logger::init_once(
             android_logger::Config::default()
                 .with_max_level(log::LevelFilter::Info)
-                .with_tag("SonataCore"),
+                .with_tag("NexfyCore"),
         );
 
         let vm = env.get_java_vm().expect("JavaVM");

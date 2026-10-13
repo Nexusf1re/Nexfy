@@ -1,5 +1,5 @@
 [package]
-name = "sonata-core"
+name = "nexfy-core"
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -7,7 +7,7 @@ publish = false
 [lib]
 # cdylib: the .so loaded by the Android app. lib: for `cargo test`.
 crate-type = ["cdylib", "lib"]
-name = "sonata_core"
+name = "nexfy_core"
 
 [dependencies]
 # Keep the minor version in step with uniffi-bindgen/Cargo.toml.
@@ -28,7 +28,7 @@ rand = "0.9"
 urlencoding = "2"
 
 # Vendored copy of github.com/crmne/librespot @ 4118319a: librespot's dev branch plus fixes
-# not yet merged upstream, with one Sonata patch in core/src/config.rs (OS).
+# not yet merged upstream, with one Nexfy patch in core/src/config.rs (OS).
 # Bundled webpki roots avoid Android's certificate store; rodio/cpal reaches
 # the speaker through AAudio.
 librespot-core = { path = "third_party/librespot/core", default-features = false, features = ["rustls-tls-webpki-roots"] }

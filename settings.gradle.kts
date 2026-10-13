@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Sonata"
+rootProject.name = "Nexfy"
 include(":app")
  

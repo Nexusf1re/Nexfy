@@ -1,4 +1,4 @@
-# Generates the Kotlin bindings from the built libsonata_core.so.
+# Generates the Kotlin bindings from the built libnexfy_core.so.
 # Its own crate so it builds once and never pulls in librespot.
 [package]
 name = "uniffi-bindgen"
