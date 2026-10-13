@@ -1,0 +1,49 @@
+[package]
+name = "sonata-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# cdylib: the .so loaded by the Android app. lib: used by uniffi-bindgen.
+crate-type = ["cdylib", "lib"]
+name = "sonata_core"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+uniffi = { version = "0.32", features = ["tokio", "cli"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+thiserror = "2"
+log = "0.4"
+anyhow = "1"
+
+# PKCE sign-in against Spotify's accounts service.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.9"
+urlencoding = "2"
+
+# Vendored copy of the fork and revision Spotifast pins
+# (github.com/crmne/librespot @ 4118319a), librespot's dev branch plus fixes
+# not yet merged upstream, with one Sonata patch in core/src/config.rs (OS).
+# Bundled webpki roots avoid Android's certificate store; rodio/cpal reaches
+# the speaker through AAudio.
+librespot-core = { path = "third_party/librespot/core", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-playback = { path = "third_party/librespot/playback", default-features = false, features = ["rustls-tls-webpki-roots", "rodio-backend"] }
+librespot-metadata = { path = "third_party/librespot/metadata", default-features = false, features = ["rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+jni = "0.21"
+ndk-context = "0.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+# Keep the symbol table: uniffi-bindgen reads its metadata from it.
+strip = "debuginfo"
