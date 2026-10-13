@@ -270,6 +270,16 @@ fn pick_image(images: &[RawImage]) -> Option<String> {
         .map(|image| image.url.clone())
 }
 
+/// Keep the first of each id. Spotify can list a playlist twice (it moved
+/// between pages, or sits in a folder), and lists need unique keys.
+fn dedupe<T>(items: Vec<T>, id: impl Fn(&T) -> &str) -> Vec<T> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .into_iter()
+        .filter(|item| seen.insert(id(item).to_owned()))
+        .collect()
+}
+
 fn join_artists(artists: &[RawArtistRef]) -> String {
     artists
         .iter()
@@ -635,7 +645,8 @@ impl WebApi {
             .cached("/me/playlists?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
         let (items, _) = self.all_pages(first, Route::Personal).await?;
-        Ok(items.into_iter().map(RawPlaylist::into_playlist).collect())
+        let playlists = items.into_iter().map(RawPlaylist::into_playlist).collect();
+        Ok(dedupe(playlists, |p: &Playlist| &p.id))
     }
 
     pub async fn playlist(&self, id: &str, refresh: bool) -> Result<PlaylistDetail> {
@@ -694,7 +705,8 @@ impl WebApi {
             .cached("/me/albums?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
         let (items, _) = self.all_pages(first, Route::Personal).await?;
-        Ok(items.iter().filter_map(|saved| saved.album.to_album()).collect())
+        let albums = items.iter().filter_map(|saved| saved.album.to_album()).collect();
+        Ok(dedupe(albums, |a: &Album| &a.id))
     }
 
     pub async fn album(&self, id: &str, refresh: bool) -> Result<AlbumDetail> {
@@ -744,7 +756,10 @@ impl WebApi {
         Ok(ArtistDetail {
             artist: raw.into_artist(),
             top_tracks: top.tracks.into_iter().filter_map(|t| t.into_track(None)).collect(),
-            albums: albums.items.iter().flatten().filter_map(RawAlbum::to_album).collect(),
+            albums: dedupe(
+                albums.items.iter().flatten().filter_map(RawAlbum::to_album).collect(),
+                |a: &Album| &a.id,
+            ),
         })
     }
 
@@ -774,18 +789,27 @@ impl WebApi {
                 .tracks
                 .map(|p| p.items.into_iter().flatten().filter_map(|t| t.into_track(None)).collect())
                 .unwrap_or_default(),
-            albums: catalogue
-                .albums
-                .map(|p| p.items.iter().flatten().filter_map(RawAlbum::to_album).collect())
-                .unwrap_or_default(),
-            artists: catalogue
-                .artists
-                .map(|p| p.items.into_iter().flatten().map(RawArtist::into_artist).collect())
-                .unwrap_or_default(),
-            playlists: playlists
-                .playlists
-                .map(|p| p.items.into_iter().flatten().map(RawPlaylist::into_playlist).collect())
-                .unwrap_or_default(),
+            albums: dedupe(
+                catalogue
+                    .albums
+                    .map(|p| p.items.iter().flatten().filter_map(RawAlbum::to_album).collect())
+                    .unwrap_or_default(),
+                |a: &Album| &a.id,
+            ),
+            artists: dedupe(
+                catalogue
+                    .artists
+                    .map(|p| p.items.into_iter().flatten().map(RawArtist::into_artist).collect())
+                    .unwrap_or_default(),
+                |a: &Artist| &a.id,
+            ),
+            playlists: dedupe(
+                playlists
+                    .playlists
+                    .map(|p| p.items.into_iter().flatten().map(RawPlaylist::into_playlist).collect())
+                    .unwrap_or_default(),
+                |p: &Playlist| &p.id,
+            ),
         })
     }
 }
@@ -837,6 +861,12 @@ mod tests {
         )
         .unwrap();
         assert!(page.items.into_iter().flatten().all(|s| s.item.unwrap().into_track(None).is_none()));
+    }
+
+    #[test]
+    fn dedupe_keeps_first_of_each_id() {
+        let items = vec![("a", 1), ("b", 2), ("a", 3)];
+        assert_eq!(dedupe(items, |item| item.0), vec![("a", 1), ("b", 2)]);
     }
 
     #[test]
