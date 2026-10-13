@@ -27,8 +27,16 @@ fn cover_url(file_id: &librespot_core::FileId) -> String {
     format!("https://i.scdn.co/image/{}", file_id.to_base16())
 }
 
-fn to_track(track: SessionTrack) -> Track {
+/// `large`: the biggest cover, the one the player shows (what TrackChanged
+/// reports), instead of the default ~300 px one lists use.
+fn to_track(track: SessionTrack, large: bool) -> Track {
     let album = &track.album;
+    let cover = if large {
+        album.covers.iter().max_by_key(|image| image.width)
+    } else {
+        // Spotify lists the default (~300 px) cover first.
+        album.covers.first()
+    };
     Track {
         uri: track.id.to_uri(),
         title: track.name.clone(),
@@ -41,8 +49,7 @@ fn to_track(track: SessionTrack) -> Track {
         artist_ids: track.artists.iter().map(|artist| artist.id.to_id()).collect(),
         album: album.name.clone(),
         album_id: Some(album.id.to_id()),
-        // Spotify lists the default (~300 px) cover first.
-        image_url: album.covers.first().map(|image| cover_url(&image.id)),
+        image_url: cover.map(|image| cover_url(&image.id)),
         duration_ms: track.duration.max(0) as u32,
         explicit: track.is_explicit,
         playable: true,
@@ -56,7 +63,7 @@ pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
     stream::iter(parsed)
         .map(|uri| async move { SessionTrack::get(session, &uri).await })
         .buffered(CONCURRENCY)
-        .filter_map(|result| async move { result.ok().map(to_track) })
+        .filter_map(|result| async move { result.ok().map(|track| to_track(track, true)) })
         .collect()
         .await
 }
@@ -81,7 +88,7 @@ pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData
         .filter_map(|(result, added)| async move {
             result.ok().map(|track| Track {
                 added_at_ms: Some(added).filter(|ms| *ms > 0),
-                ..to_track(track)
+                ..to_track(track, false)
             })
         })
         .collect::<Vec<_>>()
