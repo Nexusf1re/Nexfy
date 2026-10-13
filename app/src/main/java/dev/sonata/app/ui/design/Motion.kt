@@ -33,6 +33,9 @@ import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.AnimationVector1D
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -78,6 +81,15 @@ object Motion {
             slideInHorizontally(spring(.9f, 380f, IntOffset.VisibilityThreshold)) { (it * .06f).toInt() * d }) togetherWith
             fadeOut(tween(140, easing = FastOutSlowInEasing))
     }
+}
+
+/**
+ * Apply a drag step immediately and in order. A dispatched `snapTo` can
+ * run after the finger lifts and cancel the settle animation, leaving the
+ * element stuck where the drag ended.
+ */
+fun CoroutineScope.snapNow(animatable: Animatable<Float, AnimationVector1D>, value: Float) {
+    launch(start = CoroutineStart.UNDISPATCHED) { animatable.snapTo(value) }
 }
 
 /** A press with weight: sinks to 95 % and darkens a touch, springs back. Read in the draw phase only. */

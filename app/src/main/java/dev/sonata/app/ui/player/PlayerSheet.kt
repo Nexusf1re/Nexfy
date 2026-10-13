@@ -94,6 +94,7 @@ import dev.sonata.app.ui.design.LivingArtwork
 import dev.sonata.app.ui.design.Motion
 import dev.sonata.app.ui.design.ThinSlider
 import dev.sonata.app.ui.design.kenBurns
+import dev.sonata.app.ui.design.snapNow
 import dev.sonata.app.ui.design.liquidGlass
 import dev.sonata.app.ui.design.rememberHaptics
 import dev.sonata.app.ui.design.springPress
@@ -180,7 +181,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
         val miniH = with(density) { 68.dp.toPx() }
         val margin = with(density) { 16.dp.toPx() }
         val dragState = rememberDraggableState { d ->
-            scope.launch { f.snapTo((f.value - d / (fullH - miniH)).coerceIn(0f, 1f)) }
+            scope.snapNow(f, (f.value - d / (fullH - miniH)).coerceIn(0f, 1f))
         }
         // Mini: a compact card with equal side margins, just above the dock and the gesture bar.
         val navBottom = WindowInsets.navigationBars.getBottom(density).toFloat()
@@ -293,7 +294,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     .then(
                         if (settled) {
                             Modifier.draggable(
-                                rememberDraggableState { d -> scope.launch { throwX.snapTo(throwX.value + d) } },
+                                rememberDraggableState { d -> scope.snapNow(throwX, throwX.value + d) },
                                 Orientation.Horizontal,
                                 onDragStopped = { v ->
                                     val go = when {

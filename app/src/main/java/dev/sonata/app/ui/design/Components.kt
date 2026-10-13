@@ -513,7 +513,7 @@ fun Modifier.dragToDismiss(dismiss: Animatable<Float, AnimationVector1D>, onBack
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset =
                 if (dismiss.value > 0f && available.y < 0f) {
                     val d = (available.y / heightPx).coerceAtLeast(-dismiss.value)
-                    scope.launch { dismiss.snapTo((dismiss.value + d).coerceIn(0f, 1f)) }
+                    scope.snapNow(dismiss, (dismiss.value + d).coerceIn(0f, 1f))
                     Offset(0f, d * heightPx)
                 } else {
                     Offset.Zero
@@ -521,7 +521,7 @@ fun Modifier.dragToDismiss(dismiss: Animatable<Float, AnimationVector1D>, onBack
 
             override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
                 if (available.y > 0f && source == NestedScrollSource.UserInput) {
-                    scope.launch { dismiss.snapTo((dismiss.value + available.y / heightPx).coerceIn(0f, 1f)) }
+                    scope.snapNow(dismiss, (dismiss.value + available.y / heightPx).coerceIn(0f, 1f))
                     available
                 } else {
                     Offset.Zero
