@@ -1994,6 +1994,9 @@ impl SpircTask {
         let current_uri = self.connect_state.current_track(|t| &t.uri);
         let id = SpotifyUri::from_uri(current_uri)?;
         self.player.load(id, start_playing, position_ms);
+        // Sonata patch: report the queue on every track change (skips and
+        // track ends), not only when it is set or added to.
+        self.emit_set_queue_event();
 
         self.connect_state
             .update_position(position_ms, self.now_ms());

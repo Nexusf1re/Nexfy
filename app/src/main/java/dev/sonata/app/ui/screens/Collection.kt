@@ -127,6 +127,8 @@ fun CollectionScreen(
     onSubtitle: (() -> Unit)? = null,
     /** Library key counted when playing from here (`pl:<id>`, `al:<id>`, `liked`). */
     source: String? = null,
+    /** Spotify context for the whole, unfiltered list (playlist, album, liked songs). */
+    contextUri: String? = null,
     /** Told whether a search is active (liked songs then load every page). */
     onFiltering: (Boolean) -> Unit = {},
     footer: LazyListScope.() -> Unit = {},
@@ -148,6 +150,10 @@ fun CollectionScreen(
     // tracks.size: liked songs grow the same list instance page by page.
     val shown = remember(tracks, tracks.size, query, sort) { sort.apply(filterTracks(tracks, query)) }
     val shownTracks = remember(shown) { shown.map { it.value } }
+    // A filtered or re-sorted view plays as an explicit list, not as the context.
+    val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
+    var menuFor by remember { mutableStateOf<Track?>(null) }
+    menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
 
     Box(modifier) {
         CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
@@ -198,13 +204,13 @@ fun CollectionScreen(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             GlassIcon(Icons.Rounded.Shuffle, "Aleatório", {
                                 haptics.press()
-                                actions.play(tracks, tracks.indices.random(), shuffle = true, source = source)
+                                actions.play(tracks, tracks.indices.random(), shuffle = true, source = source, contextUri = contextUri)
                             }, enabled = tracks.isNotEmpty())
                             GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape) {
                                 Row(
                                     Modifier.matchParentSize().clickable(enabled = tracks.isNotEmpty()) {
                                         haptics.press()
-                                        actions.play(tracks, source = source)
+                                        actions.play(tracks, source = source, contextUri = contextUri)
                                     },
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
@@ -237,11 +243,12 @@ fun CollectionScreen(
                     Box(Modifier.padding(horizontal = 16.dp)) {
                         TrackRow(
                             track,
-                            { actions.play(shownTracks, i, source = source) },
+                            { actions.play(shownTracks, i, source = source, contextUri = rowContext) },
                             number = if (numbered) entry.index + 1 else null,
-                            playing = nowPlaying.track?.uri == track.uri,
-                            // Long press opens the track's album.
-                            onLongClick = track.albumId?.let { id -> { actions.open(Route.Album(id)) } },
+                            // The queue keeps the URI as listed; the playing one may be relinked.
+                            playing = nowPlaying.queue.current?.uri == track.uri || nowPlaying.track?.uri == track.uri,
+                            onLongClick = { menuFor = track },
+                            onSwipe = { actions.addToQueue(track) },
                         )
                     }
                     if (i < shown.lastIndex) {
@@ -251,7 +258,7 @@ fun CollectionScreen(
                 footer()
             }
         }
-        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source) }
+        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source, contextUri = contextUri) }
     }
 }
 

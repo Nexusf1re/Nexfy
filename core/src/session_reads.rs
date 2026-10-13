@@ -50,6 +50,17 @@ fn to_track(track: SessionTrack) -> Track {
     }
 }
 
+/// Metadata for track URIs (the queue view), in order; failures are left out.
+pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
+    let parsed: Vec<SpotifyUri> = uris.iter().filter_map(|uri| SpotifyUri::from_uri(uri).ok()).collect();
+    stream::iter(parsed)
+        .map(|uri| async move { SessionTrack::get(session, &uri).await })
+        .buffered(CONCURRENCY)
+        .filter_map(|result| async move { result.ok().map(to_track) })
+        .collect()
+        .await
+}
+
 pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData> {
     let uri = SpotifyUri::from_uri(&format!("spotify:playlist:{id}")).map_err(|e| anyhow!("{e}"))?;
     let playlist = SessionPlaylist::get(session, &uri).await?;

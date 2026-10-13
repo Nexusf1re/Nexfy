@@ -2,6 +2,25 @@ package dev.sonata.app.ui.player
 
 import android.os.Build
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import dev.sonata.app.ui.design.Cover
+import dev.sonata.app.ui.theme.accentColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.rounded.Lyrics
@@ -109,7 +128,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.sonata_core.Lyrics
+import uniffi.sonata_core.QueueEntry
 import uniffi.sonata_core.RepeatMode
+import uniffi.sonata_core.Track
 import uniffi.sonata_core.TrackInfo
 
 /** What the player can ask playback to do. */
@@ -123,9 +144,24 @@ interface PlayerControls {
 
     /** Lyrics for [track], or null when nobody has them. */
     suspend fun lyrics(track: TrackInfo): Lyrics?
+
+    /** Jump to a queue entry [ahead] positions after the current song. */
+    fun skipTo(entry: QueueEntry, ahead: Int)
+
+    /** Metadata for queue entries, in order. */
+    suspend fun tracksInfo(uris: List<String>): List<Track>
 }
 
 private val settle = Motion.settle<Float>(247f)
+
+/** Song change: the new title rises in as the old one fades up and out. */
+private fun AnimatedContentTransitionScope<TrackInfo>.songChange(): ContentTransform =
+    if (initialState.uri == targetState.uri) {
+        EnterTransition.None togetherWith ExitTransition.None
+    } else {
+        (fadeIn(tween(320, delayMillis = 60)) + slideInVertically(Motion.settle()) { it / 3 }) togetherWith
+            (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 4 }) using SizeTransform(clip = false)
+    }
 private fun fmt(ms: Long) = (ms.coerceAtLeast(0) / 1000).let { "%d:%02d".format(it / 60, it % 60) }
 
 /** Current position, ticking while playing. */
@@ -144,7 +180,7 @@ private fun rememberPosition(s: PlaybackSnapshot): Long {
 
 /**
  * The mini player that becomes the full-screen player. `f` runs from 0
- * (mini) to 1 (full) and drives everything — cover size and position,
+ * (mini) to 1 (full) and drives everything: cover size and position,
  * backdrop, corners, controls. Dragging moves `f` with the finger; letting go
  * settles on a spring. Predictive back shrinks it along the gesture.
  *
@@ -163,9 +199,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     val haptics = rememberHaptics()
     val position = rememberPosition(s)
     val duration = track.durationMs.toLong().coerceAtLeast(1)
-    val count = s.queue.uris.size
-    val index = s.queue.position.toInt()
-    val hasNext = index < count - 1 || s.queue.repeat == RepeatMode.ALL
+    // Spotify continues with similar songs (autoplay) after a context ends,
+    // so next is only off for a lone song with repeat off.
+    val hasNext = s.queue.next.isNotEmpty() || s.queue.contextUri != null || s.queue.repeat == RepeatMode.ALL
+    var showQueue by remember { mutableStateOf(false) }
+    if (showQueue) QueueSheet(s, controls) { showQueue = false }
 
     val pf = { f.value.coerceIn(0f, 1f) }
     val expanded by remember { derivedStateOf { f.value > 0.5f } }
@@ -346,7 +384,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 contentAlignment = Alignment.Center,
             ) {
                 if (!track.coverUrl.isNullOrBlank()) {
-                    AsyncImage(track.coverUrl, null, Modifier.fillMaxSize().kenBurns(s.playing && settled), contentScale = ContentScale.Crop)
+                    // Cross-fade covers: the old one stays until the new one is in.
+                    AnimatedContent(track.coverUrl, transitionSpec = { fadeIn(tween(420)) togetherWith fadeOut(tween(420)) }, label = "cover") { url ->
+                        AsyncImage(url, null, Modifier.fillMaxSize().kenBurns(s.playing && settled), contentScale = ContentScale.Crop)
+                    }
                 } else {
                     Icon(Icons.Rounded.MusicNote, null, tint = c.onSurfaceVariant, modifier = Modifier.fillMaxSize(.4f))
                 }
@@ -365,8 +406,12 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text(track.title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(track.artists, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        AnimatedContent(track, transitionSpec = { songChange() }, label = "mini") { t ->
+                            Column {
+                                Text(t.title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(t.artists, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
                     PlayButton(s, controls, 44.dp, c.primary, c.onPrimary)
                     if (hasNext) {
@@ -407,14 +452,18 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             if (kotlin.math.abs((h - controlsH).value) > 1f) controlsH = h
                         },
                     ) {
-                        Text(
-                            track.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
-                            letterSpacing = (-.5f).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            track.artists, color = Color.White.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
+                        AnimatedContent(track, transitionSpec = { songChange() }, label = "title") { t ->
+                            Column {
+                                Text(
+                                    t.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
+                                    letterSpacing = (-.5f).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    t.artists, color = Color.White.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                         Spacer(Modifier.height(18.dp))
                         var drag by remember { mutableStateOf<Float?>(null) }
                         ThinSlider(
@@ -463,7 +512,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 )
                             }
                             Spacer(Modifier.weight(1f))
-                            if (count > 1) Text("${index + 1} de $count", color = Color.White.copy(.5f), fontSize = 12.sp)
+                            ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
                             Spacer(Modifier.weight(1f))
                             ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) { showLyrics = !showLyrics }
                         }
@@ -572,6 +621,91 @@ private fun BoxScope.SeekRipple(id: Long, dir: Int) {
                 translationX = dir * v.value * 40f
             },
         )
+    }
+}
+
+/**
+ * Spotify's queue: the song playing, the songs the user queued ("Na
+ * fila") and what follows from the playlist or album ("A seguir").
+ * Tapping a row jumps to it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val next = s.queue.next
+    val uris = remember(next) { next.map { it.uri } }
+    var info by remember { mutableStateOf<Map<String, Track>>(emptyMap()) }
+    LaunchedEffect(uris) {
+        info = try {
+            controls.tracksInfo(uris).associateBy { it.uri }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+    val queued = next.withIndex().filter { it.value.queued }
+    val upcoming = next.withIndex().filter { !it.value.queued }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+            s.track?.let { track ->
+                item(key = "now") {
+                    QueueHeading("Tocando agora")
+                    QueueRow(track.coverUrl, track.title, track.artists, highlight = true) {}
+                }
+            }
+            if (queued.isNotEmpty()) item(key = "h-queued") { QueueHeading("Na fila") }
+            items(queued, key = { "q${it.index}:${it.value.uri}" }) { (i, entry) ->
+                val t = info[entry.uri]
+                QueueRow(t?.imageUrl, t?.title ?: "…", t?.artists.orEmpty()) {
+                    controls.skipTo(entry, i)
+                    onDismiss()
+                }
+            }
+            if (upcoming.isNotEmpty()) item(key = "h-next") { QueueHeading(if (queued.isEmpty()) "A seguir" else "Depois, da lista") }
+            items(upcoming, key = { "n${it.index}:${it.value.uri}" }) { (i, entry) ->
+                val t = info[entry.uri]
+                QueueRow(t?.imageUrl, t?.title ?: "…", t?.artists.orEmpty()) {
+                    controls.skipTo(entry, i)
+                    onDismiss()
+                }
+            }
+            if (next.isEmpty()) {
+                item(key = "empty") {
+                    Text(
+                        "Nada na fila. Ao terminar, o Spotify continua com músicas parecidas.",
+                        color = c.onSurfaceVariant,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueHeading(text: String) =
+    Text(text, Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
+
+@Composable
+private fun QueueRow(imageUrl: String?, title: String, subtitle: String, highlight: Boolean = false, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Cover(imageUrl, Modifier.size(48.dp), 10.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge,
+                color = if (highlight) accentColor() else c.onSurface,
+            )
+            Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, color = c.onSurfaceVariant)
+        }
     }
 }
 

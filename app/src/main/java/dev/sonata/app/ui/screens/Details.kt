@@ -51,6 +51,7 @@ fun PlaylistScreen(actions: AppActions, id: String, list: LazyListState, modifie
             tracks = d.tracks,
             modifier = modifier,
             source = "pl:$id",
+            contextUri = "spotify:playlist:$id",
         )
     }
 }
@@ -70,6 +71,7 @@ fun AlbumScreen(actions: AppActions, id: String, list: LazyListState, modifier: 
             modifier = modifier,
             numbered = true,
             source = "al:$id",
+            contextUri = "spotify:album:$id",
             onSubtitle = artistId?.let { { actions.open(Route.Artist(it)) } },
         )
     }
@@ -151,6 +153,7 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
         tracks = tracks,
         modifier = modifier,
         source = "liked",
+        contextUri = actions.core.username()?.let { "spotify:user:$it:collection" },
         onFiltering = { filtering = it },
     ) {
         if (loading) {

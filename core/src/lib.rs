@@ -1,33 +1,38 @@
-//! Sonata's Spotify core: sign-in, the librespot session, the play queue and
-//! local playback, exported to Kotlin through UniFFI.
+//! Sonata's Spotify core: sign-in, the librespot session, Spotify Connect
+//! playback and the Web API, exported to Kotlin through UniFFI.
+//!
+//! Playback runs through Spirc, Spotify's Connect state machine: the phone
+//! is a Connect device of the account, Spotify keeps the queue and context
+//! (and autoplay after it), and other devices can see and control it.
 
 mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod lyrics;
-mod queue;
 mod session_reads;
 mod webapi;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 
+use librespot_connect::{
+    ConnectConfig, LoadContextOptions, LoadRequest, LoadRequestOptions, Options, PlayingTrack, Spirc,
+};
 use librespot_core::authentication::Credentials;
 use librespot_core::cache::Cache;
-use librespot_core::config::SessionConfig;
+use librespot_core::config::{DeviceType, SessionConfig};
 use librespot_core::session::Session;
-use librespot_core::{SpotifyId, SpotifyUri};
+use librespot_core::{Error as LibrespotError, SpotifyId, SpotifyUri};
 use librespot_metadata::audio::{AudioItem, UniqueFields};
 use librespot_playback::audio_backend;
 use librespot_playback::config::{AudioFormat, PlayerConfig};
-use librespot_playback::mixer::VolumeGetter;
-use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel};
+use librespot_playback::mixer::{Mixer, MixerConfig, VolumeGetter};
+use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel, QueueTrack};
 use tokio::net::TcpListener;
 
 pub use lyrics::{Lyrics, LyricsLine};
-pub use queue::RepeatMode;
-use queue::Queue;
 pub use webapi::{
     Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, Profile, RecentPlay,
     SearchResults, Track, TrackPage, WebApp, WebStatus,
@@ -80,14 +85,44 @@ pub struct TrackInfo {
     pub duration_ms: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RepeatMode {
+    Off,
+    All,
+    One,
+}
+
+/// A queue entry; `queued` marks songs the user added ("Na fila"), which
+/// play before the rest of the context.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct QueueEntry {
+    pub uri: String,
+    pub queued: bool,
+}
+
+/// Spotify's queue for this device, as Spirc last reported it.
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct QueueState {
-    /// Track URIs in play order.
-    pub uris: Vec<String>,
-    /// Play-order index of the current track.
-    pub position: u32,
+    /// The playlist/album/… playing, if any.
+    pub context_uri: Option<String>,
+    pub previous: Vec<QueueEntry>,
+    pub current: Option<QueueEntry>,
+    pub next: Vec<QueueEntry>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+}
+
+impl Default for QueueState {
+    fn default() -> Self {
+        Self {
+            context_uri: None,
+            previous: Vec::new(),
+            current: None,
+            next: Vec::new(),
+            shuffle: false,
+            repeat: RepeatMode::Off,
+        }
+    }
 }
 
 #[derive(Debug, Clone, uniffi::Enum)]
@@ -97,8 +132,8 @@ pub enum CoreEvent {
     Playing { position_ms: u32 },
     Paused { position_ms: u32 },
     Loading,
-    /// The queue finished.
-    Ended,
+    /// Playback stopped here: the context ended or another device took over.
+    Stopped,
     QueueChanged { queue: QueueState },
     Error { message: String },
 }
@@ -112,26 +147,75 @@ pub trait CoreListener: Send + Sync {
 struct Connected {
     session: Session,
     player: Arc<Player>,
+    spirc: Arc<Spirc>,
 }
 
-/// Software gain the player applies to every sample, for ducking.
-struct Gain(Arc<AtomicU64>);
+/// Software volume: Connect's volume (other devices can set it) times the
+/// ducking gain (another app speaking). The phone's own volume keys still
+/// work on top, through Android's stream volume.
+#[derive(Clone)]
+struct SonataMixer {
+    volume: Arc<AtomicU64>,
+    duck: Arc<AtomicU64>,
+}
+
+impl SonataMixer {
+    fn new(duck: Arc<AtomicU64>) -> Self {
+        Self {
+            volume: Arc::new(AtomicU64::new(1.0f64.to_bits())),
+            duck,
+        }
+    }
+}
+
+impl Mixer for SonataMixer {
+    fn open(_: MixerConfig) -> Result<Self, LibrespotError> {
+        Ok(Self::new(Arc::new(AtomicU64::new(1.0f64.to_bits()))))
+    }
+
+    fn volume(&self) -> u16 {
+        (f64::from_bits(self.volume.load(Ordering::Relaxed)) * f64::from(u16::MAX)) as u16
+    }
+
+    fn set_volume(&self, volume: u16) {
+        let level = f64::from(volume) / f64::from(u16::MAX);
+        self.volume.store(level.to_bits(), Ordering::Relaxed);
+    }
+
+    fn get_soft_volume(&self) -> Box<dyn VolumeGetter + Send> {
+        Box::new(Gain {
+            volume: self.volume.clone(),
+            duck: self.duck.clone(),
+        })
+    }
+}
+
+struct Gain {
+    volume: Arc<AtomicU64>,
+    duck: Arc<AtomicU64>,
+}
 
 impl VolumeGetter for Gain {
     fn attenuation_factor(&self) -> f64 {
-        f64::from_bits(self.0.load(Ordering::Relaxed))
+        // Squared: Connect sliders feel linear to the ear this way.
+        let volume = f64::from_bits(self.volume.load(Ordering::Relaxed));
+        volume * volume * f64::from_bits(self.duck.load(Ordering::Relaxed))
     }
 }
 
 struct Inner {
     cache_dir: PathBuf,
+    /// How this phone appears in Spotify's device list.
+    device_name: String,
     pending_login: Mutex<Option<PendingLogin>>,
     web: WebApi,
     connected: Mutex<Option<Connected>>,
-    queue: Mutex<Queue>,
+    queue: Mutex<QueueState>,
+    /// Metadata for queue entries, fetched once per track.
+    track_cache: Mutex<HashMap<String, Track>>,
     listener: Mutex<Option<Arc<dyn CoreListener>>>,
     playing: AtomicBool,
-    gain: Arc<AtomicU64>,
+    duck: Arc<AtomicU64>,
 }
 
 #[derive(uniffi::Object)]
@@ -142,20 +226,23 @@ pub struct SonataCore {
 #[uniffi::export(async_runtime = "tokio")]
 impl SonataCore {
     /// `cache_dir` is app-private storage; librespot keeps the reusable
-    /// credential and the audio cache there.
+    /// credential and the audio cache there. `device_name` is how the phone
+    /// shows up in other Spotify apps' device lists.
     #[uniffi::constructor]
-    pub fn new(cache_dir: String) -> Arc<Self> {
+    pub fn new(cache_dir: String, device_name: String) -> Arc<Self> {
         let cache_dir = PathBuf::from(cache_dir);
         Arc::new(Self {
             inner: Arc::new(Inner {
                 web: WebApi::new(&cache_dir),
                 cache_dir,
+                device_name,
                 pending_login: Mutex::new(None),
                 connected: Mutex::new(None),
-                queue: Mutex::new(Queue::default()),
+                queue: Mutex::new(QueueState::default()),
+                track_cache: Mutex::new(HashMap::new()),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
-                gain: Arc::new(AtomicU64::new(1.0f64.to_bits())),
+                duck: Arc::new(AtomicU64::new(1.0f64.to_bits())),
             }),
         })
     }
@@ -341,75 +428,121 @@ impl SonataCore {
         self.inner.connected.lock().unwrap().is_some()
     }
 
-    /// Replace the queue with `uris` (track URIs or open.spotify.com links)
-    /// and play from `start_index`.
-    pub async fn play_queue(&self, uris: Vec<String>, start_index: u32) -> Result<(), CoreError> {
-        let tracks = uris
+    /// The signed-in account's username (for its liked-songs context URI).
+    pub fn username(&self) -> Option<String> {
+        self.inner.with_session(|s| s.username())
+    }
+
+    /// Play a playlist, album, artist or liked-songs context. Spotify
+    /// resolves its tracks, keeps the queue and continues with similar
+    /// songs (autoplay) after the end. Starts at `track_uri` if given.
+    pub async fn play_context(
+        &self,
+        context_uri: String,
+        track_uri: Option<String>,
+        shuffle: bool,
+    ) -> Result<(), CoreError> {
+        let options = self.inner.load_options(track_uri.map(PlayingTrack::Uri), shuffle);
+        self.inner
+            .load(LoadRequest::from_context_uri(context_uri, options))
+            .await
+    }
+
+    /// Play an explicit list (a filtered or sorted view, search results),
+    /// starting at `start_index`. Links and URIs are both accepted.
+    pub async fn play_tracks(&self, uris: Vec<String>, start_index: u32, shuffle: bool) -> Result<(), CoreError> {
+        let uris = uris
             .iter()
-            .map(|uri| parse_track(uri))
+            .map(|uri| parse_track(uri).map(|t| t.to_uri()))
             .collect::<Result<Vec<_>, _>>()?;
-        if tracks.is_empty() {
+        if uris.is_empty() {
             return Err(CoreError::Playback("fila vazia".into()));
         }
-        let first = {
-            let mut queue = self.inner.queue.lock().unwrap();
-            queue.set(tracks, start_index as usize);
-            queue.current()
-        };
-        self.inner.emit_queue();
-        match first {
-            Some(track) => self.inner.load(track).await,
-            None => Ok(()),
-        }
+        let options = self.inner.load_options(Some(PlayingTrack::Index(start_index)), shuffle);
+        self.inner.load(LoadRequest::from_tracks(uris, options)).await
     }
 
-    pub async fn play_track(&self, uri: String) -> Result<(), CoreError> {
-        self.play_queue(vec![uri], 0).await
+    /// Jump to a song of the current context (from the queue view).
+    pub async fn skip_to(&self, track_uri: String) -> Result<(), CoreError> {
+        let context = self.inner.queue.lock().unwrap().context_uri.clone();
+        let context = context.ok_or_else(|| CoreError::Playback("nada tocando".into()))?;
+        let shuffle = self.inner.queue.lock().unwrap().shuffle;
+        self.play_context(context, Some(track_uri), shuffle).await
     }
 
-    /// Jump to a play-order index of the queue.
-    pub async fn skip_to(&self, position: u32) -> Result<(), CoreError> {
-        let track = self.inner.queue.lock().unwrap().skip_to(position as usize);
-        let track = track.ok_or_else(|| CoreError::Playback("posição fora da fila".into()))?;
-        self.inner.emit_queue();
-        self.inner.load(track).await
+    /// Add a song to Spotify's queue ("Na fila"): it plays before the rest
+    /// of the context, on whichever device is playing this session.
+    pub async fn add_to_queue(&self, track_uri: String) -> Result<(), CoreError> {
+        let uri = parse_track(&track_uri)?;
+        self.inner.ensure_session().await?;
+        self.inner.with_spirc(|spirc| spirc.add_to_queue(uri))
     }
 
     pub fn seek(&self, position_ms: u32) -> Result<(), CoreError> {
-        self.inner.with_player(|player| player.seek(position_ms))
+        self.inner.with_spirc(|spirc| spirc.set_position_ms(position_ms))
     }
 
     pub fn pause(&self) -> Result<(), CoreError> {
-        self.inner.with_player(|player| player.pause())
+        self.inner.with_spirc(|spirc| spirc.pause())
     }
 
     pub async fn resume(&self) -> Result<(), CoreError> {
         self.inner.ensure_session().await?;
-        self.inner.with_player(|player| player.play())
+        self.inner.with_spirc(|spirc| spirc.play())
     }
 
-    pub fn stop(&self) -> Result<(), CoreError> {
-        self.inner.with_player(|player| player.stop())
+    pub async fn next(&self) -> Result<(), CoreError> {
+        self.inner.ensure_session().await?;
+        self.inner.with_spirc(|spirc| spirc.next())
     }
 
-    pub fn set_shuffle(&self, shuffle: bool) {
-        self.inner.queue.lock().unwrap().set_shuffle(shuffle);
-        self.inner.emit_queue();
+    pub async fn previous(&self) -> Result<(), CoreError> {
+        self.inner.ensure_session().await?;
+        self.inner.with_spirc(|spirc| spirc.prev())
     }
 
-    pub fn set_repeat(&self, repeat: RepeatMode) {
-        self.inner.queue.lock().unwrap().set_repeat(repeat);
-        self.inner.emit_queue();
+    pub fn set_shuffle(&self, shuffle: bool) -> Result<(), CoreError> {
+        self.inner.with_spirc(|spirc| spirc.shuffle(shuffle))
+    }
+
+    pub fn set_repeat(&self, repeat: RepeatMode) -> Result<(), CoreError> {
+        self.inner.with_spirc(|spirc| match repeat {
+            RepeatMode::Off => spirc.repeat_track(false).and_then(|_| spirc.repeat(false)),
+            RepeatMode::All => spirc.repeat_track(false).and_then(|_| spirc.repeat(true)),
+            RepeatMode::One => spirc.repeat(false).and_then(|_| spirc.repeat_track(true)),
+        })
     }
 
     /// Lower the volume while another app speaks (audio focus "can duck").
     pub fn set_ducked(&self, ducked: bool) {
         let gain = if ducked { DUCKED_VOLUME } else { 1.0 };
-        self.inner.gain.store(gain.to_bits(), Ordering::Relaxed);
+        self.inner.duck.store(gain.to_bits(), Ordering::Relaxed);
     }
 
     pub fn queue_state(&self) -> QueueState {
-        self.inner.queue_state()
+        self.inner.queue.lock().unwrap().clone()
+    }
+
+    /// Metadata for queue entries (cached per track), in the given order.
+    pub async fn tracks_info(&self, uris: Vec<String>) -> Result<Vec<Track>, CoreError> {
+        let missing: Vec<String> = {
+            let cache = self.inner.track_cache.lock().unwrap();
+            uris.iter().filter(|uri| !cache.contains_key(*uri)).cloned().collect()
+        };
+        if !missing.is_empty() {
+            self.inner.ensure_session().await?;
+            let session = self
+                .inner
+                .with_session(Session::clone)
+                .ok_or_else(|| CoreError::Session("não conectado".into()))?;
+            let fetched = session_reads::tracks(&session, &missing).await;
+            let mut cache = self.inner.track_cache.lock().unwrap();
+            for track in fetched {
+                cache.insert(track.uri.clone(), track);
+            }
+        }
+        let cache = self.inner.track_cache.lock().unwrap();
+        Ok(uris.iter().filter_map(|uri| cache.get(uri).cloned()).collect())
     }
 }
 
@@ -462,66 +595,107 @@ impl Inner {
         }
     }
 
-    fn queue_state(&self) -> QueueState {
-        let queue = self.queue.lock().unwrap();
-        QueueState {
-            uris: queue.in_play_order().iter().map(SpotifyUri::to_uri).collect(),
-            position: queue.position() as u32,
-            shuffle: queue.shuffle(),
-            repeat: queue.repeat(),
+    fn update_queue(&self, change: impl FnOnce(&mut QueueState)) {
+        let queue = {
+            let mut queue = self.queue.lock().unwrap();
+            change(&mut queue);
+            queue.clone()
+        };
+        self.emit(CoreEvent::QueueChanged { queue });
+    }
+
+    /// Load options keeping the current repeat mode.
+    fn load_options(&self, playing_track: Option<PlayingTrack>, shuffle: bool) -> LoadRequestOptions {
+        let repeat = self.queue.lock().unwrap().repeat;
+        LoadRequestOptions {
+            start_playing: true,
+            seek_to: 0,
+            context_options: Some(LoadContextOptions::Options(Options {
+                shuffle,
+                repeat: repeat == RepeatMode::All,
+                repeat_track: repeat == RepeatMode::One,
+            })),
+            playing_track,
         }
     }
 
-    fn emit_queue(&self) {
-        self.emit(CoreEvent::QueueChanged {
-            queue: self.queue_state(),
-        });
+    async fn load(&self, request: LoadRequest) -> Result<(), CoreError> {
+        self.ensure_session().await?;
+        self.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.load(request)))
     }
 
-    /// A new session signed in with `credentials`. librespot does not
-    /// reconnect a dropped session, so each connection gets a fresh one.
-    async fn open_session(&self, credentials: Credentials) -> Result<Session, CoreError> {
+    /// A new, not yet connected session: Spirc signs it in itself.
+    /// librespot does not reconnect a dropped session, so each connection
+    /// gets a fresh one.
+    fn new_session(&self) -> Result<Session, CoreError> {
         // Our token comes from the desktop (keymaster) client; the session
         // must use the same id or login5 rejects it.
         let config = SessionConfig {
             client_id: auth::PLAYBACK_CLIENT_ID.to_owned(),
             ..SessionConfig::default()
         };
-        let session = Session::new(config, Some(self.cache()?));
-        session
-            .connect(credentials, true)
+        Ok(Session::new(config, Some(self.cache()?)))
+    }
+
+    /// The reusable credential librespot stored at sign-in.
+    fn stored_credentials(&self) -> Result<Credentials, CoreError> {
+        self.cache()?
+            .credentials()
+            .ok_or_else(|| CoreError::Session("credencial salva não encontrada".into()))
+    }
+
+    /// Sign `session` in with `credentials` (storing a reusable credential)
+    /// and register this phone as a Connect device driving `player`.
+    async fn start_spirc(
+        &self,
+        session: &Session,
+        player: Arc<Player>,
+        credentials: Credentials,
+    ) -> Result<Arc<Spirc>, CoreError> {
+        let config = ConnectConfig {
+            name: self.device_name.clone(),
+            device_type: DeviceType::Smartphone,
+            initial_volume: u16::MAX,
+            emit_set_queue_events: true,
+            ..ConnectConfig::default()
+        };
+        let mixer: Arc<dyn Mixer> = Arc::new(SonataMixer::new(self.duck.clone()));
+        let (spirc, task) = Spirc::new(config, session.clone(), credentials, player, mixer)
             .await
             .map_err(|e| CoreError::Session(e.to_string()))?;
-        Ok(session)
+        tokio::spawn(task);
+        Ok(Arc::new(spirc))
     }
 
     async fn connect(self: &Arc<Self>, credentials: Credentials) -> Result<String, CoreError> {
-        let session = self.open_session(credentials).await?;
+        let session = self.new_session()?;
 
         let backend = audio_backend::find(None)
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
+        let mixer = SonataMixer::new(self.duck.clone());
         let player = Player::new(
             PlayerConfig::default(),
             session.clone(),
-            Box::new(Gain(self.gain.clone())),
+            mixer.get_soft_volume(),
             move || backend(None, AudioFormat::default()),
         );
         tokio::spawn(run_events(
             Arc::downgrade(self),
             player.get_player_event_channel(),
         ));
+        let spirc = self.start_spirc(&session, player.clone(), credentials).await?;
 
         let username = session.username();
-        *self.connected.lock().unwrap() = Some(Connected { session, player });
-        log::info!("connected as {username}");
+        *self.connected.lock().unwrap() = Some(Connected { session, player, spirc });
+        log::info!("connected as {username}, Connect device \"{}\"", self.device_name);
         Ok(username)
     }
 
     /// Replace a session the server closed (backgrounded app, Wi-Fi power
-    /// saving) before using it; a dead one fails key requests and leaves the
-    /// player decoding encrypted audio.
+    /// saving) before using it. The Connect device is registered again on
+    /// the new session and what was playing resumes where it was.
     async fn ensure_session(&self) -> Result<(), CoreError> {
-        let player = {
+        let (player, old_spirc) = {
             let connected = self.connected.lock().unwrap();
             let connected = connected
                 .as_ref()
@@ -529,34 +703,36 @@ impl Inner {
             if !connected.session.is_invalid() {
                 return Ok(());
             }
-            connected.player.clone()
+            (connected.player.clone(), connected.spirc.clone())
         };
 
         log::warn!("session closed by the server, reconnecting");
-        let credentials = self
-            .cache()?
-            .credentials()
-            .ok_or_else(|| CoreError::Session("credencial salva não encontrada".into()))?;
-        let session = self.open_session(credentials).await?;
+        let snapshot = old_spirc.disconnected_playback();
+        let _ = old_spirc.shutdown();
+        let session = self.new_session()?;
         player.set_session(session.clone());
+        let spirc = self.start_spirc(&session, player, self.stored_credentials()?).await?;
+        if let Some(snapshot) = snapshot {
+            if let Err(error) = spirc.restore_playback(snapshot) {
+                log::warn!("could not restore playback: {error}");
+            }
+        }
         if let Some(connected) = self.connected.lock().unwrap().as_mut() {
             connected.session = session;
+            connected.spirc = spirc;
         }
         Ok(())
     }
 
-    async fn load(&self, track: SpotifyUri) -> Result<(), CoreError> {
-        self.ensure_session().await?;
-        self.with_player(|player| player.load(track, true, 0))
-    }
-
-    fn with_player(&self, action: impl FnOnce(&Player)) -> Result<(), CoreError> {
-        let connected = self.connected.lock().unwrap();
-        let connected = connected
+    fn with_spirc(&self, action: impl FnOnce(&Spirc) -> Result<(), LibrespotError>) -> Result<(), CoreError> {
+        let spirc = self
+            .connected
+            .lock()
+            .unwrap()
             .as_ref()
+            .map(|connected| connected.spirc.clone())
             .ok_or_else(|| CoreError::Playback("não conectado".into()))?;
-        action(&connected.player);
-        Ok(())
+        action(&spirc).map_err(|e| CoreError::Playback(e.to_string()))
     }
 
     fn with_session<T>(&self, action: impl FnOnce(&Session) -> T) -> Option<T> {
@@ -567,36 +743,22 @@ impl Inner {
             .map(|connected| action(&connected.session))
     }
 
-    /// The current track ended or could not play: move on through the queue.
-    async fn advance(&self, failed: bool) {
-        let next = {
-            let mut queue = self.queue.lock().unwrap();
-            if failed {
-                // Skip a broken track even in repeat-one, or it would loop.
-                let pos = queue.position() + 1;
-                queue.skip_to(pos)
-            } else {
-                queue.advance_auto()
-            }
-        };
-        match next {
-            Some(track) => {
-                self.emit_queue();
-                if let Err(error) = self.load(track).await {
-                    self.emit(CoreEvent::Error {
-                        message: error.to_string(),
-                    });
-                }
-            }
-            None => {
-                self.playing.store(false, Ordering::Relaxed);
-                self.emit(CoreEvent::Ended);
-            }
-        }
+}
+
+/// How many upcoming and past queue entries Kotlin gets.
+const QUEUE_AHEAD: usize = 100;
+const QUEUE_BEHIND: usize = 20;
+
+fn entry(track: QueueTrack) -> QueueEntry {
+    QueueEntry {
+        // Spotify's own queue ("Na fila") reports this provider.
+        queued: track.provider == "queue",
+        uri: track.uri,
     }
 }
 
-/// Forward librespot's player events to Kotlin and drive the queue.
+/// Forward librespot's player and Connect events to Kotlin. Spirc drives
+/// the queue itself (next track, autoplay, remote commands).
 async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
     while let Some(event) = events.recv().await {
         let Some(inner) = inner.upgrade() else { break };
@@ -621,19 +783,35 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                 })
             }
             PlayerEvent::Loading { .. } => inner.emit(CoreEvent::Loading),
-            PlayerEvent::TimeToPreloadNextTrack { .. } => {
-                let next = inner.queue.lock().unwrap().peek_auto_next();
-                if let Some(next) = next {
-                    let _ = inner.with_player(|player| player.preload(next));
+            PlayerEvent::Stopped { .. } => {
+                inner.playing.store(false, Ordering::Relaxed);
+                inner.emit(CoreEvent::Stopped);
+            }
+            PlayerEvent::Unavailable { track_id, .. } => inner.emit(CoreEvent::Error {
+                message: format!("faixa indisponível: {}", track_id.to_uri()),
+            }),
+            PlayerEvent::SetQueue {
+                context_uri,
+                current_track,
+                next_tracks,
+                prev_tracks,
+            } => inner.update_queue(|queue| {
+                queue.context_uri = Some(context_uri).filter(|uri| !uri.is_empty());
+                queue.current = current_track.map(entry);
+                queue.next = next_tracks.into_iter().take(QUEUE_AHEAD).map(entry).collect();
+                let skip = prev_tracks.len().saturating_sub(QUEUE_BEHIND);
+                queue.previous = prev_tracks.into_iter().skip(skip).map(entry).collect();
+            }),
+            PlayerEvent::ShuffleChanged { shuffle } => inner.update_queue(|queue| queue.shuffle = shuffle),
+            PlayerEvent::RepeatChanged { context, track } => inner.update_queue(|queue| {
+                queue.repeat = if track {
+                    RepeatMode::One
+                } else if context {
+                    RepeatMode::All
+                } else {
+                    RepeatMode::Off
                 }
-            }
-            PlayerEvent::EndOfTrack { .. } => inner.advance(false).await,
-            PlayerEvent::Unavailable { track_id, .. } => {
-                inner.emit(CoreEvent::Error {
-                    message: format!("faixa indisponível: {}", track_id.to_uri()),
-                });
-                inner.advance(true).await;
-            }
+            }),
             _ => {}
         }
     }

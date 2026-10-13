@@ -51,6 +51,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
         val app = application as SonataApp
         player = SonataPlayer(app.core, app.bridge)
 
@@ -132,6 +133,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        running = false
         unregisterReceiver(noisyReceiver)
         abandonFocus()
         holdLocks(false)
@@ -177,6 +179,13 @@ class PlaybackService : MediaSessionService() {
                 player.pause()
             }
         }
+    }
+
+    companion object {
+        /** Whether the service exists, so the app can start it when playback begins remotely. */
+        @Volatile
+        var running = false
+            private set
     }
 
     private fun holdLocks(hold: Boolean) {

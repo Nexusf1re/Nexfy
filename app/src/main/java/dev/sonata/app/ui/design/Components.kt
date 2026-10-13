@@ -34,6 +34,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material3.Icon
@@ -354,7 +358,14 @@ fun Carousel(state: LazyListState, content: LazyListScope.() -> Unit) {
 fun durationLabel(ms: Long): String =
     if (ms <= 0) "" else (ms / 1000).let { "%d:%02d".format(it / 60, it % 60) }
 
-/** A track: cover (or its number in albums), title, artists, duration. */
+/** How far (fraction of the row) a swipe must go to add to the queue. */
+private const val SWIPE_THRESHOLD = .28f
+
+/**
+ * A track: cover (or its number in albums), title, artists, duration.
+ * Swiping it right reveals a queue icon and, past the threshold, calls
+ * [onSwipe] (add to queue); the row springs back either way.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRow(
@@ -363,11 +374,67 @@ fun TrackRow(
     number: Int? = null,
     playing: Boolean = false,
     onLongClick: (() -> Unit)? = null,
+    onSwipe: (() -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val press = remember { MutableInteractionSource() }
+    val haptics = rememberHaptics()
+    val scope = rememberCoroutineScope()
+    val offset = remember { Animatable(0f) }
+    var width by remember { mutableFloatStateOf(1f) }
+    var armed by remember { mutableStateOf(false) }
+    val accent = dev.sonata.app.ui.theme.accentColor()
+    Box(Modifier.fillMaxWidth().onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }) {
+        if (onSwipe != null) {
+            // What the swipe uncovers: the queue icon, filling in once armed.
+            Box(
+                Modifier.matchParentSize().clip(RoundedCornerShape(16.dp))
+                    .drawBehind { drawRect(accent.copy(alpha = (offset.value / width * 2.2f).coerceIn(0f, .9f))) }
+                    .padding(start = 20.dp),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.PlaylistAdd, "Adicionar à fila",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp).graphicsLayer {
+                        val p = (offset.value / (width * SWIPE_THRESHOLD)).coerceIn(0f, 1f)
+                        alpha = p
+                        scaleX = .7f + .3f * p
+                        scaleY = scaleX
+                    },
+                )
+            }
+        }
     Row(
-        Modifier.fillMaxWidth().weightedPress(press, 16.dp).clip(RoundedCornerShape(16.dp))
+        Modifier.fillMaxWidth()
+            .graphicsLayer { translationX = offset.value }
+            .then(
+                if (onSwipe == null) {
+                    Modifier
+                } else {
+                    Modifier.draggable(
+                        rememberDraggableState { d ->
+                            scope.snapNow(offset, (offset.value + d).coerceIn(0f, width * .6f))
+                            val now = offset.value > width * SWIPE_THRESHOLD
+                            if (now != armed) {
+                                armed = now
+                                haptics.tick()
+                            }
+                        },
+                        Orientation.Horizontal,
+                        onDragStopped = {
+                            if (armed) {
+                                haptics.press()
+                                onSwipe()
+                            }
+                            armed = false
+                            offset.animateTo(0f, Motion.settle(320f))
+                        },
+                    )
+                },
+            )
+            .weightedPress(press, 16.dp).clip(RoundedCornerShape(16.dp))
+            .background(if (offset.value > 0f) c.background else Color.Transparent)
             .combinedClickable(press, null, onClick = onClick, onLongClick = onLongClick)
             .alpha(if (track.playable) 1f else .4f)
             .padding(vertical = 4.dp),
@@ -391,6 +458,7 @@ fun TrackRow(
             }
             Text(subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+    }
     }
 }
 

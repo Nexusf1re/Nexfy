@@ -54,8 +54,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.media3.common.MediaItem
-import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import dev.chrisbanes.haze.HazeState
 import dev.sonata.app.SonataApp
@@ -79,7 +77,10 @@ import dev.sonata.app.ui.screens.SettingsScreen
 import dev.sonata.app.ui.theme.accentColor
 import dev.sonata.app.ui.theme.isDark
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import uniffi.sonata_core.Lyrics
+import uniffi.sonata_core.QueueEntry
 import uniffi.sonata_core.RepeatMode
 import uniffi.sonata_core.Track
 import uniffi.sonata_core.TrackInfo
@@ -136,62 +137,91 @@ class NavState {
 /** What every screen needs: the core, playback and navigation. */
 class AppActions(
     val app: SonataApp,
-    private val controller: () -> MediaController?,
     val nav: NavState,
     val openBrowser: (String) -> Unit,
+    private val scope: CoroutineScope,
 ) : PlayerControls {
     val core get() = app.core
 
     fun open(route: Route) = nav.push(route)
     fun back() = nav.pop()
 
-    /**
-     * Play [tracks] as the queue, starting at [index]. [source] is the
-     * library key it came from (`pl:<id>`, `al:<id>`, `liked`), counted for
-     * the "most played" order.
-     */
-    fun play(tracks: List<Track>, index: Int = 0, shuffle: Boolean = false, source: String? = null) {
-        if (tracks.isEmpty()) return
-        source?.let(app.library::recordPlay)
-        val items = tracks.map { MediaItem.Builder().setMediaId(it.uri).build() }
-        controller()?.run {
-            shuffleModeEnabled = shuffle
-            setMediaItems(items, index.coerceIn(0, items.lastIndex), 0)
-            prepare()
-            play()
+    /** Run a playback command off the main thread, reporting failures. */
+    private fun command(action: suspend () -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                action()
+            } catch (e: Exception) {
+                app.bridge.reportError(e.message ?: e.toString())
+            }
         }
     }
 
-    override fun playPause() {
-        controller()?.run { if (isPlaying) pause() else play() }
+    /**
+     * Play [tracks] from [index]. With a [contextUri] (a whole playlist,
+     * album or liked songs, unfiltered) Spotify plays the context itself:
+     * its queue, shuffle and autoplay after the end. Otherwise exactly
+     * these tracks play. [source] is the library key counted for the
+     * "most played" order.
+     */
+    fun play(
+        tracks: List<Track>,
+        index: Int = 0,
+        shuffle: Boolean = false,
+        source: String? = null,
+        contextUri: String? = null,
+    ) {
+        if (tracks.isEmpty()) return
+        source?.let(app.library::recordPlay)
+        val start = index.coerceIn(0, tracks.lastIndex)
+        command {
+            if (contextUri != null) {
+                core.playContext(contextUri, tracks[start].uri.takeUnless { shuffle }, shuffle)
+            } else {
+                core.playTracks(tracks.map { it.uri }, start.toUInt(), shuffle)
+            }
+        }
+    }
+
+    /** Add a song to Spotify's queue; it plays after the current one. */
+    fun addToQueue(track: Track) {
+        command { core.addToQueue(track.uri) }
+        android.widget.Toast.makeText(app, "Adicionada à fila: ${track.title}", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    override fun playPause() = command {
+        if (app.bridge.state.value.playing) core.pause() else core.resume()
     }
 
     override fun next() {
-        controller()?.seekToNext()
+        app.bridge.preview(forward = true)
+        command { core.next() }
     }
 
     override fun previous() {
-        controller()?.seekToPrevious()
+        app.bridge.preview(forward = false)
+        command { core.previous() }
     }
 
-    override fun seek(positionMs: Long) {
-        controller()?.seekTo(positionMs)
-    }
+    override fun seek(positionMs: Long) = command { core.seek(positionMs.coerceAtLeast(0).toUInt()) }
 
-    override fun setShuffle(on: Boolean) {
-        controller()?.shuffleModeEnabled = on
+    override fun setShuffle(on: Boolean) = command { core.setShuffle(on) }
+
+    override fun setRepeat(mode: RepeatMode) = command { core.setRepeat(mode) }
+
+    /**
+     * Jump to a queue entry [ahead] positions after the current song.
+     * Near ones are skipped to, which keeps the user's queued songs; far
+     * ones restart the context at that song.
+     */
+    override fun skipTo(entry: QueueEntry, ahead: Int) = command {
+        if (ahead < 10) repeat(ahead + 1) { core.next() } else core.skipTo(entry.uri)
     }
 
     override suspend fun lyrics(track: TrackInfo): Lyrics? =
         core.lyrics(track.uri, track.title, track.artists, track.album, track.durationMs)
 
-    override fun setRepeat(mode: RepeatMode) {
-        controller()?.repeatMode = when (mode) {
-            RepeatMode.OFF -> Player.REPEAT_MODE_OFF
-            RepeatMode.ALL -> Player.REPEAT_MODE_ALL
-            RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-        }
-    }
+    override suspend fun tracksInfo(uris: List<String>): List<Track> = core.tracksInfo(uris)
 }
 
 @Composable
@@ -202,10 +232,10 @@ fun SonataRoot(
 ) {
     val c = MaterialTheme.colorScheme
     val nav = remember { NavState() }
-    val actions = remember(controller) { AppActions(app, { controller }, nav, openBrowser) }
+    val scope = rememberCoroutineScope()
+    val actions = remember { AppActions(app, nav, openBrowser, scope) }
     val snapshot by app.bridge.state.collectAsState()
     val haze = remember { HazeState() }
-    val scope = rememberCoroutineScope()
 
     BackHandler(enabled = nav.stack().isNotEmpty()) { nav.pop() }
     BackHandler(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }

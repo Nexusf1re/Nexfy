@@ -96,6 +96,8 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
     var searching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val cascadeClock = rememberCascade(results)
+    var menuFor by remember { mutableStateOf<uniffi.sonata_core.Track?>(null) }
+    menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
 
     // Search once typing pauses.
     LaunchedEffect(query) {
@@ -168,7 +170,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                         TrackRow(t, {
                             keyboard?.hide()
                             actions.play(r.tracks, i)
-                        }, onLongClick = t.albumId?.let { id -> { actions.open(Route.Album(id)) } })
+                        }, onLongClick = { menuFor = t }, onSwipe = { actions.addToQueue(t) })
                     }
                 }
                 if (r.artists.isNotEmpty()) {

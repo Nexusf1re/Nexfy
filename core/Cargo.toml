@@ -34,6 +34,7 @@ urlencoding = "2"
 librespot-core = { path = "third_party/librespot/core", default-features = false, features = ["rustls-tls-webpki-roots"] }
 librespot-playback = { path = "third_party/librespot/playback", default-features = false, features = ["rustls-tls-webpki-roots", "rodio-backend"] }
 librespot-metadata = { path = "third_party/librespot/metadata", default-features = false, features = ["rustls-tls-webpki-roots"] }
+librespot-connect = { path = "third_party/librespot/connect", default-features = false, features = ["rustls-tls-webpki-roots"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"

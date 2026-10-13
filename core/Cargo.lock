@@ -1356,6 +1356,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "librespot-connect"
+version = "0.8.0"
+dependencies = [
+ "futures-util",
+ "librespot-core",
+ "librespot-playback",
+ "librespot-protocol",
+ "log",
+ "protobuf",
+ "rand 0.9.5",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "uuid",
+]
+
+[[package]]
 name = "librespot-core"
 version = "0.8.0"
 dependencies = [
@@ -2755,6 +2773,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "jni",
+ "librespot-connect",
  "librespot-core",
  "librespot-metadata",
  "librespot-playback",

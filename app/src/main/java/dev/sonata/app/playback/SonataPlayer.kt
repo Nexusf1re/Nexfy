@@ -9,6 +9,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.util.UnstableApi
+import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
@@ -16,13 +17,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import uniffi.sonata_core.QueueEntry
 import uniffi.sonata_core.RepeatMode
 import uniffi.sonata_core.SonataCore
 
 /**
- * Media3's view of the Rust core: the media session, notification, lock
- * screen and headset buttons all drive playback through this player, and it
- * mirrors what [CoreBridge] reports back.
+ * Media3's view of the Spotify Connect playback in the Rust core: the media
+ * session, notification, lock screen and headset buttons drive playback
+ * through this player, and it mirrors Spotify's queue as [CoreBridge]
+ * reports it (previous songs, the current one, then what comes next).
  */
 @OptIn(UnstableApi::class)
 class SonataPlayer(
@@ -42,20 +45,26 @@ class SonataPlayer(
         scope.launch {
             bridge.state.collect { snapshot ->
                 if (snapshot.playing) playWhenReady = true
-                if (snapshot.ended) playWhenReady = false
+                if (snapshot.stopped) playWhenReady = false
                 invalidateState()
             }
         }
     }
 
+    /** The queue as Media3 items: previous, current, next. */
+    private fun entries(): Pair<List<QueueEntry>, Int> {
+        val q = bridge.state.value.queue
+        val current = q.current ?: return emptyList<QueueEntry>() to 0
+        return (q.previous + current + q.next) to q.previous.size
+    }
+
     override fun getState(): State {
         val s = bridge.state.value
-        val uris = s.queue.uris
-        val current = s.queue.position.toInt().coerceIn(0, (uris.size - 1).coerceAtLeast(0))
+        val (entries, current) = entries()
 
-        val playlist = uris.mapIndexed { index, uri ->
-            val item = MediaItem.Builder().setMediaId(uri)
-            val data = MediaItemData.Builder("$index:$uri")
+        val playlist = entries.mapIndexed { index, entry ->
+            val item = MediaItem.Builder().setMediaId(entry.uri)
+            val data = MediaItemData.Builder("$index:${entry.uri}")
             // librespot may relink a track to another URI, so match the
             // current item by position, not by URI.
             val track = s.track.takeIf { index == current }
@@ -77,7 +86,7 @@ class SonataPlayer(
 
         val playbackState = when {
             playlist.isEmpty() -> Player.STATE_IDLE
-            s.ended -> Player.STATE_ENDED
+            s.stopped -> Player.STATE_ENDED
             s.loading -> Player.STATE_BUFFERING
             else -> Player.STATE_READY
         }
@@ -111,15 +120,14 @@ class SonataPlayer(
         val s = bridge.state.value
         return runCore {
             when {
-                s.queue.uris.isEmpty() -> Unit
-                !playWhenReady -> core.pause()
-                // Play after the queue finished starts it over.
-                s.ended -> core.skipTo(0u)
-                else -> core.resume()
+                s.queue.current == null -> Unit
+                playWhenReady -> core.resume()
+                else -> core.pause()
             }
         }
     }
 
+    /** From other controllers (Android Auto, assistants): play these tracks. */
     override fun handleSetMediaItems(
         mediaItems: MutableList<MediaItem>,
         startIndex: Int,
@@ -127,18 +135,25 @@ class SonataPlayer(
     ): ListenableFuture<*> {
         playWhenReady = true
         return runCore {
-            core.playQueue(mediaItems.map { it.mediaId }, startIndex.coerceAtLeast(0).toUInt())
+            core.playTracks(mediaItems.map { it.mediaId }, startIndex.coerceAtLeast(0).toUInt(), false)
         }
     }
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
-        val current = bridge.state.value.queue.position.toInt()
+        val (entries, current) = entries()
         val target = positionMs.coerceAtLeast(0).toUInt()
         return runCore {
-            if (mediaItemIndex != C.INDEX_UNSET && mediaItemIndex != current) {
-                core.skipTo(mediaItemIndex.toUInt())
-            } else {
-                core.seek(target)
+            when {
+                mediaItemIndex == C.INDEX_UNSET || mediaItemIndex == current -> core.seek(target)
+                mediaItemIndex == current + 1 -> {
+                    bridge.preview(forward = true)
+                    core.next()
+                }
+                mediaItemIndex == current - 1 -> {
+                    bridge.preview(forward = false)
+                    core.previous()
+                }
+                else -> entries.getOrNull(mediaItemIndex)?.let { core.skipTo(it.uri) }
             }
         }
     }
@@ -156,7 +171,7 @@ class SonataPlayer(
         )
     }
 
-    override fun handlePrepare(): ListenableFuture<*> = SettableFuture.create<Unit>().apply { set(Unit) }
+    override fun handlePrepare(): ListenableFuture<*> = Futures.immediateVoidFuture()
 
     override fun handleStop(): ListenableFuture<*> {
         playWhenReady = false
@@ -165,7 +180,7 @@ class SonataPlayer(
 
     override fun handleRelease(): ListenableFuture<*> {
         scope.cancel()
-        return SettableFuture.create<Unit>().apply { set(Unit) }
+        return Futures.immediateVoidFuture()
     }
 
     /**

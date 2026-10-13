@@ -33,7 +33,7 @@ fun Modifier.glassSource(state: HazeState?) = if (state != null) hazeSource(stat
 
 /**
  * Liquid glass: a real blur of what is behind (Haze, RenderEffect on
- * API 31+), a light tint with grain, then lens edges — a specular rim
+ * API 31+), a light tint with grain, then lens edges: a specular rim
  * brighter on top, a soft inner shadow at the bottom and a faint refraction
  * band along the border.
  */
