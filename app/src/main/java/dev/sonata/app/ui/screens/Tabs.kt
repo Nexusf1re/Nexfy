@@ -64,6 +64,7 @@ import dev.sonata.app.ui.design.PillSelector
 import dev.sonata.app.ui.design.SectionTitle
 import dev.sonata.app.ui.design.TrackRow
 import dev.sonata.app.ui.design.cascade
+import dev.sonata.app.ui.design.rememberCascade
 import dev.sonata.app.ui.design.rememberHaptics
 import dev.sonata.app.ui.design.rememberTitleCollapse
 import dev.sonata.app.ui.design.weightedPress
@@ -72,7 +73,7 @@ import dev.sonata.app.ui.theme.accentColor
 import uniffi.sonata_core.SearchResults
 import java.time.LocalTime
 
-private fun greeting(): String = when (LocalTime.now().hour) {
+internal fun greeting(): String = when (LocalTime.now().hour) {
     in 5..11 -> "Bom dia"
     in 12..17 -> "Boa tarde"
     else -> "Boa noite"
@@ -80,157 +81,9 @@ private fun greeting(): String = when (LocalTime.now().hour) {
 
 /** Shown when the Web API is not signed in yet. */
 @Composable
-private fun ConnectPrompt(actions: AppActions) = Column(horizontalAlignment = Alignment.CenterHorizontally) {
+internal fun ConnectPrompt(actions: AppActions) = Column(horizontalAlignment = Alignment.CenterHorizontally) {
     EmptyState(Icons.Rounded.LibraryMusic, "Conecte a biblioteca", "Entre com o app pessoal e o compartilhado em Ajustes para ver tuas playlists e buscar.")
     PillButton("Abrir ajustes", { actions.open(Route.Settings) })
-}
-
-@Composable
-fun HomeScreen(actions: AppActions, list: LazyListState) {
-    val collapse = rememberTitleCollapse(list)
-    val profile = rememberLoaded("profile") { actions.core.profile(it) }
-    val playlists = rememberLoaded("home-pl") { actions.core.myPlaylists(it) }
-    val albums = rememberLoaded("home-al") { actions.core.savedAlbums(it) }
-    val name = profile.state.value?.displayName?.substringBefore(' ')
-
-    Column(Modifier.fillMaxSize()) {
-        RootHeader("Início", collapse, actions)
-        LazyColumn(
-            Modifier.weight(1f),
-            state = list,
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = LocalBottomSpace.current),
-        ) {
-            item(key = "title") {
-                LargeTitle(if (name != null) "${greeting()}, $name" else greeting(), collapse)
-                Spacer(Modifier.height(12.dp))
-            }
-            item(key = "liked") { LikedTile { actions.open(Route.Liked) } }
-            if (playlists.state.error != null && playlists.state.value == null) {
-                item(key = "connect") { ConnectPrompt(actions) }
-            }
-            playlists.state.value?.takeIf { it.isNotEmpty() }?.let { items ->
-                item(key = "playlists") {
-                    Column {
-                        SectionTitle("Tuas playlists")
-                        Carousel(actions.nav.list("row:home-pl")) {
-                            items(items.take(20), key = { it.id }) { p ->
-                                CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}") { actions.open(Route.Playlist(p.id)) }
-                            }
-                        }
-                    }
-                }
-            }
-            albums.state.value?.takeIf { it.isNotEmpty() }?.let { items ->
-                item(key = "albums") {
-                    Column {
-                        SectionTitle("Álbuns salvos")
-                        Carousel(actions.nav.list("row:home-al")) {
-                            items(items.take(20), key = { it.id }) { a ->
-                                CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}") { actions.open(Route.Album(a.id)) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Big gradient tile for liked songs. */
-@Composable
-private fun LikedTile(onClick: () -> Unit) {
-    val source = remember { MutableInteractionSource() }
-    val haptics = rememberHaptics()
-    val accent = accentColor()
-    Row(
-        Modifier.fillMaxWidth().height(76.dp).weightedPress(source, 20.dp).clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF4B2BD6), accent.copy(alpha = .85f))))
-            .clickable(source, null) {
-                haptics.tick()
-                onClick()
-            }
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Favorite, null, tint = Color.White, modifier = Modifier.size(28.dp))
-        Spacer(Modifier.width(14.dp))
-        Text("Músicas curtidas", color = Color.White, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-private enum class Shelf(val label: String) { Playlists("Playlists"), Albums("Álbuns") }
-
-@Composable
-fun LibraryScreen(actions: AppActions, list: LazyListState) {
-    val collapse = rememberTitleCollapse(list)
-    var shelf by rememberSaveable { mutableStateOf(Shelf.Playlists) }
-    val playlists = rememberLoaded("lib-pl") { actions.core.myPlaylists(it) }
-    val albums = rememberLoaded("lib-al", shelf) { if (shelf == Shelf.Albums) actions.core.savedAlbums(it) else emptyList() }
-
-    Column(Modifier.fillMaxSize()) {
-        RootHeader("Biblioteca", collapse, actions)
-        LazyColumn(
-            Modifier.weight(1f),
-            state = list,
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = LocalBottomSpace.current),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            item(key = "title") { LargeTitle("Biblioteca", collapse, Modifier.padding(start = 4.dp)) }
-            item(key = "shelf") {
-                PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it }, Modifier.fillMaxWidth().padding(vertical = 12.dp))
-            }
-            when (shelf) {
-                Shelf.Playlists -> {
-                    item(key = "liked") {
-                        LibraryRow(null, "Músicas curtidas", "Playlist", liked = true) { actions.open(Route.Liked) }
-                    }
-                    val value = playlists.state.value
-                    if (value == null && playlists.state.error != null) item(key = "connect") { ConnectPrompt(actions) }
-                    itemsIndexed(value.orEmpty(), key = { _, p -> "pl:" + p.id }) { i, p ->
-                        Box(Modifier.cascade(i)) {
-                            LibraryRow(p.imageUrl, p.name, "Playlist · ${p.owner}") { actions.open(Route.Playlist(p.id)) }
-                        }
-                    }
-                }
-                Shelf.Albums -> itemsIndexed(albums.state.value.orEmpty(), key = { _, a -> "al:" + a.id }) { i, a ->
-                    Box(Modifier.cascade(i)) {
-                        LibraryRow(a.imageUrl, a.name, "Álbum · ${a.artists}") { actions.open(Route.Album(a.id)) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LibraryRow(imageUrl: String?, title: String, subtitle: String, round: Boolean = false, liked: Boolean = false, onClick: () -> Unit) {
-    val c = MaterialTheme.colorScheme
-    val source = remember { MutableInteractionSource() }
-    val haptics = rememberHaptics()
-    Row(
-        Modifier.fillMaxWidth().weightedPress(source, 16.dp).clip(RoundedCornerShape(16.dp))
-            .clickable(source, null) {
-                haptics.tick()
-                onClick()
-            }
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (liked) {
-            Box(
-                Modifier.size(64.dp).clip(RoundedCornerShape(12.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF4B2BD6), accentColor().copy(alpha = .85f)))),
-                contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Rounded.Favorite, null, tint = Color.White) }
-        } else {
-            Cover(imageUrl, Modifier.size(64.dp), if (round) 32.dp else 12.dp)
-        }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
 }
 
 @Composable
@@ -242,6 +95,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
     var results by remember { mutableStateOf<SearchResults?>(null) }
     var searching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    val cascadeClock = rememberCascade(results)
 
     // Search once typing pauses.
     LaunchedEffect(query) {
@@ -310,7 +164,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
             } else {
                 if (r.tracks.isNotEmpty()) item(key = "s-tracks") { SectionTitle("Músicas", Modifier.padding(start = 4.dp)) }
                 itemsIndexed(r.tracks, key = { _, t -> "t:" + t.uri }) { i, t ->
-                    Box(Modifier.cascade(i)) {
+                    Box(Modifier.cascade(i, cascadeClock)) {
                         TrackRow(t, {
                             keyboard?.hide()
                             actions.play(r.tracks, i)

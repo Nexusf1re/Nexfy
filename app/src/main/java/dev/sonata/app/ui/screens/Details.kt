@@ -50,6 +50,7 @@ fun PlaylistScreen(actions: AppActions, id: String, list: LazyListState, modifie
             imageUrl = d.playlist.imageUrl,
             tracks = d.tracks,
             modifier = modifier,
+            source = "pl:$id",
         )
     }
 }
@@ -68,6 +69,7 @@ fun AlbumScreen(actions: AppActions, id: String, list: LazyListState, modifier: 
             tracks = d.tracks,
             modifier = modifier,
             numbered = true,
+            source = "al:$id",
             onSubtitle = artistId?.let { { actions.open(Route.Artist(it)) } },
         )
     }
@@ -86,6 +88,7 @@ fun ArtistScreen(actions: AppActions, id: String, list: LazyListState, modifier:
             tracks = d.topTracks,
             modifier = modifier,
             round = true,
+            source = "ar:$id",
         ) {
             if (d.albums.isNotEmpty()) {
                 item(key = "discography") {
@@ -145,6 +148,7 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
         imageUrl = tracks.firstOrNull()?.imageUrl,
         tracks = tracks,
         modifier = modifier,
+        source = "liked",
     ) {
         if (loading) {
             item(key = "loading") {

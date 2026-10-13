@@ -125,6 +125,15 @@ pub struct TrackPage {
     pub next_offset: Option<u32>,
 }
 
+/// One recent play and the playlist/album it was played from, if any.
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct RecentPlay {
+    pub track: Track,
+    /// `spotify:playlist:…`, `spotify:album:…`, `spotify:artist:…` or None.
+    pub context_uri: Option<String>,
+    pub played_at: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, uniffi::Record)]
 pub struct SearchResults {
     pub tracks: Vec<Track>,
@@ -244,6 +253,19 @@ struct RawProfile {
     #[serde(default)]
     images: Vec<RawImage>,
     product: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawContext {
+    uri: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRecentPlay {
+    #[serde(alias = "item")]
+    track: Option<RawTrack>,
+    played_at: Option<String>,
+    context: Option<RawContext>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -786,6 +808,46 @@ impl WebApi {
                 |a: &Album| &a.id,
             ),
         })
+    }
+
+    /// The last 50 plays, newest first, with the playlist or album each
+    /// came from. Spotify gives no per-playlist play counts; these contexts
+    /// are the closest signal of what is listened to most.
+    pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>> {
+        let page: Paging<RawRecentPlay> = self
+            .cached("/me/player/recently-played?limit=50", Route::Personal, Duration::from_secs(300), refresh)
+            .await?;
+        Ok(page
+            .items
+            .into_iter()
+            .flatten()
+            .filter_map(|play| {
+                Some(RecentPlay {
+                    track: play.track?.into_track(None)?,
+                    context_uri: play.context.and_then(|c| c.uri),
+                    played_at: play.played_at.unwrap_or_default(),
+                })
+            })
+            .collect())
+    }
+
+    /// The user's most played tracks of the last weeks.
+    pub async fn top_tracks(&self, refresh: bool) -> Result<Vec<Track>> {
+        let page: Paging<RawTrack> = self
+            .cached("/me/top/tracks?time_range=short_term&limit=30", Route::Personal, Duration::from_secs(3600), refresh)
+            .await?;
+        Ok(page.items.into_iter().flatten().filter_map(|t| t.into_track(None)).collect())
+    }
+
+    /// The user's most played artists of the last months.
+    pub async fn top_artists(&self, refresh: bool) -> Result<Vec<Artist>> {
+        let page: Paging<RawArtist> = self
+            .cached("/me/top/artists?time_range=medium_term&limit=20", Route::Personal, Duration::from_secs(3600), refresh)
+            .await?;
+        Ok(dedupe(
+            page.items.into_iter().flatten().map(RawArtist::into_artist).collect(),
+            |a: &Artist| &a.id,
+        ))
     }
 
     /// Songs, albums and artists from the personal app (10 each, its

@@ -13,4 +13,6 @@ class SonataApp : Application() {
     }
 
     val bridge: CoreBridge by lazy { CoreBridge(core) }
+
+    val library: LibraryPrefs by lazy { LibraryPrefs(this) }
 }

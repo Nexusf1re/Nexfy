@@ -111,6 +111,8 @@ fun CollectionScreen(
     numbered: Boolean = false,
     round: Boolean = false,
     onSubtitle: (() -> Unit)? = null,
+    /** Library key counted when playing from here (`pl:<id>`, `al:<id>`, `liked`). */
+    source: String? = null,
     footer: LazyListScope.() -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
@@ -173,13 +175,13 @@ fun CollectionScreen(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             GlassIcon(Icons.Rounded.Shuffle, "Aleatório", {
                                 haptics.press()
-                                actions.play(tracks, tracks.indices.random(), shuffle = true)
+                                actions.play(tracks, tracks.indices.random(), shuffle = true, source = source)
                             }, enabled = tracks.isNotEmpty())
                             GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape) {
                                 Row(
                                     Modifier.matchParentSize().clickable(enabled = tracks.isNotEmpty()) {
                                         haptics.press()
-                                        actions.play(tracks)
+                                        actions.play(tracks, source = source)
                                     },
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
@@ -196,7 +198,7 @@ fun CollectionScreen(
                     Box(Modifier.padding(horizontal = 16.dp)) {
                         TrackRow(
                             track,
-                            { actions.play(tracks, i) },
+                            { actions.play(tracks, i, source = source) },
                             number = if (numbered) i + 1 else null,
                             playing = nowPlaying.track?.uri == track.uri,
                             // Long press opens the track's album.
@@ -211,7 +213,7 @@ fun CollectionScreen(
             }
         }
         Box(Modifier.statusBarsPadding()) {
-            DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks) }
+            DetailTopBar(title, collapse, back) { haptics.press(); actions.play(tracks, source = source) }
         }
     }
 }

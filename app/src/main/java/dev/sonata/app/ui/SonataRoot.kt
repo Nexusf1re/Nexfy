@@ -143,9 +143,14 @@ class AppActions(
     fun open(route: Route) = nav.push(route)
     fun back() = nav.pop()
 
-    /** Play [tracks] as the queue, starting at [index]. */
-    fun play(tracks: List<Track>, index: Int = 0, shuffle: Boolean = false) {
+    /**
+     * Play [tracks] as the queue, starting at [index]. [source] is the
+     * library key it came from (`pl:<id>`, `al:<id>`, `liked`), counted for
+     * the "most played" order.
+     */
+    fun play(tracks: List<Track>, index: Int = 0, shuffle: Boolean = false, source: String? = null) {
         if (tracks.isEmpty()) return
+        source?.let(app.library::recordPlay)
         val items = tracks.map { MediaItem.Builder().setMediaId(it.uri).build() }
         controller()?.run {
             shuffleModeEnabled = shuffle

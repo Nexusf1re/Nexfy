@@ -124,10 +124,33 @@ fun Modifier.springPress(source: MutableInteractionSource): Modifier {
     }
 }
 
-/** List entrance: each item arrives a little after the one above and settles. */
+/**
+ * When a list's content first appeared. Items composed later than
+ * [Cascade.WINDOW_MS] after that (scrolled into view) skip the entrance, so
+ * a fast fling never shows rows that are still invisible.
+ */
+class Cascade {
+    private val start = android.os.SystemClock.uptimeMillis()
+    val active get() = android.os.SystemClock.uptimeMillis() - start < WINDOW_MS
+
+    companion object {
+        const val WINDOW_MS = 600L
+    }
+}
+
+/** A cascade clock that restarts whenever [key] (the list's content) changes. */
 @Composable
-fun Modifier.cascade(index: Int): Modifier {
+fun rememberCascade(key: Any?): Cascade = remember(key) { Cascade() }
+
+/**
+ * List entrance on first appearance: each item arrives a little after the
+ * one above and settles. Items scrolled into view later appear at once.
+ */
+@Composable
+fun Modifier.cascade(index: Int, clock: Cascade): Modifier {
     if (LocalInspectionMode.current) return this
+    val animate = remember { clock.active }
+    if (!animate) return this
     val a = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         delay(index.coerceAtMost(12) * 45L)

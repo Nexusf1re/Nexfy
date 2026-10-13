@@ -27,8 +27,8 @@ use tokio::net::TcpListener;
 pub use queue::RepeatMode;
 use queue::Queue;
 pub use webapi::{
-    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, Profile, SearchResults,
-    Track, TrackPage, WebApp, WebStatus,
+    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, Profile, RecentPlay,
+    SearchResults, Track, TrackPage, WebApp, WebStatus,
 };
 use webapi::WebApi;
 
@@ -279,6 +279,18 @@ impl SonataCore {
 
     pub async fn artist(&self, id: String, refresh: bool) -> Result<ArtistDetail, CoreError> {
         self.inner.web.artist(&id, refresh).await.map_err(web_error)
+    }
+
+    pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>, CoreError> {
+        self.inner.web.recently_played(refresh).await.map_err(web_error)
+    }
+
+    pub async fn top_tracks(&self, refresh: bool) -> Result<Vec<Track>, CoreError> {
+        self.inner.web.top_tracks(refresh).await.map_err(web_error)
+    }
+
+    pub async fn top_artists(&self, refresh: bool) -> Result<Vec<Artist>, CoreError> {
+        self.inner.web.top_artists(refresh).await.map_err(web_error)
     }
 
     pub async fn search(&self, query: String) -> Result<SearchResults, CoreError> {
