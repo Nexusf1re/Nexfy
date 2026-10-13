@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.foundation.lazy.itemsIndexed
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.snapshotFlow
@@ -172,6 +174,15 @@ interface PlayerControls {
     /** Volume of the device playing elsewhere, 0 to 100. */
     fun setVolume(percent: Int)
 
+    /** Open an artist page (from the player's song menu). */
+    fun openArtist(id: String, name: String)
+
+    /** Open an album page (from the player's song menu). */
+    fun openAlbum(id: String, name: String, artists: String, imageUrl: String?)
+
+    /** What plays next on the device playing elsewhere. */
+    suspend fun remoteQueue(): List<Track>
+
     /** Show the devices sheet. */
     fun openDevices()
 
@@ -230,6 +241,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     // so next is only off for a lone song with repeat off.
     val hasNext = s.queue.next.isNotEmpty() || s.queue.contextUri != null || s.queue.repeat == RepeatMode.ALL
     var showQueue by remember { mutableStateOf(false) }
+    var showActions by remember { mutableStateOf(false) }
+    if (showActions) {
+        TrackActionsSheet(track, controls, onNavigate = { scope.launch { f.animateTo(0f, settle) } }) { showActions = false }
+    }
     if (showQueue) QueueSheet(s, controls) { showQueue = false }
 
     val pf = { f.value.coerceIn(0f, 1f) }
@@ -500,11 +515,16 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         IconButton({ scope.launch { f.animateTo(0f, settle) } }) {
                             Icon(Icons.Rounded.KeyboardArrowDown, "Recolher", tint = Color.White)
                         }
+                        // Balances the two buttons on the right, keeping the handle centred.
+                        Spacer(Modifier.width(48.dp))
                         Spacer(Modifier.weight(1f))
                         Box(Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape).background(Color.White.copy(.35f)))
                         Spacer(Modifier.weight(1f))
                         IconButton({ controls.openDevices() }) {
                             Icon(Icons.Rounded.Devices, "Dispositivos", tint = if (s.remote != null) accentColor() else Color.White)
+                        }
+                        IconButton({ showActions = true }) {
+                            Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White)
                         }
                     }
                     // Lyrics sit inside the cover's square, over the blurred art.
@@ -715,6 +735,7 @@ private fun BoxScope.SeekRipple(id: Long, dir: Int) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () -> Unit) {
+    if (s.remote != null) return RemoteQueueSheet(s, controls, onDismiss)
     val c = MaterialTheme.colorScheme
     val next = s.queue.next
     val uris = remember(next) { next.map { it.uri } }
@@ -763,6 +784,63 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
                         fontSize = 14.sp,
                         modifier = Modifier.padding(vertical = 16.dp),
                     )
+                }
+            }
+        }
+    }
+}
+
+/** Most songs ahead skipped to by sending "next" repeatedly to another device. */
+private const val REMOTE_SKIP_MAX = 5
+
+/**
+ * The queue of the device playing elsewhere, read from Spotify each time
+ * the song changes. Near songs can be jumped to; the Web API has no
+ * direct jump, so it sends "next" that many times.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    var next by remember { mutableStateOf<List<Track>?>(null) }
+    LaunchedEffect(s.track?.uri) {
+        next = try {
+            controls.remoteQueue()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+            s.track?.let { track ->
+                item(key = "now") {
+                    QueueHeading("Tocando agora em ${s.remote?.name.orEmpty()}")
+                    QueueRow(track.coverUrl, track.title, track.artists, highlight = true) {}
+                }
+            }
+            val list = next
+            when {
+                list == null -> items(5, key = { "sk$it" }) { QueueEntryRow(null, it) {} }
+                list.isEmpty() -> item(key = "empty") {
+                    Text(
+                        "Nada na fila. Ao terminar, o Spotify continua com músicas parecidas.",
+                        color = c.onSurfaceVariant,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                    )
+                }
+                else -> {
+                    item(key = "h-next") { QueueHeading("A seguir") }
+                    itemsIndexed(list, key = { i, t -> "r$i:${t.uri}" }) { i, t ->
+                        QueueEntryRow(t, i) {
+                            if (i < REMOTE_SKIP_MAX) {
+                                repeat(i + 1) { controls.next() }
+                                onDismiss()
+                            }
+                        }
+                    }
                 }
             }
         }

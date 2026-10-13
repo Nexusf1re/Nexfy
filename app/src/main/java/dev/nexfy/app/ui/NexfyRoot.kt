@@ -286,6 +286,13 @@ class AppActions(
 
     override suspend fun devices(): List<Device> = core.devices()
 
+    override suspend fun remoteQueue(): List<Track> = core.remoteQueue()
+
+    override fun openArtist(id: String, name: String) = open(Route.Artist(id), Peek(name))
+
+    override fun openAlbum(id: String, name: String, artists: String, imageUrl: String?) =
+        open(Route.Album(id), Peek(name, artists, imageUrl))
+
     /** Whether the devices sheet is open; any screen can open it. */
     val showDevices = mutableStateOf(false)
 

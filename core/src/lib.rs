@@ -372,8 +372,25 @@ impl NexfyCore {
         self.inner.web.album(&id, refresh).await.map_err(web_error)
     }
 
+    /// Web API first; Spotify refuses development-mode apps an artist's top
+    /// tracks, so the page then comes from the session (cached a day).
     pub async fn artist(&self, id: String, refresh: bool) -> Result<ArtistDetail, CoreError> {
-        self.inner.web.artist(&id, refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        match web.artist(&id, refresh).await {
+            Ok(detail) => Ok(detail),
+            Err(error) => {
+                log::info!("artist {id} via session: {error:#}");
+                let key = format!("session:artist:{id}");
+                let ttl = std::time::Duration::from_secs(86_400);
+                if let Some(detail) = web.load_local::<ArtistDetail>(&key, ttl).filter(|_| !refresh) {
+                    return Ok(detail);
+                }
+                let session = self.inner.live_session().await?;
+                let detail = session_reads::artist(&session, &id).await.map_err(web_error)?;
+                web.save_local(&key, &detail);
+                Ok(detail)
+            }
+        }
     }
 
     pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>, CoreError> {
@@ -610,6 +627,11 @@ impl NexfyCore {
     /// Move playback to another device (or back to this phone).
     pub async fn transfer(&self, device_id: String, play: bool) -> Result<(), CoreError> {
         remote::transfer(&self.inner.web.player_tokens().await, &device_id, play).await.map_err(web_error)
+    }
+
+    /// What plays next on the device playing elsewhere.
+    pub async fn remote_queue(&self) -> Result<Vec<Track>, CoreError> {
+        remote::queue(&self.inner.web.player_tokens().await).await.map_err(web_error)
     }
 
     /// Control the device that is playing.

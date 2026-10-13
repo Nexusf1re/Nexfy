@@ -246,3 +246,18 @@ pub async fn command(tokens: &[String], command: RemoteCommand) -> Result<()> {
     send(tokens, method, &path, body).await?;
     Ok(())
 }
+
+/// What plays next on the active device (Spotify's queue, user-queued songs
+/// first, then the context), up to 20 songs.
+pub async fn queue(tokens: &[String]) -> Result<Vec<Track>> {
+    #[derive(Deserialize)]
+    struct Queue {
+        #[serde(default)]
+        queue: Vec<serde_json::Value>,
+    }
+    let Some(json) = send(tokens, Method::GET, "/queue", None).await? else {
+        return Ok(Vec::new());
+    };
+    let queue: Queue = serde_json::from_value(json)?;
+    Ok(queue.queue.into_iter().filter_map(webapi::parse_track).collect())
+}

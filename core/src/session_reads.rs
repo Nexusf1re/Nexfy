@@ -8,9 +8,9 @@ use anyhow::{Result, anyhow};
 use futures_util::{StreamExt, stream};
 use librespot_core::SpotifyUri;
 use librespot_core::session::Session;
-use librespot_metadata::{Metadata, Playlist as SessionPlaylist, Track as SessionTrack};
+use librespot_metadata::{Album as SessionAlbum, Artist as SessionArtist, Metadata, Playlist as SessionPlaylist, Track as SessionTrack};
 
-use crate::webapi::Track;
+use crate::webapi::{Album, Artist, ArtistDetail, Track};
 
 /// Same cap as Web API lists, so huge playlists do not stall the screen.
 const MAX_TRACKS: usize = 2000;
@@ -98,5 +98,53 @@ pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData
         name: playlist.attributes.name.clone(),
         description: playlist.attributes.description.clone(),
         tracks,
+    })
+}
+
+/// Most releases shown on an artist page read through the session.
+const MAX_RELEASES: usize = 20;
+
+/// An artist page from the session: Spotify refuses development-mode apps
+/// an artist's top tracks. Followers are not in the metadata (0).
+pub async fn artist(session: &Session, id: &str) -> Result<ArtistDetail> {
+    let uri = SpotifyUri::from_uri(&format!("spotify:artist:{id}")).map_err(|e| anyhow!("{e}"))?;
+    let artist = SessionArtist::get(session, &uri).await?;
+    let country = session.user_data().country;
+    let top: Vec<SpotifyUri> = artist.top_tracks.for_country(&country).0;
+    let top_tracks = tracks(session, &top.iter().map(|uri| uri.to_uri()).collect::<Vec<_>>()).await;
+    let releases: Vec<SpotifyUri> = artist
+        .albums_current()
+        .chain(artist.singles_current())
+        .take(MAX_RELEASES)
+        .cloned()
+        .collect();
+    let albums = stream::iter(releases)
+        .map(|uri| async move { SessionAlbum::get(session, &uri).await })
+        .buffered(CONCURRENCY)
+        .filter_map(|result| async move {
+            let album = result.ok()?;
+            Some(Album {
+                id: album.id.to_id(),
+                uri: album.id.to_uri(),
+                name: album.name.clone(),
+                artists: album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "),
+                image_url: album.covers.first().map(|image| cover_url(&image.id)),
+                year: Some(album.date.year().to_string()),
+                track_count: album.discs.iter().map(|disc| disc.tracks.len() as u32).sum(),
+            })
+        })
+        .collect()
+        .await;
+    let portrait = artist.portraits.iter().max_by_key(|image| image.width).or_else(|| artist.portrait_group.first());
+    Ok(ArtistDetail {
+        artist: Artist {
+            id: id.to_owned(),
+            uri: format!("spotify:artist:{id}"),
+            name: artist.name.clone(),
+            image_url: portrait.map(|image| cover_url(&image.id)),
+            followers: 0,
+        },
+        top_tracks,
+        albums,
     })
 }
