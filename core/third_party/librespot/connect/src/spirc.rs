@@ -1860,21 +1860,12 @@ impl SpircTask {
     }
 
     fn handle_prev(&mut self) -> Result<(), Error> {
-        // Previous behaves differently based on the position
-        // Under 3s it goes to the previous song (starts playing)
-        // Over 3s it seeks to zero (retains previous play status)
-        if self.position() < 3000 {
-            let repeat_context = self.connect_state.repeat_context();
-            match self.connect_state.prev_track()? {
-                None if repeat_context => self.connect_state.reset_playback_to_position(None)?,
-                None => {
-                    self.connect_state.reset_playback_to_position(None)?;
-                    self.handle_stop()
-                }
-                Some(_) => self.load_track(self.connect_state.is_playing(), 0)?,
-            }
-        } else {
-            self.handle_seek(0);
+        // Nexfy: previous always goes to the previous song (restarting the
+        // current one took a second press after its first 3 s). At the first
+        // song it starts it over instead of stopping playback.
+        match self.connect_state.prev_track()? {
+            Some(_) => self.load_track(self.connect_state.is_playing(), 0)?,
+            None => self.handle_seek(0),
         }
 
         Ok(())

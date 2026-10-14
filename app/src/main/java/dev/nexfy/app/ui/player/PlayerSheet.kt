@@ -283,9 +283,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     val haptics = rememberHaptics()
     val position = rememberPosition(s)
     val duration = track.durationMs.toLong().coerceAtLeast(1)
-    // Spotify continues with similar songs (autoplay) after a context ends,
-    // so next is only off for a lone song with repeat off.
-    val hasNext = s.queue.next.isNotEmpty() || s.queue.contextUri != null || s.queue.repeat == RepeatMode.ALL
+    // Next only when something follows: the queue (the rest of the context is
+    // in it) or repeat. Autoplay does not run here, so the context's end is
+    // the end. Another device keeps its own queue: assume it has one.
+    val hasNext = s.remote != null || s.queue.next.isNotEmpty() || s.queue.repeat == RepeatMode.ALL
     var showQueue by remember { mutableStateOf(false) }
     var showActions by remember { mutableStateOf(false) }
     if (showActions) {
@@ -479,13 +480,28 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     .then(
                         if (settled && !showLyrics && !flipped) {
                             Modifier.draggable(
-                                rememberDraggableState { d -> scope.snapNow(throwX, throwX.value + d) },
+                                rememberDraggableState { d ->
+                                    // Nothing comes next: the cover gives way less and less, like
+                                    // a rubber band, instead of acting as if a song would follow.
+                                    val step = if (!hasNext && throwX.value + d < 0f) {
+                                        d * .35f / (1f + kotlin.math.abs(throwX.value) / (fullW * .12f))
+                                    } else {
+                                        d
+                                    }
+                                    scope.snapNow(throwX, throwX.value + step)
+                                },
                                 Orientation.Horizontal,
                                 onDragStopped = { v ->
                                     val go = when {
                                         throwX.value < -fullW / 3 || v < -1800f -> 1
                                         throwX.value > fullW / 3 || v > 1800f -> -1
                                         else -> 0
+                                    }
+                                    if (!hasNext && throwX.value < 0f) {
+                                        // A short, bouncy "no" on the way back.
+                                        if (go == 1 || throwX.value < -fullW * .06f) haptics.tick()
+                                        throwX.animateTo(0f, spring(dampingRatio = .3f, stiffness = 700f), initialVelocity = v * .3f)
+                                        return@draggable
                                     }
                                     if (go != 0 && (go == -1 || hasNext)) {
                                         haptics.press()
