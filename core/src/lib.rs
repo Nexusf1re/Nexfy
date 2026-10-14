@@ -1317,6 +1317,22 @@ async fn read_releases(inner: &Arc<Inner>) -> Result<Vec<Album>, CoreError> {
             }
         }
     }
+    if ids.len() < 8 {
+        // The Web API could not say who the user listens to: the artists of
+        // the songs the app knows (the queue and playlists opened) instead.
+        let cache = inner.track_cache.lock().unwrap();
+        let mut counts: HashMap<&String, usize> = HashMap::new();
+        for id in cache.values().flat_map(|track| track.artist_ids.iter()) {
+            *counts.entry(id).or_default() += 1;
+        }
+        let mut known: Vec<(&String, usize)> = counts.into_iter().collect();
+        known.sort_by(|a, b| b.1.cmp(&a.1));
+        for (id, _) in known.into_iter().take(30) {
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+    }
     let session = inner.live_session().await?;
     let albums = session_reads::releases(&session, &ids, 90, 20).await;
     if !albums.is_empty() {
