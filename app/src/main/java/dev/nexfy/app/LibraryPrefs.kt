@@ -114,6 +114,16 @@ class LibraryPrefs(context: Context) {
     /** Download the next songs of the queue ahead, on Wi-Fi. */
     val prefetchQueue: StateFlow<Boolean> = _prefetchQueue
 
+    private val _coverAccent = MutableStateFlow(prefs.getBoolean(COVER_ACCENT, true))
+
+    /** The accent takes the colour of the playing song's cover ("Cor da música"). */
+    val coverAccent: StateFlow<Boolean> = _coverAccent
+
+    fun setCoverAccent(on: Boolean) {
+        _coverAccent.value = on
+        prefs.edit { putBoolean(COVER_ACCENT, on) }
+    }
+
     fun toggleKept(key: String) {
         val now = _kept.value.let { if (key in it) it - key else it + key }
         _kept.value = now
@@ -193,6 +203,7 @@ class LibraryPrefs(context: Context) {
         const val PLAYS = "plays"
         const val KEPT = "kept"
         const val PREFETCH_QUEUE = "prefetch_queue"
+        const val COVER_ACCENT = "cover_accent"
         const val SHELF = "shelf"
         const val LYRICS_OPEN = "lyrics_open"
         const val LIBRARY_GRID = "library_grid"

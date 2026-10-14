@@ -25,6 +25,20 @@ pub struct LyricsLine {
     /// When the line starts; None in lyrics without timing.
     pub at_ms: Option<u32>,
     pub text: String,
+    /// Word (or syllable) timings when the source has them; their texts
+    /// join back into `text` exactly, so the view can map them to offsets.
+    #[serde(default)]
+    pub words: Vec<LyricsWord>,
+    /// When the last word ends, if the source says.
+    #[serde(default)]
+    pub end_ms: Option<u32>,
+}
+
+/// One timed piece of a line: a word with its trailing space, or a syllable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
+pub struct LyricsWord {
+    pub at_ms: u32,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, uniffi::Record)]
@@ -76,24 +90,34 @@ async fn from_spotify(session: &Session, id: &str) -> Result<Option<Lyrics>> {
     Ok(parse_spotify(&json))
 }
 
-/// Parses Spotify's `color-lyrics` response.
+/// A time or count Spotify sends as a string ("1234") or, sometimes, a number.
+fn spotify_ms(value: Option<&serde_json::Value>) -> Option<u32> {
+    let value = value?;
+    value.as_str().and_then(|s| s.parse().ok()).or_else(|| value.as_u64().map(|n| n as u32))
+}
+
+/// Parses Spotify's `color-lyrics` response. "SYLLABLE_SYNCED" lines are
+/// timed like "LINE_SYNCED" ones and carry their syllables on top.
 fn parse_spotify(json: &serde_json::Value) -> Option<Lyrics> {
     let lyrics = json.get("lyrics")?;
-    let synced = lyrics.get("syncType").and_then(|v| v.as_str()) == Some("LINE_SYNCED");
+    let sync = lyrics.get("syncType").and_then(|v| v.as_str()).unwrap_or_default();
+    let synced = sync == "LINE_SYNCED" || sync == "SYLLABLE_SYNCED";
     let lines: Vec<LyricsLine> = lyrics
         .get("lines")?
         .as_array()?
         .iter()
         .filter_map(|line| {
-            let text = line.get("words")?.as_str()?.trim();
+            let raw = line.get("words")?.as_str()?;
+            let text = raw.trim();
             if text.is_empty() || text == "\u{266a}" {
                 return None;
             }
-            let at_ms = line
-                .get("startTimeMs")
-                .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_u64().map(|n| n as u32)))
-                .filter(|_| synced);
-            Some(LyricsLine { at_ms, text: text.to_owned() })
+            let at_ms = spotify_ms(line.get("startTimeMs")).filter(|_| synced);
+            let (words, end_ms) = match (at_ms, line.get("syllables").and_then(|v| v.as_array())) {
+                (Some(_), Some(syllables)) if !syllables.is_empty() => spotify_syllables(raw, syllables, line),
+                _ => (Vec::new(), None),
+            };
+            Some(LyricsLine { at_ms, text: text.to_owned(), words, end_ms })
         })
         .collect();
     if lines.is_empty() {
@@ -101,6 +125,73 @@ fn parse_spotify(json: &serde_json::Value) -> Option<Lyrics> {
     }
     let synced = synced && lines.iter().all(|line| line.at_ms.is_some());
     Some(Lyrics { lines, synced, instrumental: false, source: "Spotify".into() })
+}
+
+/// Syllables to timed pieces of the line. Each syllable gives its start and
+/// its position (`charsIndex`), its length (`numChars`) or its own text; a
+/// piece runs to the next syllable, so spaces stay with the word before
+/// them. Anything that does not add up drops the timings, never the line.
+fn spotify_syllables(raw: &str, syllables: &[serde_json::Value], line: &serde_json::Value) -> (Vec<LyricsWord>, Option<u32>) {
+    let chars: Vec<char> = raw.chars().collect();
+    let count = |v: Option<&serde_json::Value>| spotify_ms(v).map(|n| n as usize);
+    let mut cursor = 0usize;
+    let mut starts: Vec<(usize, u32)> = Vec::new();
+    for syllable in syllables {
+        let Some(at) = spotify_ms(syllable.get("startTimeMs")) else {
+            return (Vec::new(), None);
+        };
+        let own = syllable.get("words").or_else(|| syllable.get("text")).and_then(|v| v.as_str());
+        let explicit = count(syllable.get("charsIndex").or_else(|| syllable.get("charIndex")).or_else(|| syllable.get("startIndex")))
+            .or_else(|| own.and_then(|own| find_chars(&chars, own, cursor)));
+        let length = count(syllable.get("numChars").or_else(|| syllable.get("length")))
+            .or_else(|| own.map(|own| own.chars().count()));
+        if explicit.is_none() && length.is_none() {
+            // Nothing tells where this syllable sits or where the next one starts.
+            return (Vec::new(), None);
+        }
+        let index = explicit.unwrap_or(cursor);
+        cursor = index + length.unwrap_or(0);
+        starts.push((index, at));
+    }
+    let last_at = starts.last().map(|s| s.1).unwrap_or_default();
+    let end_ms = syllables
+        .last()
+        .and_then(|s| spotify_ms(s.get("endTimeMs")))
+        .filter(|end| *end > last_at)
+        .or_else(|| spotify_ms(line.get("endTimeMs")).filter(|end| *end > last_at));
+    let pieces = starts.iter().enumerate().filter_map(|(i, &(index, at))| {
+        let from = if i == 0 { 0 } else { index.min(chars.len()) };
+        let to = starts.get(i + 1).map(|s| s.0).unwrap_or(chars.len()).min(chars.len());
+        (from < to).then(|| (at, chars[from..to].iter().collect::<String>()))
+    });
+    (checked_words(pieces.collect(), raw.trim()), end_ms)
+}
+
+/// Where `needle` next appears in `chars`, from `from` on.
+fn find_chars(chars: &[char], needle: &str, from: usize) -> Option<usize> {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() || needle.len() > chars.len() {
+        return None;
+    }
+    (from..=chars.len() - needle.len()).find(|&i| chars[i..i + needle.len()] == needle[..])
+}
+
+/// Timed pieces trimmed like their line; empty unless they join back into
+/// `text` exactly and their times only move forward.
+fn checked_words(mut pieces: Vec<(u32, String)>, text: &str) -> Vec<LyricsWord> {
+    pieces.retain(|(_, piece)| !piece.is_empty());
+    if let Some(first) = pieces.first_mut() {
+        first.1 = first.1.trim_start().to_owned();
+    }
+    if let Some(last) = pieces.last_mut() {
+        last.1 = last.1.trim_end().to_owned();
+    }
+    pieces.retain(|(_, piece)| !piece.is_empty());
+    let joined: String = pieces.iter().map(|(_, piece)| piece.as_str()).collect();
+    if joined != text || pieces.windows(2).any(|w| w[1].0 < w[0].0) {
+        return Vec::new();
+    }
+    pieces.into_iter().map(|(at_ms, text)| LyricsWord { at_ms, text }).collect()
 }
 
 // ----------------------------------------------------------------- LRCLIB --
@@ -136,7 +227,7 @@ impl Record {
         let lines = self
             .plain()?
             .lines()
-            .map(|line| LyricsLine { at_ms: None, text: line.trim_end().to_owned() })
+            .map(|line| LyricsLine { at_ms: None, text: line.trim_end().to_owned(), words: Vec::new(), end_ms: None })
             .collect();
         Some(Lyrics { lines, synced: false, instrumental: false, source })
     }
@@ -280,17 +371,27 @@ fn normalize(text: &str) -> String {
 }
 
 /// LRC text to timed lines, sorted; lines may carry several stamps.
+/// Enhanced LRC word stamps ("<mm:ss.xx>word") become word timings.
 fn parse_lrc(text: &str) -> Vec<LyricsLine> {
     let mut lines = Vec::new();
     for raw in text.lines() {
         let mut rest = raw.trim();
         let mut stamps = Vec::new();
-        while let Some((ms, len)) = leading_stamp(rest) {
+        while let Some((ms, len)) = leading_stamp(rest, '[', ']') {
             stamps.push(ms);
             rest = rest[len..].trim_start();
         }
+        let Some(&first) = stamps.first() else { continue };
+        let (text, words, end_ms) = lrc_words(rest, first);
         for ms in stamps {
-            lines.push(LyricsLine { at_ms: Some(ms), text: rest.to_owned() });
+            // A repeated line sings its words as much later as it starts.
+            let shift = |at: u32| at.saturating_add(ms).saturating_sub(first);
+            lines.push(LyricsLine {
+                at_ms: Some(ms),
+                text: text.clone(),
+                words: words.iter().map(|w| LyricsWord { at_ms: shift(w.at_ms), text: w.text.clone() }).collect(),
+                end_ms: end_ms.map(shift),
+            });
         }
     }
     lines.sort_by_key(|line| line.at_ms);
@@ -298,12 +399,51 @@ fn parse_lrc(text: &str) -> Vec<LyricsLine> {
     lines
 }
 
-/// "[mm:ss.xx]" at the start of `text`: its time in ms and its length.
-fn leading_stamp(text: &str) -> Option<(u32, usize)> {
-    let end = text.strip_prefix('[')?.find(']')? + 1;
+/// The text of an LRC line without its word stamps, its timed words (empty
+/// when it has none) and the closing stamp after the last word, if any.
+fn lrc_words(rest: &str, line_ms: u32) -> (String, Vec<LyricsWord>, Option<u32>) {
+    let mut pieces: Vec<(u32, String)> = vec![(line_ms, String::new())];
+    let mut tagged = false;
+    let mut tail = rest;
+    while let Some(open) = tail.find('<') {
+        let current = &mut pieces.last_mut().expect("starts with one piece").1;
+        if let Some((ms, len)) = leading_stamp(&tail[open..], '<', '>') {
+            current.push_str(&tail[..open]);
+            pieces.push((ms, String::new()));
+            tagged = true;
+            tail = &tail[open + len..];
+        } else {
+            current.push_str(&tail[..=open]);
+            tail = &tail[open + 1..];
+        }
+    }
+    pieces.last_mut().expect("starts with one piece").1.push_str(tail);
+    let text = pieces.iter().map(|(_, piece)| piece.as_str()).collect::<String>().trim().to_owned();
+    if !tagged {
+        return (text, Vec::new(), None);
+    }
+    // A stamp with nothing after it closes the line.
+    let end_ms = pieces.last().filter(|(_, piece)| piece.trim().is_empty()).map(|(ms, _)| *ms);
+    // Spaces between stamps belong to the word before them.
+    let mut merged: Vec<(u32, String)> = Vec::new();
+    for (ms, piece) in pieces {
+        match merged.last_mut() {
+            Some(last) if piece.trim().is_empty() => last.1.push_str(&piece),
+            _ if piece.trim().is_empty() => {}
+            _ => merged.push((ms, piece)),
+        }
+    }
+    let words = checked_words(merged, &text);
+    (text, words, end_ms)
+}
+
+/// A "[mm:ss.xx]" stamp (or "<mm:ss.xx>", with those delimiters) at the
+/// start of `text`: its time in ms and its length.
+fn leading_stamp(text: &str, open: char, close: char) -> Option<(u32, usize)> {
+    let end = text.strip_prefix(open)?.find(close)? + 1;
     let (minutes, seconds) = text[1..end].split_once(':')?;
-    let minutes: u32 = minutes.parse().ok()?;
-    let seconds: f64 = seconds.parse().ok()?;
+    let minutes: u32 = minutes.trim().parse().ok()?;
+    let seconds: f64 = seconds.trim().parse().ok()?;
     Some((minutes * 60_000 + (seconds * 1000.0).round() as u32, end + 1))
 }
 
@@ -368,5 +508,42 @@ mod tests {
         let lyrics = parse_spotify(&json).unwrap();
         assert!(lyrics.synced);
         assert_eq!(lyrics.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["Hello", "World"]);
+        assert!(lyrics.lines.iter().all(|l| l.words.is_empty()));
+    }
+
+    #[test]
+    fn spotify_syllables_become_words() {
+        let json = serde_json::json!({"lyrics": {"syncType": "SYLLABLE_SYNCED", "lines": [
+            {"startTimeMs": "1000", "endTimeMs": "2600", "words": "Olá mundo", "syllables": [
+                {"startTimeMs": "1000", "charsIndex": "0", "numChars": "3"},
+                {"startTimeMs": "1800", "charsIndex": "4", "numChars": "5"}
+            ]},
+            {"startTimeMs": "3000", "words": "Sem sílabas", "syllables": []},
+            {"startTimeMs": "4000", "words": "Sem posição", "syllables": [{"startTimeMs": "4000"}, {"startTimeMs": "4500"}]}
+        ]}});
+        let lyrics = parse_spotify(&json).unwrap();
+        assert!(lyrics.synced);
+        let words: Vec<_> = lyrics.lines[0].words.iter().map(|w| (w.at_ms, w.text.as_str())).collect();
+        assert_eq!(words, [(1000, "Olá "), (1800, "mundo")]);
+        assert_eq!(lyrics.lines[0].end_ms, Some(2600));
+        assert!(lyrics.lines[1].words.is_empty());
+        assert!(lyrics.lines[2].words.is_empty());
+    }
+
+    #[test]
+    fn enhanced_lrc_words_parse() {
+        let lines = parse_lrc("[00:01.00]<00:01.00>Hello <00:01.50>big <00:02.00>world<00:03.00>\n[00:04.00]Plain line\n");
+        assert_eq!(lines[0].text, "Hello big world");
+        let words: Vec<_> = lines[0].words.iter().map(|w| (w.at_ms, w.text.as_str())).collect();
+        assert_eq!(words, [(1000, "Hello "), (1500, "big "), (2000, "world")]);
+        assert_eq!(lines[0].end_ms, Some(3000));
+        assert_eq!(lines[1].text, "Plain line");
+        assert!(lines[1].words.is_empty());
+    }
+
+    #[test]
+    fn old_cached_lines_still_load() {
+        let line: LyricsLine = serde_json::from_str(r#"{"at_ms":1000,"text":"Hello"}"#).unwrap();
+        assert!(line.words.is_empty() && line.end_ms.is_none());
     }
 }

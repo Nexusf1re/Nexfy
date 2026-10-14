@@ -1,5 +1,6 @@
 package dev.nexfy.app.ui.theme
 
+import androidx.compose.animation.Animatable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalContentColor
@@ -9,7 +10,21 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.graphics.ColorUtils
+import dev.nexfy.app.ui.design.Motion
+import dev.nexfy.app.ui.design.coverAccent
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flowOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -49,15 +64,71 @@ private val Type = Typography(
     labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
 )
 
+/**
+ * [accentArt] is the cover the accent follows (null: the brand green). The
+ * scheme is remembered: a new instance would recompose every screen.
+ */
 @Composable
-fun NexfyTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) =
-    MaterialTheme(colorScheme = neutral(dark), typography = Type) {
-        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) { content() }
+fun NexfyTheme(dark: Boolean = isSystemInDarkTheme(), accentArt: Flow<String?>? = null, content: @Composable () -> Unit) {
+    val scheme = remember(dark) { neutral(dark) }
+    val accent = rememberAccent(accentArt, dark)
+    MaterialTheme(colorScheme = scheme, typography = Type) {
+        CompositionLocalProvider(LocalContentColor provides scheme.onBackground, LocalAccent provides accent) { content() }
     }
+}
 
-/** The app accent: Spotify-adjacent green, used sparingly (active tab, small highlights). */
+private fun brand(dark: Boolean) = if (dark) Color(0xFF1ED760) else Color(0xFF14A44A)
+
+/** A State, never a Color: only composables that read it follow its changes. */
+private val LocalAccent = staticCompositionLocalOf<State<Color>> { mutableStateOf(brand(true)) }
+
+/**
+ * The accent: the playing cover's colour made legible, or the brand green.
+ * It glides to each new colour; nothing here reads it, so the theme itself
+ * never recomposes for it.
+ */
 @Composable
-fun accentColor(): Color =
-    if (MaterialTheme.colorScheme.background.red < .5f) Color(0xFF1ED760) else Color(0xFF14A44A)
+private fun rememberAccent(art: Flow<String?>?, dark: Boolean): State<Color> {
+    val context = LocalContext.current
+    val accent = remember { Animatable(brand(dark)) }
+    LaunchedEffect(art, dark) {
+        (art ?: flowOf(null)).collectLatest { url ->
+            // Between songs the track can be missing for a moment: keep the colour.
+            if (url == null) delay(1_500)
+            val target = url?.let { coverAccent(context, it) }?.let { legible(it, dark) } ?: brand(dark)
+            if (accent.targetValue != target) accent.animateTo(target, Motion.standard(600))
+        }
+    }
+    return remember(accent) { accent.asState() }
+}
+
+/**
+ * [raw] as an accent on this theme: saturation and lightness clamped, then
+ * lightness pushed until text in it reads on the background (4.5:1).
+ */
+private fun legible(raw: Color, dark: Boolean): Color {
+    val hsl = FloatArray(3)
+    ColorUtils.colorToHSL(raw.toArgb(), hsl)
+    hsl[1] = hsl[1].coerceIn(.45f, .85f)
+    hsl[2] = if (dark) hsl[2].coerceIn(.55f, .7f) else hsl[2].coerceIn(.3f, .45f)
+    val background = if (dark) Color.Black.toArgb() else Color(0xFFFAFAFA).toArgb()
+    var argb = ColorUtils.HSLToColor(hsl)
+    while (ColorUtils.calculateContrast(argb, background) < 4.5 && hsl[2] in .15f..0.85f) {
+        hsl[2] += if (dark) .03f else -.03f
+        argb = ColorUtils.HSLToColor(hsl)
+    }
+    return Color(argb)
+}
+
+/**
+ * The app accent, used sparingly (active tab, playing song, small
+ * highlights): the playing song's cover colour when "Cor da música" is on.
+ */
+@Composable
+fun accentColor(): Color = LocalAccent.current.value
+
+/** The accent unread, for reading at draw time or only on some branches. */
+@Composable
+fun accentState(): State<Color> = LocalAccent.current
 
 val ColorScheme.isDark get() = background.red < .5f

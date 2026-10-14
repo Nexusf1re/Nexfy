@@ -401,13 +401,15 @@ fun TrackRow(
     val offset = remember { Animatable(0f) }
     var width by remember { mutableFloatStateOf(1f) }
     var armed by remember { mutableStateOf(false) }
-    val accent = dev.nexfy.app.ui.theme.accentColor()
+    // Read only where drawn or on the playing row: a colour change then
+    // redraws the swipe wash and recomposes one row, not every row.
+    val accent = dev.nexfy.app.ui.theme.accentState()
     Box(Modifier.fillMaxWidth().onSizeChanged { width = it.width.toFloat().coerceAtLeast(1f) }) {
         if (onSwipe != null) {
             // What the swipe uncovers: the queue icon, filling in once armed.
             Box(
                 Modifier.matchParentSize().clip(RoundedCornerShape(16.dp))
-                    .drawBehind { drawRect(accent.copy(alpha = (offset.value / width * 2.2f).coerceIn(0f, .9f))) }
+                    .drawBehind { drawRect(accent.value.copy(alpha = (offset.value / width * 2.2f).coerceIn(0f, .9f))) }
                     .padding(start = 20.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
@@ -461,7 +463,7 @@ fun TrackRow(
         if (number != null) {
             Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
                 if (playing) {
-                    PlayingBars(accent, Modifier.size(16.dp))
+                    PlayingBars(accent.value, Modifier.size(16.dp))
                 } else {
                     Text("$number", color = c.onSurfaceVariant, fontSize = 15.sp, textAlign = TextAlign.Center)
                 }
@@ -479,7 +481,7 @@ fun TrackRow(
         Column(Modifier.weight(1f)) {
             Text(
                 track.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                color = if (playing) dev.nexfy.app.ui.theme.accentColor() else c.onSurface,
+                color = if (playing) accent.value else c.onSurface,
             )
             val subtitle = buildString {
                 if (track.explicit) append("🅴 ")

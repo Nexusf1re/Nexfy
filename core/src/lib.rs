@@ -36,7 +36,7 @@ use librespot_playback::mixer::{Mixer, MixerConfig, VolumeGetter};
 use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel, QueueTrack};
 use tokio::net::TcpListener;
 
-pub use lyrics::{Lyrics, LyricsLine};
+pub use lyrics::{Lyrics, LyricsLine, LyricsWord};
 pub use webapi::{
     Album, AlbumDetail, Artist, ArtistDetail, Episode, Playlist, PlaylistDetail, Profile, RecentPlay,
     SearchResults, Show, ShowDetail, Track, TrackPage, WebApp, WebStatus,
