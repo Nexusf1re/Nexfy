@@ -11,6 +11,7 @@ mod android;
 mod collection;
 mod lyrics;
 mod offline;
+mod playlist_edit;
 mod remote;
 mod session_reads;
 mod sound;
@@ -662,10 +663,31 @@ impl NexfyCore {
 
     // ------------------------------------------------ library writes --
 
-    /// Save (or with `on` false, remove) songs, albums or playlists. Songs,
-    /// albums and podcasts go over the session; the rest, and what the
-    /// session refuses, through the Web API.
+    /// Save (or with `on` false, remove) songs, albums, podcasts or playlists,
+    /// over the session (the collection and the rootlist); what it refuses
+    /// goes through the Web API.
     pub async fn set_saved(&self, uris: Vec<String>, on: bool) -> Result<(), CoreError> {
+        // Playlists: the session's rootlist first, the Web API if that fails.
+        let (playlists, mut uris): (Vec<String>, Vec<String>) =
+            uris.into_iter().partition(|uri| uri.starts_with("spotify:playlist:"));
+        if !playlists.is_empty() {
+            let edit = async {
+                let session = self.inner.live_session().await?;
+                playlist_edit::set_followed(&session, &playlists, on).await.map_err(web_error)
+            };
+            match edit.await {
+                Ok(()) => playlist_edit::forget_rootlist(&self.inner.web),
+                Err(error) => {
+                    log::info!("follow playlists via Web API: {error}");
+                    uris.extend(playlists);
+                }
+            }
+        }
+        if uris.is_empty() {
+            return Ok(());
+        }
+        // Songs, albums and shows: the session's collection; the Web API
+        // takes what it could not write.
         let web = &self.inner.web;
         let rest = match self.inner.live_session().await {
             Ok(session) => {
@@ -708,20 +730,75 @@ impl NexfyCore {
         Ok(known.into_iter().map(|k| k.unwrap_or_else(|| answers.next().unwrap_or(false))).collect())
     }
 
+    // Playlist writes go over the session first, which has no Web API quota
+    // to run out; the Web API is the fallback.
+
     pub async fn create_playlist(&self, name: String, description: String) -> Result<Playlist, CoreError> {
-        self.inner.web.create_playlist(&name, &description).await.map_err(web_error)
+        let edit = async {
+            let session = self.inner.live_session().await?;
+            playlist_edit::create(&session, &name, &description).await.map_err(web_error)
+        };
+        match edit.await {
+            Ok(playlist) => {
+                playlist_edit::forget_rootlist(&self.inner.web);
+                Ok(playlist)
+            }
+            Err(error) => {
+                log::info!("create playlist via Web API: {error}");
+                self.inner.web.create_playlist(&name, &description).await.map_err(web_error)
+            }
+        }
     }
 
     pub async fn add_to_playlist(&self, id: String, uris: Vec<String>, position: Option<u32>) -> Result<(), CoreError> {
-        self.inner.web.add_to_playlist(&id, &uris, position).await.map_err(web_error)
+        let edit = async {
+            let session = self.inner.live_session().await?;
+            playlist_edit::add(&session, &id, &uris, position).await.map_err(web_error)
+        };
+        match edit.await {
+            Ok(()) => {
+                playlist_edit::forget_playlist(&self.inner.web, &id);
+                Ok(())
+            }
+            Err(error) => {
+                log::info!("add to playlist {id} via Web API: {error}");
+                self.inner.web.add_to_playlist(&id, &uris, position).await.map_err(web_error)
+            }
+        }
     }
 
     pub async fn remove_from_playlist(&self, id: String, uris: Vec<String>) -> Result<(), CoreError> {
-        self.inner.web.remove_from_playlist(&id, &uris).await.map_err(web_error)
+        let edit = async {
+            let session = self.inner.live_session().await?;
+            playlist_edit::remove(&session, &id, &uris).await.map_err(web_error)
+        };
+        match edit.await {
+            Ok(()) => {
+                playlist_edit::forget_playlist(&self.inner.web, &id);
+                Ok(())
+            }
+            Err(error) => {
+                log::info!("remove from playlist {id} via Web API: {error}");
+                self.inner.web.remove_from_playlist(&id, &uris).await.map_err(web_error)
+            }
+        }
     }
 
     pub async fn edit_playlist(&self, id: String, name: String, description: String) -> Result<(), CoreError> {
-        self.inner.web.edit_playlist(&id, &name, &description).await.map_err(web_error)
+        let edit = async {
+            let session = self.inner.live_session().await?;
+            playlist_edit::edit(&session, &id, &name, &description).await.map_err(web_error)
+        };
+        match edit.await {
+            Ok(()) => {
+                playlist_edit::forget_playlist(&self.inner.web, &id);
+                Ok(())
+            }
+            Err(error) => {
+                log::info!("edit playlist {id} via Web API: {error}");
+                self.inner.web.edit_playlist(&id, &name, &description).await.map_err(web_error)
+            }
+        }
     }
 
     /// New albums and singles (last 90 days) from the artists the user

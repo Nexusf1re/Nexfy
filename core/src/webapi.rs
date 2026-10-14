@@ -1265,7 +1265,7 @@ impl WebApi {
 
     /// Marks the cached copy of a read as changed: the next read asks
     /// Spotify first, and still has the copy if Spotify does not answer.
-    fn forget(&self, path: &str) {
+    pub(crate) fn forget(&self, path: &str) {
         let file = self.cache_file(path);
         let Some((_, value)) = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice::<(u64, serde_json::Value)>(&bytes).ok()) else {
             return;
@@ -1282,7 +1282,7 @@ impl WebApi {
         self.forget("/me/tracks?limit=50&offset=0&market=from_token");
     }
 
-    fn forget_playlist(&self, id: &str) {
+    pub(crate) fn forget_playlist(&self, id: &str) {
         self.forget(&format!("/playlists/{id}/items?limit=100&market=from_token"));
         self.forget(&playlist_meta_path(id));
         self.forget("/me/playlists?limit=50");
