@@ -73,7 +73,9 @@ impl From<cpal::SupportedStreamConfigsError> for RodioError {
 
 pub struct RodioSink {
     rodio_sink: rodio::Sink,
-    _stream: rodio::OutputStream,
+    // None while stopped: an open output plays silence and keeps the
+    // phone's audio hardware awake.
+    stream: Option<rodio::OutputStream>,
     // Kept to open the output again: Android closes it when the route
     // changes (headphones, Bluetooth) and it then never drains.
     host: cpal::Host,
@@ -232,7 +234,12 @@ pub fn open(host: cpal::Host, device: Option<String>, format: AudioFormat) -> Ro
     debug!("Rodio sink was created");
     RodioSink {
         rodio_sink: sink,
-        _stream: stream,
+        // Opened (and the device checked) above, then closed until the
+        // first play: start opens it again.
+        stream: {
+            drop(stream);
+            None
+        },
         host,
         device,
         format,
@@ -241,6 +248,9 @@ pub fn open(host: cpal::Host, device: Option<String>, format: AudioFormat) -> Ro
 
 impl Sink for RodioSink {
     fn start(&mut self) -> SinkResult<()> {
+        if self.stream.is_none() {
+            self.reopen()?;
+        }
         self.rodio_sink.play();
         Ok(())
     }
@@ -258,6 +268,7 @@ impl Sink for RodioSink {
             }
         }
         self.rodio_sink.pause();
+        self.stream = None;
         Ok(())
     }
 
@@ -302,7 +313,7 @@ impl RodioSink {
         let (sink, stream) = create_sink(&self.host, self.device.clone(), self.format)?;
         sink.play();
         self.rodio_sink = sink;
-        self._stream = stream;
+        self.stream = Some(stream);
         Ok(())
     }
 }

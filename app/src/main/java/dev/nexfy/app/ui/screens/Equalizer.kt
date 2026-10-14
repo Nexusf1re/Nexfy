@@ -159,7 +159,7 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
                     shown[i].animateTo(db, Motion.standard(Motion.Short))
                 } else {
                     delay(i * 38L)
-                    shown[i].animateTo(db, spring(dampingRatio = .36f, stiffness = 170f))
+                    shown[i].animateTo(db, spring(dampingRatio = .5f, stiffness = 180f))
                 }
             }
         }
@@ -369,7 +369,7 @@ private fun EqualizerCurve(
     LaunchedEffect(enabled) {
         val spec = when {
             Motion.reduced -> Motion.standard<Float>()
-            enabled -> spring(dampingRatio = .32f, stiffness = 190f)
+            enabled -> spring(dampingRatio = .46f, stiffness = 200f)
             else -> spring(dampingRatio = .55f, stiffness = 260f)
         }
         power.animateTo(if (enabled) 1f else 0f, spec)
@@ -540,11 +540,11 @@ fun EqualizerPreview(gainsDb: List<Float>, enabled: Boolean, playing: Boolean, m
                     shown[i].snapTo(db)
                 } else {
                     delay(120 + i * 45L)
-                    shown[i].animateTo(db, spring(dampingRatio = .34f, stiffness = 150f))
+                    shown[i].animateTo(db, spring(dampingRatio = .48f, stiffness = 160f))
                 }
             }
         }
-        val spec = if (Motion.reduced) Motion.standard<Float>() else spring(dampingRatio = .4f, stiffness = 160f)
+        val spec = if (Motion.reduced) Motion.standard<Float>() else spring(dampingRatio = .52f, stiffness = 170f)
         power.animateTo(if (enabled) 1f else 0f, spec)
     }
     val lit by animateFloatAsState(if (enabled) 1f else 0f, Motion.standard(), label = "lit")
@@ -612,8 +612,8 @@ private fun PresetChip(name: String, selected: Boolean, onClick: () -> Unit, onL
     val pop = remember { Animatable(1f) }
     LaunchedEffect(selected) {
         if (!selected || Motion.reduced) return@LaunchedEffect
-        pop.animateTo(1.14f, tween(90))
-        pop.animateTo(1f, spring(dampingRatio = .28f, stiffness = 520f))
+        pop.animateTo(1.1f, tween(90))
+        pop.animateTo(1f, spring(dampingRatio = .4f, stiffness = 520f))
     }
     Text(
         name,

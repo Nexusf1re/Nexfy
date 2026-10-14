@@ -296,7 +296,7 @@ impl NexfyCore {
     pub async fn finish_login(&self) -> Result<String, CoreError> {
         let token = self.inner.finish(|t| matches!(t, LoginTarget::Playback)).await?;
         self.inner
-            .connect(Credentials::with_access_token(token.access_token))
+            .connect(Credentials::with_access_token(token.access_token), true)
             .await
     }
 
@@ -1011,7 +1011,7 @@ impl NexfyCore {
         let Some(credentials) = self.inner.cache()?.credentials() else {
             return Ok(None);
         };
-        self.inner.connect(credentials).await.map(Some)
+        self.inner.connect(credentials, false).await.map(Some)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -1568,7 +1568,21 @@ impl Inner {
         Ok(Arc::new(spirc))
     }
 
-    async fn connect(self: &Arc<Self>, credentials: Credentials) -> Result<String, CoreError> {
+    /// Open the session, player and Connect device. Without [replace], an
+    /// existing connection is kept: at launch several callers (the
+    /// activity, the service, the first screens) each saw "not connected",
+    /// and every one built its own player and audio output, left running
+    /// beside the one kept. With it (a new sign-in) the old one is shut down.
+    async fn connect(self: &Arc<Self>, credentials: Credentials, replace: bool) -> Result<String, CoreError> {
+        let _turn = self.reconnecting.lock().await;
+        let old = match self.connected.lock().unwrap().as_ref() {
+            Some(connected) if !replace => return Ok(connected.session.username()),
+            Some(connected) => Some(connected.spirc.clone()),
+            None => None,
+        };
+        if let Some(spirc) = old {
+            let _ = spirc.shutdown();
+        }
         let session = self.new_session()?;
 
         let backend = audio_backend::find(None)
