@@ -376,6 +376,7 @@ impl NexfyCore {
                         playlist.owner = name.clone();
                     }
                 }
+                let playlists = self.fill_covers(playlists).await;
                 web.save_local(KEY, &playlists);
                 Ok(playlists)
             }
@@ -397,11 +398,55 @@ impl NexfyCore {
         }
     }
 
+    /// Playlists without a picture of their own (Spotify draws a mosaic the
+    /// rootlist does not carry) take their first song's cover, as the
+    /// playlist page does: the last copy of that page, else one small read.
+    async fn fill_covers(&self, mut playlists: Vec<Playlist>) -> Vec<Playlist> {
+        use futures_util::{StreamExt, stream};
+        let web = &self.inner.web;
+        let Ok(session) = self.inner.live_session().await else {
+            return playlists;
+        };
+        let bare: Vec<(usize, String)> = playlists
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.image_url.is_none())
+            .map(|(i, p)| (i, p.id.clone()))
+            .collect();
+        let covers: Vec<(usize, Option<String>)> = stream::iter(bare)
+            .map(|(i, id)| {
+                let session = session.clone();
+                async move {
+                    let saved = web
+                        .load_local::<PlaylistDetail>(&format!("session:playlist5:{id}"), std::time::Duration::from_secs(30 * 86_400))
+                        .and_then(|detail| detail.playlist.image_url);
+                    if saved.is_some() {
+                        return (i, saved);
+                    }
+                    let first = session_reads::first_uris(&session, &id, 3).await.unwrap_or_default();
+                    let cover = match first.into_iter().next() {
+                        Some(uri) => self.tracks_info(vec![uri]).await.ok().and_then(|t| t.into_iter().next()).and_then(|t| t.image_url),
+                        None => None,
+                    };
+                    (i, cover)
+                }
+            })
+            .buffer_unordered(4)
+            .collect()
+            .await;
+        for (i, cover) in covers {
+            if cover.is_some() {
+                playlists[i].image_url = cover;
+            }
+        }
+        playlists
+    }
+
     /// The playlist service first (no Web API quota): its rows in one
     /// request, the songs from the track cache. The Web API is the fallback.
     pub async fn playlist(&self, id: String, refresh: bool) -> Result<PlaylistDetail, CoreError> {
         let web = &self.inner.web;
-        let key = format!("session:playlist3:{id}");
+        let key = format!("session:playlist5:{id}");
         if !refresh {
             if let Some(fresh) = web.load_local::<PlaylistDetail>(&key, std::time::Duration::from_secs(20 * 60)) {
                 return Ok(fresh);
@@ -444,6 +489,11 @@ impl NexfyCore {
                 })
             })
             .collect();
+        if tracks.len() < list.entries.len() {
+            let missing: Vec<&str> =
+                list.entries.iter().map(|e| e.uri.as_str()).filter(|uri| !known.contains_key(*uri)).take(10).collect();
+            log::warn!("playlist {id}: {} of {} rows resolved; missing {missing:?}", tracks.len(), list.entries.len());
+        }
         let me = session.username();
         let owner = if list.owner_username.is_empty() {
             String::new()

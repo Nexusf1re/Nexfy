@@ -296,7 +296,7 @@ pub async fn set_followed(session: &Session, uris: &[String], on: bool) -> Resul
 /// counts, come fresh from either the Web API or the session.
 pub fn forget_playlist(web: &WebApi, id: &str) {
     web.forget_playlist(id);
-    web.forget(&format!("session:playlist3:{id}"));
+    web.forget(&format!("session:playlist5:{id}"));
     web.forget("session:rootlist");
 }
 

@@ -79,10 +79,16 @@ pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
     let parsed: Vec<SpotifyUri> = uris.iter().filter_map(|uri| SpotifyUri::from_uri(uri).ok()).collect();
     stream::iter(parsed)
         .map(|uri| async move {
-            match uri {
+            let requested = uri.to_uri();
+            let result = match uri {
                 SpotifyUri::Episode { .. } => SessionEpisode::get(session, &uri).await.map(episode_track),
                 _ => SessionTrack::get(session, &uri).await.map(|track| to_track(track, true)),
-            }
+            };
+            // Keep the URI asked for: a relinked song answers under another
+            // id, and callers look rows up by the one their list holds.
+            result
+                .map(|track| Track { uri: requested.clone(), ..track })
+                .map_err(|error| log::warn!("track {requested}: {error}"))
         })
         .buffered(CONCURRENCY)
         .filter_map(|result| async move { result.ok() })
@@ -473,4 +479,21 @@ pub async fn show(session: &Session, id: &str) -> Result<crate::webapi::ShowDeta
         },
         episodes,
     })
+}
+
+/// The first `count` song URIs of a playlist, in one small request: what a
+/// cover is made of when the list has no picture of its own.
+pub async fn first_uris(session: &Session, id: &str, count: usize) -> Result<Vec<String>> {
+    use protobuf::Message;
+    let spotify_id = librespot_core::SpotifyId::from_base62(id).map_err(|e| anyhow!("{e}"))?;
+    let bytes = session.spclient().get_playlist_range(&spotify_id, 0, count).await?;
+    let list = librespot_protocol::playlist4_external::SelectedListContent::parse_from_bytes(&bytes)?;
+    Ok(list
+        .contents
+        .get_or_default()
+        .items
+        .iter()
+        .map(|item| item.uri().to_owned())
+        .filter(|uri| uri.starts_with("spotify:track:"))
+        .collect())
 }
