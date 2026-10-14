@@ -21,3 +21,6 @@ captures/
 *.jks
 *.keystore
 signing/
+
+# Agent worktrees
+.claude/worktrees/
