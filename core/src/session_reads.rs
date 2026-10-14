@@ -313,3 +313,50 @@ fn uris_in(value: &serde_json::Value, prefix: &str) -> Vec<String> {
     walk(value, prefix, &mut found);
     found
 }
+
+/// The user's playlists from the session's rootlist, in library order:
+/// what the library shows when the Web API cannot answer.
+pub async fn rootlist(session: &Session) -> Result<Vec<crate::webapi::Playlist>> {
+    use protobuf::Message;
+    let bytes = session.spclient().get_rootlist(0, Some(1000)).await?;
+    let list = librespot_protocol::playlist4_external::SelectedListContent::parse_from_bytes(&bytes)?;
+    let contents = list.contents.into_option().unwrap_or_default();
+    let me = session.username();
+    Ok(contents
+        .items
+        .iter()
+        .zip(contents.meta_items.iter())
+        .filter_map(|(item, meta)| {
+            let id = item.uri().strip_prefix("spotify:playlist:")?.to_owned();
+            let attributes = meta.attributes.get_or_default();
+            let image = attributes
+                .picture_size
+                .iter()
+                .find(|size| size.target_name() == "default")
+                .or_else(|| attributes.picture_size.first())
+                .map(|size| size.url().to_owned())
+                .filter(|url| !url.is_empty())
+                .or_else(|| {
+                    (!attributes.picture().is_empty())
+                        .then(|| format!("https://i.scdn.co/image/{}", hex(attributes.picture())))
+                });
+            let owner = meta.owner_username().to_owned();
+            Some(crate::webapi::Playlist {
+                uri: format!("spotify:playlist:{id}"),
+                id,
+                name: attributes.name().to_owned(),
+                description: attributes.description().to_owned(),
+                // The session gives the username only; the user's own name reads "você".
+                owner: if owner == me { "você".to_owned() } else { owner.clone() },
+                owner_id: owner,
+                image_url: image,
+                track_count: meta.length().max(0) as u32,
+                followers: 0,
+            })
+        })
+        .collect())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}

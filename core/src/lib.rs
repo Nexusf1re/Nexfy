@@ -314,8 +314,34 @@ impl NexfyCore {
         self.inner.web.profile(refresh).await.map_err(web_error)
     }
 
+    /// Web API first; when it cannot answer (its daily quota, no app signed
+    /// in) the session's rootlist, which has the same playlists.
     pub async fn my_playlists(&self, refresh: bool) -> Result<Vec<Playlist>, CoreError> {
-        self.inner.web.my_playlists(refresh).await.map_err(web_error)
+        const KEY: &str = "session:rootlist";
+        let web = &self.inner.web;
+        match web.my_playlists(refresh).await {
+            Ok(playlists) => Ok(playlists),
+            Err(error) => {
+                log::info!("playlists via session: {error:#}");
+                let read = async {
+                    let session = self.inner.live_session().await?;
+                    session_reads::rootlist(&session).await.map_err(web_error)
+                };
+                match read.await {
+                    Ok(playlists) if !playlists.is_empty() => {
+                        web.save_local(KEY, &playlists);
+                        Ok(playlists)
+                    }
+                    _ => match web.load_local::<Vec<Playlist>>(KEY, std::time::Duration::from_secs(30 * 86_400)) {
+                        Some(saved) => Ok(saved),
+                        None => match error.downcast::<webapi::Cut<Playlist>>() {
+                            Ok(cut) => Ok(cut.0),
+                            Err(error) => Err(web_error(error)),
+                        },
+                    },
+                }
+            }
+        }
     }
 
     /// Web API first; playlists it refuses (other people's, for
@@ -337,8 +363,21 @@ impl NexfyCore {
                             .inner
                             .with_session(Session::clone)
                             .ok_or_else(|| CoreError::Session("não conectado".into()))?;
-                        let data = session_reads::playlist(&session, &id).await.map_err(web_error)?;
-                        web.save_local(&key, &data.tracks);
+                        let data = match session_reads::playlist(&session, &id).await {
+                            Ok(data) => {
+                                web.save_local(&key, &data.tracks);
+                                data
+                            }
+                            // Neither read whole: the part the Web API gave.
+                            Err(read_error) => match error.downcast::<webapi::Cut<Track>>() {
+                                Ok(cut) => session_reads::SessionPlaylistData {
+                                    name: String::new(),
+                                    description: String::new(),
+                                    tracks: cut.0,
+                                },
+                                Err(_) => return Err(web_error(read_error)),
+                            },
+                        };
                         if meta.is_err() {
                             return Ok(PlaylistDetail {
                                 playlist: Playlist {

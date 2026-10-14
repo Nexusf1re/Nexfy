@@ -29,6 +29,22 @@ const API: &str = "https://api.spotify.com/v1";
 const MAX_ITEMS: usize = 2000;
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(5);
 
+/// A list Spotify cut short (a page refused, often the daily quota): what
+/// came, for when a complete read elsewhere fails too.
+#[derive(Debug)]
+pub struct Cut<T>(pub Vec<T>);
+
+impl<T> std::fmt::Display for Cut<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "o Spotify mandou só parte da lista ({} itens)", self.0.len())
+    }
+}
+
+impl<T: std::fmt::Debug> std::error::Error for Cut<T> {}
+
+/// Pages after the first of a long list: they change less than the first.
+const PAGE_TTL: Duration = Duration::from_secs(3600);
+
 /// Saved time of a cached read changed by the user: read again before use.
 const CHANGED: u64 = 0;
 
@@ -849,11 +865,15 @@ impl WebApi {
         });
     }
 
-    /// Follow `next` links, appending items, up to [MAX_ITEMS].
+    /// Follow `next` links, appending items, up to [MAX_ITEMS]. Each page is
+    /// cached like the first (asking for them on every view spent the daily
+    /// quota); a page Spotify does not give now ends the list early instead
+    /// of failing all of it.
     async fn all_pages<T: DeserializeOwned>(
         self: &Arc<Self>,
         first: Paging<T>,
         route: Route,
+        refresh: bool,
     ) -> Result<(Vec<T>, u32)> {
         let total = first.total;
         let mut items: Vec<T> = first.items.into_iter().flatten().collect();
@@ -862,9 +882,16 @@ impl WebApi {
             if items.len() >= MAX_ITEMS {
                 break;
             }
-            let page: Paging<T> = serde_json::from_value(self.get_json(&url, route).await?)?;
-            items.extend(page.items.into_iter().flatten());
-            next = page.next;
+            match self.cached::<Paging<T>>(&url, route, PAGE_TTL, refresh).await {
+                Ok(page) => {
+                    items.extend(page.items.into_iter().flatten());
+                    next = page.next;
+                }
+                Err(error) => {
+                    log::warn!("list cut at {} of {total}: {error:#}", items.len());
+                    break;
+                }
+            }
         }
         Ok((items, total))
     }
@@ -893,8 +920,11 @@ impl WebApi {
         let first: Paging<RawPlaylist> = self
             .cached("/me/playlists?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
-        let (items, _) = self.all_pages(first, Route::Personal).await?;
-        let playlists = items.into_iter().map(RawPlaylist::into_playlist).collect();
+        let (items, total) = self.all_pages(first, Route::Personal, refresh).await?;
+        let playlists: Vec<Playlist> = items.into_iter().map(RawPlaylist::into_playlist).collect();
+        if playlists.len() < total as usize {
+            return Err(Cut(playlists).into());
+        }
         Ok(dedupe(playlists, |p: &Playlist| &p.id))
     }
 
@@ -922,11 +952,13 @@ impl WebApi {
                 refresh,
             )
             .await?;
-        let (items, _) = self.all_pages(first, Route::Personal).await?;
-        Ok(items
-            .into_iter()
-            .filter_map(SavedTrack::into_track)
-            .collect())
+        let (items, total) = self.all_pages(first, Route::Personal, refresh).await?;
+        let cut = items.len() < total as usize;
+        let tracks: Vec<Track> = items.into_iter().filter_map(SavedTrack::into_track).collect();
+        if cut {
+            return Err(Cut(tracks).into());
+        }
+        Ok(tracks)
     }
 
     /// Disk cache for data that does not come from the Web API.
@@ -972,7 +1004,7 @@ impl WebApi {
         let first: Paging<SavedAlbum> = self
             .cached("/me/albums?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
-        let (items, _) = self.all_pages(first, Route::Personal).await?;
+        let (items, _) = self.all_pages(first, Route::Personal, refresh).await?;
         let albums = items.iter().filter_map(|saved| saved.album.to_album()).collect();
         Ok(dedupe(albums, |a: &Album| &a.id))
     }
@@ -988,7 +1020,7 @@ impl WebApi {
             .await?;
         let album = raw.to_album().ok_or_else(|| anyhow!("álbum sem id"))?;
         let tracks = match raw.tracks.take() {
-            Some(first) => self.all_pages(first, Route::Personal).await?.0,
+            Some(first) => self.all_pages(first, Route::Personal, refresh).await?.0,
             None => Vec::new(),
         };
         Ok(AlbumDetail {
@@ -1004,7 +1036,7 @@ impl WebApi {
         let first: Paging<SavedShow> = self
             .cached("/me/shows?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
-        let (items, _) = self.all_pages(first, Route::Personal).await?;
+        let (items, _) = self.all_pages(first, Route::Personal, refresh).await?;
         let shows = items.into_iter().map(|saved| saved.show.into_show()).collect();
         Ok(dedupe(shows, |s: &Show| &s.id))
     }
