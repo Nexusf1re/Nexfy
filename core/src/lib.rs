@@ -8,6 +8,7 @@
 mod auth;
 #[cfg(target_os = "android")]
 mod android;
+mod collection;
 mod lyrics;
 mod offline;
 mod remote;
@@ -515,12 +516,40 @@ impl NexfyCore {
         session_reads::playlist_info(&session, id).await.ok()
     }
 
+    /// The session's collection first (no Web API quota); the Web API when
+    /// the session cannot read it. An empty collection asks the Web API
+    /// too, in case Spotify moved the songs to another set.
     pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage, CoreError> {
-        self.inner.web.liked_tracks(offset, limit, refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let read = async {
+            let session = self.inner.live_session().await?;
+            collection::liked_tracks(web, &session, offset, limit, refresh).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(page) if page.total > 0 => Ok(page),
+            Ok(page) => Ok(web.liked_tracks(offset, limit, refresh).await.unwrap_or(page)),
+            Err(error) => {
+                log::info!("liked songs via the Web API: {error}");
+                web.liked_tracks(offset, limit, refresh).await.map_err(web_error)
+            }
+        }
     }
 
+    /// Session first, like [Self::liked_tracks].
     pub async fn saved_albums(&self, refresh: bool) -> Result<Vec<Album>, CoreError> {
-        self.inner.web.saved_albums(refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let read = async {
+            let session = self.inner.live_session().await?;
+            collection::saved_albums(web, &session, refresh).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(albums) if !albums.is_empty() => Ok(albums),
+            Ok(albums) => Ok(web.saved_albums(refresh).await.unwrap_or(albums)),
+            Err(error) => {
+                log::info!("saved albums via the Web API: {error}");
+                web.saved_albums(refresh).await.map_err(web_error)
+            }
+        }
     }
 
     /// Over the session first (no Web API quota; kept a week, an album does
@@ -549,8 +578,21 @@ impl NexfyCore {
         }
     }
 
+    /// Session first, like [Self::liked_tracks].
     pub async fn saved_shows(&self, refresh: bool) -> Result<Vec<Show>, CoreError> {
-        self.inner.web.saved_shows(refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let read = async {
+            let session = self.inner.live_session().await?;
+            collection::saved_shows(web, &session, refresh).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(shows) if !shows.is_empty() => Ok(shows),
+            Ok(shows) => Ok(web.saved_shows(refresh).await.unwrap_or(shows)),
+            Err(error) => {
+                log::info!("saved shows via the Web API: {error}");
+                web.saved_shows(refresh).await.map_err(web_error)
+            }
+        }
     }
 
     /// A podcast and its latest 50 episodes, newest first.
@@ -620,14 +662,50 @@ impl NexfyCore {
 
     // ------------------------------------------------ library writes --
 
-    /// Save (or with `on` false, remove) songs, albums or playlists.
+    /// Save (or with `on` false, remove) songs, albums or playlists. Songs,
+    /// albums and podcasts go over the session; the rest, and what the
+    /// session refuses, through the Web API.
     pub async fn set_saved(&self, uris: Vec<String>, on: bool) -> Result<(), CoreError> {
-        self.inner.web.set_saved(&uris, on).await.map_err(web_error)
+        let web = &self.inner.web;
+        let rest = match self.inner.live_session().await {
+            Ok(session) => {
+                let rest = collection::set_saved(web, &session, &uris, on).await;
+                if rest.len() < uris.len() {
+                    // Its saved reads are behind now.
+                    web.forget_library();
+                }
+                rest
+            }
+            Err(error) => {
+                log::info!("library write via the Web API: {error}");
+                uris
+            }
+        };
+        if rest.is_empty() {
+            return Ok(());
+        }
+        web.set_saved(&rest, on).await.map_err(web_error)
     }
 
-    /// Whether each URI is in the library, in order.
+    /// Whether each URI is in the library, in order: songs, albums and
+    /// podcasts from the session's collection, the rest from the Web API.
     pub async fn saved(&self, uris: Vec<String>) -> Result<Vec<bool>, CoreError> {
-        self.inner.web.saved(&uris).await.map_err(web_error)
+        let web = &self.inner.web;
+        let known = match self.inner.live_session().await {
+            Ok(session) => collection::contains(web, &session, &uris).await.unwrap_or_else(|error| {
+                log::info!("saved via the Web API: {error:#}");
+                vec![None; uris.len()]
+            }),
+            Err(_) => vec![None; uris.len()],
+        };
+        let rest: Vec<String> = uris.iter().zip(&known).filter(|(_, k)| k.is_none()).map(|(uri, _)| uri.clone()).collect();
+        let mut answers = if rest.is_empty() {
+            Vec::new()
+        } else {
+            web.saved(&rest).await.map_err(web_error)?
+        }
+        .into_iter();
+        Ok(known.into_iter().map(|k| k.unwrap_or_else(|| answers.next().unwrap_or(false))).collect())
     }
 
     pub async fn create_playlist(&self, name: String, description: String) -> Result<Playlist, CoreError> {
@@ -709,8 +787,35 @@ impl NexfyCore {
         faces
     }
 
+    /// What was played lately, from the session (one row per playlist,
+    /// album or artist, cached 5 min); the Web API when the session cannot
+    /// answer, and a saved copy when neither does.
     pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>, CoreError> {
-        self.inner.web.recently_played(refresh).await.map_err(web_error)
+        const KEY: &str = "session:recent";
+        let web = &self.inner.web;
+        if !refresh {
+            if let Some(plays) = web.load_local::<Vec<RecentPlay>>(KEY, std::time::Duration::from_secs(300)) {
+                return Ok(plays);
+            }
+        }
+        let read = async {
+            let session = self.inner.live_session().await?;
+            collection::recently_played(&session).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(plays) if !plays.is_empty() => {
+                web.save_local(KEY, &plays);
+                return Ok(plays);
+            }
+            Ok(_) => {}
+            Err(error) => log::info!("recently played via the Web API: {error}"),
+        }
+        match web.recently_played(refresh).await {
+            Ok(plays) => Ok(plays),
+            Err(error) => web
+                .load_local::<Vec<RecentPlay>>(KEY, std::time::Duration::from_secs(30 * 86_400))
+                .ok_or_else(|| web_error(error)),
+        }
     }
 
     pub async fn top_tracks(&self, refresh: bool) -> Result<Vec<Track>, CoreError> {

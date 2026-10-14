@@ -1275,7 +1275,7 @@ impl WebApi {
         }
     }
 
-    fn forget_library(&self) {
+    pub(crate) fn forget_library(&self) {
         self.forget("/me/playlists?limit=50");
         self.forget("/me/albums?limit=50");
         self.forget("/me/shows?limit=50");
