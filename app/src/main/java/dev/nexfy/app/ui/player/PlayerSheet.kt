@@ -23,7 +23,6 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.spring
 import androidx.compose.material.icons.rounded.Close
 import dev.nexfy.app.ui.design.PlayingBars
 import androidx.compose.animation.fadeIn
@@ -96,6 +95,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -125,6 +125,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
@@ -216,7 +218,8 @@ interface PlayerControls {
     fun startRadio(seedUri: String)
 }
 
-private val settle = Motion.settle<Float>(247f)
+/** A getter, so it follows [Motion.reduced]. */
+private val settle get() = Motion.settle<Float>(247f)
 
 /** Requests from outside the composition (a widget tap) to open the full player. */
 object OpenPlayer {
@@ -236,8 +239,8 @@ private fun AnimatedContentTransitionScope<TrackInfo>.songChange(): ContentTrans
     if (initialState.uri == targetState.uri) {
         EnterTransition.None togetherWith ExitTransition.None
     } else {
-        (fadeIn(tween(320, delayMillis = 60)) + slideInVertically(Motion.settle()) { it / 3 }) togetherWith
-            (fadeOut(tween(160)) + slideOutVertically(tween(200)) { -it / 4 }) using SizeTransform(clip = false)
+        (fadeIn(tween(Motion.scaled(320), delayMillis = 60)) + slideInVertically(Motion.settle()) { it / 3 }) togetherWith
+            (fadeOut(tween(Motion.scaled(160))) + slideOutVertically(tween(Motion.scaled(200))) { -it / 4 }) using SizeTransform(clip = false)
     }
 private fun fmt(ms: Long) = (ms.coerceAtLeast(0) / 1000).let { "%d:%02d".format(it / 60, it % 60) }
 
@@ -305,6 +308,19 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     LaunchedEffect(expanded) {
         playerOpen = expanded
         if (!expanded) flipped = false
+    }
+    // The open player is dark on any theme (white over the art): light
+    // system bar icons there, the theme's own again once it is collapsed.
+    val view = LocalView.current
+    val lightTheme = !c.isDark
+    DisposableEffect(expanded, lightTheme) {
+        (view.context as? android.app.Activity)?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = lightTheme && !expanded
+                isAppearanceLightNavigationBars = lightTheme && !expanded
+            }
+        }
+        onDispose { }
     }
     LaunchedEffect(Unit) {
         OpenPlayer.requested.collect { at ->
@@ -431,7 +447,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val fullIn = animateFloatAsState(if (showLyrics && lyricsFull && settled) 1f else 0f, Motion.settle(169f), label = "full")
             // 0 to 180 degrees as the cover turns over; past 90 the back shows.
             val turned = flipped && settled && !showLyrics
-            val flip = animateFloatAsState(if (turned) 180f else 0f, spring(dampingRatio = .74f, stiffness = 150f), label = "flip")
+            val flip = animateFloatAsState(if (turned) 180f else 0f, Motion.turn(), label = "flip")
             val backSide by remember { derivedStateOf { flip.value > 90f } }
             if (turned) BackHandler { flipped = false }
 
@@ -506,7 +522,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                     if (!hasNext && throwX.value < 0f) {
                                         // A short, bouncy "no" on the way back.
                                         if (go == 1 || throwX.value < -fullW * .06f) haptics.tick()
-                                        throwX.animateTo(0f, spring(dampingRatio = .3f, stiffness = 700f), initialVelocity = v * .3f)
+                                        throwX.animateTo(0f, Motion.refuse(), initialVelocity = v * .3f)
                                         return@draggable
                                     }
                                     if (go != 0 && (go == -1 || hasNext)) {
@@ -515,7 +531,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                         val before = currentUri
                                         thrown[0] = true
                                         if (go == 1) controls.next() else controls.previous()
-                                        throwX.animateTo(-go * fullW * 1.2f, tween(170, easing = Motion.EmphasizedAccelerate))
+                                        throwX.animateTo(-go * fullW * 1.2f, Motion.exit(170))
                                         // Come back in with the new song's cover, not the old one.
                                         withTimeoutOrNull(700) { snapshotFlow { currentUri }.first { it != before } }
                                             ?: run { thrown[0] = false }
@@ -551,7 +567,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 thrown[0] = false
                                 EnterTransition.None togetherWith ExitTransition.None
                             } else {
-                                fadeIn(tween(420)) togetherWith fadeOut(tween(420))
+                                fadeIn(tween(Motion.scaled(420))) togetherWith fadeOut(tween(Motion.scaled(420)))
                             }
                         },
                         label = "cover",
@@ -891,7 +907,8 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
 
     // Who added each song: a Jam guest as Spotify reports, else who added it
     // to the playlist playing (the playlist page knows). Faces show only when
-    // more than one person added, or someone other than this account.
+    // more than one person added, or someone other than this account, and
+    // only with "Mostrar quem adicionou" on.
     val core = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).core
     val playlistId = s.queue.contextUri?.takeIf { it.startsWith("spotify:playlist:") }?.substringAfterLast(':')
     val fromPlaylist by produceState<Map<String, String>>(emptyMap(), playlistId) {
@@ -903,7 +920,7 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
     val adders = remember(next, fromPlaylist) { next.associate { it.uri to (it.addedBy ?: fromPlaylist[it.uri]) } }
     val me = remember { core.username() }
     val distinct = remember(adders) { adders.values.filterNotNull().toSet() }
-    val showFaces = distinct.size > 1 || distinct.any { it != me }
+    val showFaces = dev.nexfy.app.ui.theme.LocalLook.current.showAddedBy && (distinct.size > 1 || distinct.any { it != me })
     val faces by produceState<Map<String, UserFace>>(emptyMap(), distinct, showFaces) {
         if (showFaces) value = runCatching { core.users(distinct.toList()) }.getOrDefault(emptyList()).associateBy { it.id }
     }
@@ -1124,6 +1141,8 @@ private fun LyricsView(
     LaunchedEffect(current) {
         if (current >= 0) list.animateScrollToItem(current)
     }
+    // "Tamanho da letra": scales both the square and the full-screen sizes.
+    val scale = dev.nexfy.app.ui.theme.LocalLook.current.lyricsScale
     Column(modifier) {
         BoxWithConstraints(Modifier.weight(1f)) {
             // The padding puts the scrolled-to line a third of the way down,
@@ -1190,9 +1209,9 @@ private fun LyricsView(
                             ),
                         onTextLayout = { layout[0] = it },
                         color = Color.White,
-                        fontSize = when { large && lyrics.synced -> 30.sp; large -> 22.sp; lyrics.synced -> 24.sp; else -> 19.sp },
+                        fontSize = (scale * when { large && lyrics.synced -> 30; large -> 22; lyrics.synced -> 24; else -> 19 }).sp,
                         fontWeight = FontWeight.Bold,
-                        lineHeight = when { large && lyrics.synced -> 36.sp; large -> 28.sp; lyrics.synced -> 30.sp; else -> 25.sp },
+                        lineHeight = (scale * when { large && lyrics.synced -> 36; large -> 28; lyrics.synced -> 30; else -> 25 }).sp,
                     )
                 }
             }

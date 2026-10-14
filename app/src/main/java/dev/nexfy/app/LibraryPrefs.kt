@@ -69,10 +69,25 @@ enum class AlbumSort(val label: String) {
     }
 }
 
+/** Light or dark: following the system, or fixed. */
+enum class ThemeMode(val label: String) {
+    System("Sistema"),
+    Light("Claro"),
+    Dark("Escuro"),
+}
+
+/** How big the lyrics are: [scale] multiplies their normal sizes. */
+enum class LyricsSize(val label: String, val scale: Float) {
+    Small("Pequeno", .85f),
+    Medium("Médio", 1f),
+    Large("Grande", 1.2f),
+}
+
 /**
  * Library choices kept on this phone: pinned playlists and albums (in the
  * order they were pinned), each shelf's sort, and how often each playlist
- * or album was played in Nexfy, and what is kept on the phone.
+ * or album was played in Nexfy, and what is kept on the phone. Also the
+ * appearance and behaviour settings, which screens follow live.
  */
 class LibraryPrefs(context: Context) {
     private val prefs = context.getSharedPreferences("library", Context.MODE_PRIVATE)
@@ -122,6 +137,66 @@ class LibraryPrefs(context: Context) {
     fun setCoverAccent(on: Boolean) {
         _coverAccent.value = on
         prefs.edit { putBoolean(COVER_ACCENT, on) }
+    }
+
+    private val _themeMode = MutableStateFlow(
+        ThemeMode.entries.firstOrNull { it.name == prefs.getString(THEME_MODE, null) } ?: ThemeMode.System,
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+        prefs.edit { putString(THEME_MODE, mode.name) }
+    }
+
+    private val _animatedBackdrop = MutableStateFlow(prefs.getBoolean(ANIMATED_BACKDROP, true))
+
+    /** The cover colours drift behind the player and pages; off, they hold still. */
+    val animatedBackdrop: StateFlow<Boolean> = _animatedBackdrop
+
+    fun setAnimatedBackdrop(on: Boolean) {
+        _animatedBackdrop.value = on
+        prefs.edit { putBoolean(ANIMATED_BACKDROP, on) }
+    }
+
+    private val _reduceMotion = MutableStateFlow(prefs.getBoolean(REDUCE_MOTION, false))
+
+    /** Shorter, simpler transitions ("Reduzir animações"). */
+    val reduceMotion: StateFlow<Boolean> = _reduceMotion
+
+    fun setReduceMotion(on: Boolean) {
+        _reduceMotion.value = on
+        prefs.edit { putBoolean(REDUCE_MOTION, on) }
+    }
+
+    private val _lyricsSize = MutableStateFlow(
+        LyricsSize.entries.firstOrNull { it.name == prefs.getString(LYRICS_SIZE, null) } ?: LyricsSize.Medium,
+    )
+    val lyricsSize: StateFlow<LyricsSize> = _lyricsSize
+
+    fun setLyricsSize(size: LyricsSize) {
+        _lyricsSize.value = size
+        prefs.edit { putString(LYRICS_SIZE, size.name) }
+    }
+
+    private val _showAddedBy = MutableStateFlow(prefs.getBoolean(SHOW_ADDED_BY, true))
+
+    /** Faces of who added each song, in shared playlists and the queue. */
+    val showAddedBy: StateFlow<Boolean> = _showAddedBy
+
+    fun setShowAddedBy(on: Boolean) {
+        _showAddedBy.value = on
+        prefs.edit { putBoolean(SHOW_ADDED_BY, on) }
+    }
+
+    private val _haptics = MutableStateFlow(prefs.getBoolean(HAPTICS, true))
+
+    /** Vibration on touches and gestures. */
+    val haptics: StateFlow<Boolean> = _haptics
+
+    fun setHaptics(on: Boolean) {
+        _haptics.value = on
+        prefs.edit { putBoolean(HAPTICS, on) }
     }
 
     fun toggleKept(key: String) {
@@ -208,5 +283,11 @@ class LibraryPrefs(context: Context) {
         const val LYRICS_OPEN = "lyrics_open"
         const val LIBRARY_GRID = "library_grid"
         const val RECENT_SEARCHES = "recent_searches"
+        const val THEME_MODE = "theme_mode"
+        const val ANIMATED_BACKDROP = "animated_backdrop"
+        const val REDUCE_MOTION = "reduce_motion"
+        const val LYRICS_SIZE = "lyrics_size"
+        const val SHOW_ADDED_BY = "show_added_by"
+        const val HAPTICS = "haptics"
     }
 }

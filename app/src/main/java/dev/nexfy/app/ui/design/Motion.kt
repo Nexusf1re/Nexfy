@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.design
 
+import android.content.Context
+import android.provider.Settings
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.scaleIn
@@ -26,7 +28,9 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -61,44 +65,80 @@ object Motion {
     /** px/s past which a drag counts as a fling. */
     const val FlingVelocity = 1200f
 
-    fun <T> enter(ms: Int = Medium) = tween<T>(ms, easing = EmphasizedDecelerate)
-    fun <T> exit(ms: Int = Short) = tween<T>(ms, easing = EmphasizedAccelerate)
-    fun <T> standard(ms: Int = Medium) = tween<T>(ms, easing = Standard)
+    /**
+     * Shorter, simpler motion: "Reduzir animações" or the system's
+     * animations off. Every token below follows it, so screens never check
+     * it themselves. Snapshot state: composables that build specs follow it.
+     */
+    var reduced by mutableStateOf(false)
+
+    /** [ms] as this motion setting wants it: halved and capped when reduced. */
+    fun scaled(ms: Int): Int = if (reduced) minOf(ms / 2, 150) else ms
+
+    fun <T> enter(ms: Int = Medium) = tween<T>(scaled(ms), easing = EmphasizedDecelerate)
+    fun <T> exit(ms: Int = Short) = tween<T>(scaled(ms), easing = EmphasizedAccelerate)
+    fun <T> standard(ms: Int = Medium) = tween<T>(scaled(ms), easing = Standard)
 
     /** Settling after a gesture: critically damped, carries velocity, never overshoots. */
-    fun <T> settle(stiffness: Float = 260f) = spring<T>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = stiffness)
+    fun <T> settle(stiffness: Float = 260f) =
+        spring<T>(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = if (reduced) maxOf(stiffness, Spring.StiffnessMedium) else stiffness)
 
-    /** Small presses only: stiff with a hint of bounce. */
-    fun <T> press() = spring<T>(dampingRatio = 0.8f, stiffness = Spring.StiffnessHigh)
+    /** Small presses only: stiff with a hint of bounce (none when reduced). */
+    fun <T> press() = spring<T>(dampingRatio = if (reduced) 1f else 0.8f, stiffness = Spring.StiffnessHigh)
+
+    /** A short, bouncy "no" (a cover thrown with nothing after it). */
+    fun <T> refuse() = if (reduced) settle<T>(700f) else spring(dampingRatio = .3f, stiffness = 700f)
+
+    /** The player's cover turning over: a slow spring with a little sway. */
+    fun <T> turn() = if (reduced) settle<T>() else spring(dampingRatio = .74f, stiffness = 150f)
 
     /** A pushed screen: fades in while rising a little on a soft spring. */
-    val pageEnter: EnterTransition =
-        fadeIn(tween(420, delayMillis = Stagger, easing = Standard)) +
-            slideInVertically(spring(dampingRatio = 0.8f, stiffness = 230f)) { it / 28 }
-    val pageExit: ExitTransition = fadeOut(tween(240, easing = EmphasizedAccelerate))
+    val pageEnter: EnterTransition
+        get() = if (reduced) {
+            fadeIn(tween(scaled(420), easing = Standard))
+        } else {
+            fadeIn(tween(420, delayMillis = Stagger, easing = Standard)) +
+                slideInVertically(spring(dampingRatio = 0.8f, stiffness = 230f)) { it / 28 }
+        }
+    val pageExit: ExitTransition get() = fadeOut(tween(scaled(240), easing = EmphasizedAccelerate))
 
     /**
      * Back: the page shrinks into a fading card above the one underneath,
      * which settles in from slightly smaller. Linear, so a back gesture
-     * drags it evenly with the finger.
+     * drags it evenly with the finger. Reduced, it only cross-fades.
      */
-    val pageBack: ContentTransform = ContentTransform(
-        fadeIn(tween(360, easing = LinearEasing), initialAlpha = .35f) +
-            scaleIn(tween(360, easing = LinearEasing), initialScale = .92f),
-        scaleOut(tween(360, easing = LinearEasing), targetScale = .8f) +
-            // The card stays solid while it shrinks and only fades at the end.
-            fadeOut(tween(360, easing = CubicBezierEasing(.8f, 0f, 1f, 1f))),
-        targetContentZIndex = -1f,
-    )
+    val pageBack: ContentTransform
+        get() = if (reduced) {
+            ContentTransform(
+                fadeIn(tween(scaled(360), easing = LinearEasing)),
+                fadeOut(tween(scaled(360), easing = LinearEasing)),
+                targetContentZIndex = -1f,
+            )
+        } else {
+            ContentTransform(
+                fadeIn(tween(360, easing = LinearEasing), initialAlpha = .35f) +
+                    scaleIn(tween(360, easing = LinearEasing), initialScale = .92f),
+                scaleOut(tween(360, easing = LinearEasing), targetScale = .8f) +
+                    // The card stays solid while it shrinks and only fades at the end.
+                    fadeOut(tween(360, easing = CubicBezierEasing(.8f, 0f, 1f, 1f))),
+                targetContentZIndex = -1f,
+            )
+        }
 
     /** Tab switch: the new tab slides in from its side; the old one just fades. */
     fun tabSwitch(direction: Int): ContentTransform {
+        if (reduced) return fadeIn(tween(scaled(240), easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(scaled(140)))
         val d = if (direction >= 0) 1 else -1
         return (fadeIn(tween(240, 60, FastOutSlowInEasing)) +
             slideInHorizontally(spring(.9f, 380f, IntOffset.VisibilityThreshold)) { (it * .06f).toInt() * d }) togetherWith
             fadeOut(tween(140, easing = FastOutSlowInEasing))
     }
 }
+
+/** The system's "remove animations" (animator duration scale 0). */
+fun systemAnimationsOff(context: Context): Boolean = runCatching {
+    Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+}.getOrDefault(false)
 
 /**
  * Apply a drag step immediately and in order. A dispatched `snapTo` can
@@ -165,7 +205,7 @@ fun rememberCascade(key: Any?): Cascade = remember(key) { Cascade() }
  */
 @Composable
 fun Modifier.cascade(index: Int, clock: Cascade): Modifier {
-    if (LocalInspectionMode.current) return this
+    if (LocalInspectionMode.current || Motion.reduced) return this
     val animate = remember { clock.active }
     if (!animate) return this
     val a = remember { Animatable(0f) }

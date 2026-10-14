@@ -47,7 +47,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -59,6 +58,8 @@ import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.LoadError
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.CollectionBackdrop
+import dev.nexfy.app.ui.design.headerInk
+import dev.nexfy.app.ui.theme.isDark
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.DetailTopBar
 import dev.nexfy.app.ui.design.GlassBox
@@ -92,6 +93,8 @@ import uniffi.nexfy_core.RemoteCommand
 @Composable
 fun ShowScreen(actions: AppActions, id: String, list: LazyListState, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
+    val dark = c.isDark
+    val ink = headerInk()
     val haptics = rememberHaptics()
     val detail = rememberLoaded(id) { refresh -> actions.core.show(id, refresh) }
     val d = detail.state.value
@@ -155,25 +158,25 @@ fun ShowScreen(actions: AppActions, id: String, list: LazyListState, modifier: M
                             scaleY = sc
                         }
                         if (d == null && imageUrl == null) {
-                            Bone(coverModifier, RoundedCornerShape(10.dp), light = true)
+                            Bone(coverModifier, RoundedCornerShape(10.dp), light = dark)
                         } else {
                             Cover(imageUrl, coverModifier, radius = 10.dp, motion = true, sharedKey = actions.nav.origin("sh:$id"))
                         }
                         Spacer(Modifier.height(16.dp))
                         if (name.isBlank()) {
                             Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
-                                Bone(Modifier.size(180.dp, 22.dp), light = true)
+                                Bone(Modifier.size(180.dp, 22.dp), light = dark)
                             }
                         } else {
                             Text(
-                                name, color = Color.White, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
+                                name, color = ink, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             )
                         }
                         if (publisher != null) {
                             Text(
                                 publisher, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                                color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         } else {
@@ -181,32 +184,32 @@ fun ShowScreen(actions: AppActions, id: String, list: LazyListState, modifier: M
                         }
                         if (d == null) {
                             Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
-                                if (error == null) Bone(Modifier.size(132.dp, 10.dp), light = true)
+                                if (error == null) Bone(Modifier.size(132.dp, 10.dp), light = dark)
                             }
                         } else {
                             val count = d.show.episodeCount.toInt().takeIf { it > 0 } ?: d.episodes.size
                             Text(
-                                "Podcast · ${episodesLabel(count)}".uppercase(), color = Color.White.copy(.7f), fontSize = 12.sp,
+                                "Podcast · ${episodesLabel(count)}".uppercase(), color = ink.copy(.7f), fontSize = 12.sp,
                                 letterSpacing = 1.sp, textAlign = TextAlign.Center, maxLines = 1,
                             )
                         }
                         Spacer(Modifier.height(16.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            GlassBox(Modifier.height(48.dp).width(156.dp), CircleShape) {
+                            GlassBox(Modifier.height(48.dp).width(156.dp), CircleShape, dark = dark) {
                                 Row(
                                     Modifier.matchParentSize().clickable(enabled = next != null) { next?.let(play) },
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
                                 ) {
-                                    Icon(Icons.Rounded.PlayArrow, null, tint = Color.White)
+                                    Icon(Icons.Rounded.PlayArrow, null, tint = ink)
                                     Spacer(Modifier.width(8.dp))
                                     Text(
                                         if (next != null && next.started) "Continuar" else "Tocar",
-                                        color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
+                                        color = ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
                                     )
                                 }
                             }
-                            GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); menu = true })
+                            GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); menu = true }, light = !dark)
                         }
                     }
                 }

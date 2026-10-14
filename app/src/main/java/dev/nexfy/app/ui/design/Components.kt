@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import dev.nexfy.app.ui.theme.LocalLook
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Track
@@ -96,16 +97,25 @@ import androidx.compose.ui.semantics.semantics
 
 // ------------------------------------------------------------- haptics --
 
-/** Light tick for toggles and drags, stronger for play/pause and skips. */
-class Haptics(private val feedback: HapticFeedback) {
-    fun tick() = feedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    fun press() = feedback.performHapticFeedback(HapticFeedbackType.LongPress)
+/**
+ * Light tick for toggles and drags, stronger for play/pause and skips.
+ * Silent when "Vibração" is off, so callers never check it.
+ */
+class Haptics(private val feedback: HapticFeedback, private val enabled: Boolean) {
+    fun tick() {
+        if (enabled) feedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    fun press() {
+        if (enabled) feedback.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
 }
 
 @Composable
 fun rememberHaptics(): Haptics {
     val feedback = LocalHapticFeedback.current
-    return remember(feedback) { Haptics(feedback) }
+    val enabled = LocalLook.current.haptics
+    return remember(feedback, enabled) { Haptics(feedback, enabled) }
 }
 
 /** Space under lists so the floating dock and mini player never cover content. */
@@ -577,13 +587,18 @@ fun collapseOf(list: LazyListState): State<Float> {
     }
 }
 
-/** Full-screen backdrop for collections: living artwork fading into the background downwards and as the list scrolls. */
+/**
+ * Full-screen backdrop for collections: living artwork fading into the
+ * background downwards and as the list scrolls. On a light theme it is a
+ * pale wash, so the header reads in [headerInk].
+ */
 @Composable
 fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier = Modifier) {
     val bg = MaterialTheme.colorScheme.background
+    val pale = !MaterialTheme.colorScheme.isDark
     Box(modifier) {
         // Hidden once the list covers it: no layer is drawn at alpha 0.
-        LivingArtwork(art, Modifier.fillMaxSize().graphicsLayer { alpha = (1f - collapse.value).coerceIn(0f, 1f) }, dim = .25f)
+        LivingArtwork(art, Modifier.fillMaxSize().graphicsLayer { alpha = (1f - collapse.value).coerceIn(0f, 1f) }, dim = .25f, pale = pale)
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0f to Color.Transparent, .30f to Color.Transparent, .55f to bg.copy(alpha = .85f), .75f to bg),
@@ -592,6 +607,10 @@ fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier 
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = collapse.value.coerceIn(0f, 1f) }.background(bg))
     }
 }
+
+/** Text over a [CollectionBackdrop]: white on the dark art, the theme's ink on the pale wash. */
+@Composable
+fun headerInk(): Color = if (MaterialTheme.colorScheme.isDark) Color.White else MaterialTheme.colorScheme.onBackground
 
 /** Detail top bar: back always visible; title and play appear once the header scrolls away. */
 @Composable
