@@ -43,14 +43,28 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
      * playing elsewhere. The core finds it over the session; both places
      * then play it as a context (or, failing that, a list of songs).
      */
-    fun startRadio(seedUri: String) {
+    /** [onPlaylist] gets the radio's playlist id, to open its page as Spotify does. */
+    fun startRadio(seedUri: String, onPlaylist: (String) -> Unit = {}) {
         android.widget.Toast.makeText(app, "Iniciando rádio", android.widget.Toast.LENGTH_SHORT).show()
+        // The radio is read once (the core keeps it a day) and opened as soon as it is known.
+        scope.launch {
+            val radio = try {
+                core.radio(seedUri)
+            } catch (e: Exception) {
+                bridge.reportError(e.message ?: e.toString())
+                return@launch
+            }
+            radio.contextUri?.takeIf { it.startsWith("spotify:playlist:") }?.substringAfterLast(':')?.let(onPlaylist)
+            playRadio(seedUri, radio)
+        }
+    }
+
+    private fun playRadio(seedUri: String, radio: uniffi.nexfy_core.Radio) {
         if (remote == null) {
             run { core.startRadio(seedUri) }
             return
         }
         run {
-            val radio = core.radio(seedUri)
             core.remoteCommand(RemoteCommand.Shuffle(false))
             val context = radio.contextUri
             if (context != null) {

@@ -209,6 +209,9 @@ interface PlayerControls {
 
     /** Play [album] from its track at [index]. */
     fun playAlbum(album: AlbumDetail, index: Int)
+
+    /** Play the radio of [seedUri] and open its playlist. */
+    fun startRadio(seedUri: String)
 }
 
 private val settle = Motion.settle<Float>(247f)
@@ -283,10 +286,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     val haptics = rememberHaptics()
     val position = rememberPosition(s)
     val duration = track.durationMs.toLong().coerceAtLeast(1)
-    // Next only when something follows: the queue (the rest of the context is
-    // in it) or repeat. Autoplay does not run here, so the context's end is
-    // the end. Another device keeps its own queue: assume it has one.
-    val hasNext = s.remote != null || s.queue.next.isNotEmpty() || s.queue.repeat == RepeatMode.ALL
+    // Next only when something follows in the queue: the rest of the context
+    // is in it, and with repeat on it goes round to the first song again (a
+    // lone song has nothing after it). Autoplay does not run here. Another
+    // device keeps its own queue: assume it has one.
+    val hasNext = s.remote != null || s.queue.next.isNotEmpty()
     var showQueue by remember { mutableStateOf(false) }
     var showActions by remember { mutableStateOf(false) }
     if (showActions) {

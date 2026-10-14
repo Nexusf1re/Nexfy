@@ -42,7 +42,10 @@ class MainActivity : ComponentActivity() {
         // Reconnect playback with the saved credential, if any.
         lifecycleScope.launch { runCatching { app.core.restoreSession() } }
         // A widget tap opens the full player; not again on recreation.
-        if (savedInstanceState == null) OpenPlayer.from(intent)
+        if (savedInstanceState == null) {
+            OpenPlayer.from(intent)
+            dev.nexfy.app.ui.SpotifyLinks.from(intent)
+        }
 
         enableEdgeToEdge()
         jank = trackJank(window)
@@ -67,6 +70,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         OpenPlayer.from(intent)
+        dev.nexfy.app.ui.SpotifyLinks.from(intent)
     }
 
     override fun onStart() {

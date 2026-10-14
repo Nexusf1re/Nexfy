@@ -328,7 +328,10 @@ fn parse_jam(json: &Value, me: &str) -> Option<JamSession> {
                 .collect()
         })
         .unwrap_or_default();
-    let share_url = text(s, &["join_session_url", "joinSessionUrl", "share_url", "shareUrl"])
+    // The answer's join URL is internal (hm://social-connect/...): only a web
+    // link opens from a chat, so anything else becomes the public one.
+    let share_url = text(s, &["share_url", "shareUrl", "join_session_url", "joinSessionUrl"])
+        .filter(|url| url.starts_with("https://"))
         .unwrap_or_else(|| format!("https://open.spotify.com/socialsession/{join_token}"));
     Some(JamSession {
         is_host: s.get("is_session_owner").and_then(Value::as_bool).unwrap_or(!owner.is_empty() && owner == me),

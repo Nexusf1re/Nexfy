@@ -1707,8 +1707,17 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                 prev_tracks,
             } => inner.update_queue(|queue| {
                 queue.context_uri = Some(context_uri).filter(|uri| !uri.is_empty());
+                let current_uri = current_track.as_ref().map(|track| track.uri.clone());
                 queue.current = current_track.map(entry);
-                queue.next = next_tracks.into_iter().take(QUEUE_AHEAD).map(entry).collect();
+                // With repeat on, librespot fills the queue by going round the
+                // context again: stop where it comes back to this song, so a lone
+                // song shows alone instead of a hundred copies of itself.
+                queue.next = next_tracks
+                    .into_iter()
+                    .take(QUEUE_AHEAD)
+                    .map(entry)
+                    .take_while(|next| Some(&next.uri) != current_uri.as_ref())
+                    .collect();
                 let skip = prev_tracks.len().saturating_sub(QUEUE_BEHIND);
                 queue.previous = prev_tracks.into_iter().skip(skip).map(entry).collect();
             }),

@@ -108,9 +108,7 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
                 }
             }
             Action(Icons.Rounded.Radio, "Iniciar rádio") {
-                haptics.tick()
-                (context.applicationContext as dev.nexfy.app.NexfyApp).commands.startRadio(track.uri)
-                onDismiss()
+                go { controls.startRadio(track.uri) }
             }
             val d = details
             // One row per artist (names and ids come in the same order).

@@ -237,7 +237,9 @@ class AppActions(
     }
 
     /** Play the radio of a song or artist, wherever playback is. */
-    fun startRadio(seedUri: String) = app.commands.startRadio(seedUri)
+    /** Plays a song's or artist's radio and opens its playlist, as Spotify does. */
+    override fun startRadio(seedUri: String) =
+        app.commands.startRadio(seedUri) { id -> open(Route.Playlist(id), Peek("Rádio")) }
 
     /** The device playing elsewhere, if any: playback commands go to it. */
     private val remote get() = app.commands.remote
@@ -404,6 +406,7 @@ fun NexfyRoot(
             )
 
             PlayerSheet(snapshot, actions)
+            LinkOpener(actions)
             NoticeBar(
                 app.edits,
                 Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
@@ -500,6 +503,43 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
                     Text(t.label, color = tint, fontSize = 11.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Opens the Spotify link the app was started with (or handed while open):
+ * pages go on the stack, a song plays on its album's page, a Jam link joins
+ * the Jam and shows it.
+ */
+@Composable
+private fun LinkOpener(actions: AppActions) {
+    val link by SpotifyLinks.pending.collectAsState()
+    var jamOpen by remember { mutableStateOf(false) }
+    if (jamOpen) dev.nexfy.app.ui.player.JamSheet { jamOpen = false }
+    LaunchedEffect(link) {
+        val text = link ?: return@LaunchedEffect
+        SpotifyLinks.pending.value = null
+        when (val target = SpotifyLinks.resolve(text)) {
+            is LinkTarget.Album -> actions.open(Route.Album(target.id))
+            is LinkTarget.Playlist -> actions.open(Route.Playlist(target.id))
+            is LinkTarget.Artist -> actions.open(Route.Artist(target.id))
+            is LinkTarget.Show -> actions.open(Route.Show(target.id))
+            is LinkTarget.Track -> {
+                val track = runCatching { actions.core.tracksInfo(listOf(target.uri)) }.getOrNull()?.firstOrNull()
+                if (track == null) {
+                    android.widget.Toast.makeText(actions.app, "Não deu para abrir essa música", android.widget.Toast.LENGTH_SHORT).show()
+                    return@LaunchedEffect
+                }
+                track.albumId?.let { actions.open(Route.Album(it), Peek(track.album, track.artists, track.imageUrl)) }
+                actions.play(listOf(track))
+            }
+            is LinkTarget.Jam -> {
+                runCatching { actions.core.jamJoin(target.link) }
+                    .onFailure { android.widget.Toast.makeText(actions.app, "Não deu para entrar nessa Jam", android.widget.Toast.LENGTH_SHORT).show() }
+                jamOpen = true
+            }
+            null -> android.widget.Toast.makeText(actions.app, "Esse link do Spotify não abre no Nexfy", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 }
