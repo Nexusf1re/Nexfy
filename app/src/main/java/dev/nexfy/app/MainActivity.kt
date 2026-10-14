@@ -3,16 +3,30 @@ package dev.nexfy.app
 import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import dev.nexfy.app.ui.design.Motion
+import dev.nexfy.app.ui.design.systemAnimationsOff
+import dev.nexfy.app.ui.theme.Look
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.session.MediaController
@@ -54,18 +68,48 @@ class MainActivity : ComponentActivity() {
             app.bridge.state.map { it.track?.coverUrl }.distinctUntilChanged(),
             app.library.coverAccent,
         ) { url, on -> url.takeIf { on } }.distinctUntilChanged()
+        val library = app.library
         setContent {
-            NexfyTheme(accentArt = accentArt) {
-                NexfyRoot(
-                    app = app,
-                    controller = controller,
-                    openBrowser = { url ->
-                        CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url))
-                    },
+            val mode by library.themeMode.collectAsState()
+            val dark = when (mode) {
+                ThemeMode.System -> isSystemInDarkTheme()
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            // The default edge-to-edge styles, but the icons follow the chosen theme, not the system's.
+            DisposableEffect(dark) {
+                enableEdgeToEdge(
+                    SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark },
+                    SystemBarStyle.auto(Color.argb(0xe6, 0xFF, 0xFF, 0xFF), Color.argb(0x80, 0x1b, 0x1b, 0x1b)) { dark },
                 )
+                onDispose { }
+            }
+            val reduce by library.reduceMotion.collectAsState()
+            val reduced = reduce || systemStill
+            SideEffect { Motion.reduced = reduced }
+            val backdrop by library.animatedBackdrop.collectAsState()
+            val lyricsSize by library.lyricsSize.collectAsState()
+            val addedBy by library.showAddedBy.collectAsState()
+            val haptics by library.haptics.collectAsState()
+            val look = remember(backdrop, lyricsSize, addedBy, haptics) { Look(backdrop, lyricsSize.scale, addedBy, haptics) }
+            NexfyTheme(dark = dark, accentArt = accentArt, look = look) {
+                // Silences the framework's own feedback too (long presses), not just Nexfy's Haptics.
+                val feedback = LocalHapticFeedback.current
+                CompositionLocalProvider(LocalHapticFeedback provides if (haptics) feedback else NoHaptics) {
+                    NexfyRoot(
+                        app = app,
+                        controller = controller,
+                        openBrowser = { url ->
+                            CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url))
+                        },
+                    )
+                }
             }
         }
     }
+
+    /** The system's animations are off; read again each time the app comes back. */
+    private var systemStill by mutableStateOf(false)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -80,6 +124,7 @@ class MainActivity : ComponentActivity() {
         future.addListener({ controller = future.get() }, ContextCompat.getMainExecutor(this))
         (application as NexfyApp).visible.value = true
         jank?.isTrackingEnabled = true
+        systemStill = systemAnimationsOff(this)
     }
 
     override fun onStop() {
@@ -89,4 +134,9 @@ class MainActivity : ComponentActivity() {
         controller = null
         super.onStop()
     }
+}
+
+/** Feedback that does nothing: "Vibração" off. */
+private object NoHaptics : HapticFeedback {
+    override fun performHapticFeedback(hapticFeedbackType: HapticFeedbackType) = Unit
 }

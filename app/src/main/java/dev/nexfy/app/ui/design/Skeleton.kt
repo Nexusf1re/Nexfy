@@ -52,10 +52,13 @@ private object Shimmer {
     val phase = mutableFloatStateOf(0f)
 }
 
-/** Runs the shimmer clock while any bone is on screen. Place once, near the root. */
+/**
+ * Runs the shimmer clock while any bone is on screen. Place once, near the
+ * root. With reduced motion the bones stay still, without the sweep.
+ */
 @Composable
 fun ShimmerDriver() {
-    val running by remember { derivedStateOf { Shimmer.bones > 0 } }
+    val running by remember { derivedStateOf { Shimmer.bones > 0 && !Motion.reduced } }
     if (running) {
         LaunchedEffect(Unit) {
             while (true) {
@@ -89,6 +92,7 @@ fun Bone(modifier: Modifier, shape: Shape = RoundedCornerShape(6.dp), light: Boo
                 val travel = 600.dp.toPx() + band
                 onDrawBehind {
                     drawRect(base)
+                    if (Motion.reduced) return@onDrawBehind
                     val x = -band + Shimmer.phase.floatValue * travel - origin[0]
                     drawRect(
                         Brush.linearGradient(
@@ -173,5 +177,5 @@ fun CarouselSkeleton(circle: Boolean = false) {
 }
 
 /** Fade used when a skeleton gives way to content in a lazy list. */
-fun <T> skeletonFade(): FiniteAnimationSpec<T> = tween(Motion.Medium)
+fun <T> skeletonFade(): FiniteAnimationSpec<T> = tween(Motion.scaled(Motion.Medium))
 

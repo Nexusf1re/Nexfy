@@ -63,7 +63,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
@@ -76,6 +75,9 @@ import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.LoadError
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.CollectionBackdrop
+import dev.nexfy.app.ui.design.headerInk
+import dev.nexfy.app.ui.theme.LocalLook
+import dev.nexfy.app.ui.theme.isDark
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.DetailTopBar
 import dev.nexfy.app.ui.design.GlassBox
@@ -162,6 +164,9 @@ fun CollectionScreen(
     footer: LazyListScope.() -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
+    // Header colours over the backdrop: white on dark art, ink on the light theme's pale wash.
+    val dark = c.isDark
+    val ink = headerInk()
     val haptics = rememberHaptics()
     val collapse = collapseOf(list)
     val dismiss = remember { Animatable(0f) }
@@ -201,17 +206,19 @@ fun CollectionScreen(
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
     var menuFor by remember { mutableStateOf<Track?>(null) }
     menuFor?.let { t -> TrackMenu(t, actions, ownPlaylist, all.indexOf(t).takeIf { it >= 0 }) { menuFor = null } }
-    // Who added each song, shown only where more than one person adds.
+    // Who added each song, shown only where more than one person adds (and
+    // "Mostrar quem adicionou" is on: off, the faces are not even looked up).
+    val addedByOn = LocalLook.current.showAddedBy
     val contributors = remember(all, all.size) { all.mapNotNull { it.addedBy }.distinct() }
     var faces by remember(contributors) { mutableStateOf(contributors.mapNotNull { knownFaces[it] }.associateBy { it.id }) }
-    LaunchedEffect(contributors) {
-        if (contributors.size > 1 && contributors.any { it !in faces }) {
+    LaunchedEffect(contributors, addedByOn) {
+        if (addedByOn && contributors.size > 1 && contributors.any { it !in faces }) {
             val loaded = actions.core.users(contributors.take(MAX_FACES))
             loaded.forEach { knownFaces[it.id] = it }
             faces = loaded.associateBy { it.id }
         }
     }
-    val showFaces = contributors.size > 1
+    val showFaces = addedByOn && contributors.size > 1
 
     Box(modifier) {
         CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
@@ -235,18 +242,18 @@ fun CollectionScreen(
                         }
                         val coverRadius = if (round) 104.dp else 10.dp
                         if (loading && imageUrl == null) {
-                            Bone(coverModifier, RoundedCornerShape(coverRadius), light = true)
+                            Bone(coverModifier, RoundedCornerShape(coverRadius), light = dark)
                         } else {
                             Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
                         }
                         Spacer(Modifier.height(16.dp))
                         if (loading && title.isBlank()) {
                             Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
-                                Bone(Modifier.size(180.dp, 22.dp), light = true)
+                                Bone(Modifier.size(180.dp, 22.dp), light = dark)
                             }
                         } else {
                             Text(
-                                title, color = Color.White, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
+                                title, color = ink, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -264,18 +271,18 @@ fun CollectionScreen(
                                 }
                                 Text(
                                     subtitle,
-                                    color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                                    color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
                         if (loading && meta.isBlank()) {
                             Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
-                                Bone(Modifier.size(132.dp, 10.dp), light = true)
+                                Bone(Modifier.size(132.dp, 10.dp), light = dark)
                             }
                         } else {
                             Text(
-                                meta.uppercase(), color = Color.White.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
+                                meta.uppercase(), color = ink.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
                                 textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -284,8 +291,8 @@ fun CollectionScreen(
                             GlassIcon(Icons.Rounded.Shuffle, "Aleatório", {
                                 haptics.press()
                                 actions.play(all, all.indices.random(), shuffle = true, source = source, contextUri = contextUri)
-                            }, enabled = all.isNotEmpty())
-                            GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape) {
+                            }, enabled = all.isNotEmpty(), light = !dark)
+                            GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape, dark = dark) {
                                 Row(
                                     Modifier.matchParentSize().clickable(enabled = all.isNotEmpty()) {
                                         haptics.press()
@@ -294,9 +301,9 @@ fun CollectionScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
                                 ) {
-                                    Icon(Icons.Rounded.PlayArrow, null, tint = Color.White)
+                                    Icon(Icons.Rounded.PlayArrow, null, tint = ink)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Tocar", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                                    Text("Tocar", color = ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                                 }
                             }
                             if (keepKey != null) {
@@ -308,17 +315,17 @@ fun CollectionScreen(
                                         if (kept) "Não fica mais no aparelho" else "Mantida no aparelho: baixa no Wi-Fi",
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
-                                }, enabled = all.isNotEmpty())
+                                }, enabled = all.isNotEmpty(), light = !dark)
                             }
                             onMore?.let { more ->
-                                GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); more() })
+                                GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); more() }, light = !dark)
                             }
                         }
                         if (kept && all.isNotEmpty()) {
                             Text(
                                 if (onPhone >= all.size) "Todas no aparelho" else "$onPhone de ${all.size} no aparelho · baixando no Wi-Fi",
                                 Modifier.padding(top = 10.dp),
-                                color = Color.White.copy(.7f), fontSize = 12.sp,
+                                color = ink.copy(.7f), fontSize = 12.sp,
                             )
                         }
                     }

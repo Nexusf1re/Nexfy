@@ -6,7 +6,6 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -39,6 +38,7 @@ import coil3.request.ImageRequest
 import coil3.request.SuccessResult
 import coil3.request.allowHardware
 import coil3.toBitmap
+import dev.nexfy.app.ui.theme.LocalLook
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -176,14 +176,17 @@ fun contentFor(background: Color): Color =
 /**
  * Living artwork: four soft colour blobs from the cover drift on slow,
  * out-of-phase orbits and blend into a mesh-like gradient. Redraws each
- * frame without recomposing (states are read in the draw lambda).
+ * frame without recomposing (states are read in the draw lambda). With
+ * "Fundo animado" off it is drawn once, at a fixed phase. [pale] washes it
+ * toward white instead of darkening it, for dark text on a light theme.
  */
 @Composable
-fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f) {
+fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f, pale: Boolean = false) {
     val colors = rememberCoverPalette(art)
     val animated = colors.map { animateColorAsState(it, Motion.standard(1200), label = "mesh") }
     val context = LocalContext.current
-    val moving = remember { motionAllowed(context) }
+    val allowed = remember { motionAllowed(context) }
+    val moving = allowed && LocalLook.current.animatedBackdrop
     val t = if (moving) {
         rememberInfiniteTransition(label = "mesh")
             .animateFloat(0f, 1f, infiniteRepeatable(tween(36_000, easing = LinearEasing)), label = "t")
@@ -216,28 +219,26 @@ fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f
                 center,
             )
         }
-        drawRect(Color.Black.copy(alpha = dim.coerceIn(0f, 1f)))
+        drawRect(if (pale) Color.White.copy(alpha = .62f) else Color.Black.copy(alpha = dim.coerceIn(0f, 1f)))
     }
     }
 }
 
 /** Off with battery saver or with system animations removed. */
 fun motionAllowed(context: Context): Boolean {
-    val scale = runCatching {
-        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
-    }.getOrDefault(1f)
     val saver = (context.getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isPowerSaveMode == true
-    return scale > 0f && !saver
+    return !systemAnimationsOff(context) && !saver
 }
 
 /**
  * Slow Ken Burns drift of a still cover (24 s loop). The cover is always
- * zoomed past the pan, so the drift never uncovers the edges.
+ * zoomed past the pan, so the drift never uncovers the edges. Ambient
+ * motion: it stops with reduced motion.
  */
 @Composable
 fun Modifier.kenBurns(enabled: Boolean): Modifier {
     val context = LocalContext.current
-    val on = enabled && remember { motionAllowed(context) }
+    val on = enabled && !Motion.reduced && remember { motionAllowed(context) }
     if (!on) return this
     val t by rememberInfiniteTransition(label = "kenburns")
         .animateFloat(0f, 1f, infiniteRepeatable(tween(24_000, easing = LinearEasing)), label = "kb")

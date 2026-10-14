@@ -11,7 +11,9 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -65,15 +67,40 @@ private val Type = Typography(
 )
 
 /**
+ * Appearance and behaviour settings that drawing code reads. Motion has its
+ * own switch ([Motion.reduced]) since animation specs are built outside
+ * composition too.
+ */
+@Immutable
+data class Look(
+    /** The cover backdrop drifts; off, it is drawn once and holds still. */
+    val animatedBackdrop: Boolean = true,
+    /** Multiplies the lyrics' text sizes. */
+    val lyricsScale: Float = 1f,
+    /** Faces of who added each song, where more than one person adds. */
+    val showAddedBy: Boolean = true,
+    /** Vibration on touches; [dev.nexfy.app.ui.design.Haptics] stays silent when off. */
+    val haptics: Boolean = true,
+)
+
+/** Dynamic, not static: a change recomposes only what reads it. */
+val LocalLook = compositionLocalOf { Look() }
+
+/**
  * [accentArt] is the cover the accent follows (null: the brand green). The
  * scheme is remembered: a new instance would recompose every screen.
  */
 @Composable
-fun NexfyTheme(dark: Boolean = isSystemInDarkTheme(), accentArt: Flow<String?>? = null, content: @Composable () -> Unit) {
+fun NexfyTheme(
+    dark: Boolean = isSystemInDarkTheme(),
+    accentArt: Flow<String?>? = null,
+    look: Look = Look(),
+    content: @Composable () -> Unit,
+) {
     val scheme = remember(dark) { neutral(dark) }
     val accent = rememberAccent(accentArt, dark)
     MaterialTheme(colorScheme = scheme, typography = Type) {
-        CompositionLocalProvider(LocalContentColor provides scheme.onBackground, LocalAccent provides accent) { content() }
+        CompositionLocalProvider(LocalContentColor provides scheme.onBackground, LocalAccent provides accent, LocalLook provides look) { content() }
     }
 }
 
