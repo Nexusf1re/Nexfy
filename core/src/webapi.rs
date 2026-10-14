@@ -29,6 +29,19 @@ const API: &str = "https://api.spotify.com/v1";
 const MAX_ITEMS: usize = 2000;
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(5);
 
+/// Saved time of a cached read changed by the user: read again before use.
+const CHANGED: u64 = 0;
+
+/// "13 h", "40 min" or "20 s", for a pause Spotify asked for.
+fn pause_label(wait: Duration) -> String {
+    let s = wait.as_secs();
+    match s {
+        3600.. => format!("{} h", (s + 1800) / 3600),
+        60.. => format!("{} min", (s + 30) / 60),
+        _ => format!("{s} s"),
+    }
+}
+
 // ---------------------------------------------------------------- models --
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -423,6 +436,8 @@ struct StoredGrant {
 struct GrantState {
     stored: StoredGrant,
     access: Option<(String, Instant)>,
+    /// Spotify asked for a long pause (the daily quota): skip this app until then.
+    blocked_until: Option<Instant>,
 }
 
 /// Request routing: which app may answer.
@@ -453,6 +468,7 @@ impl WebApi {
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default(),
             access: None,
+            blocked_until: None,
         };
         let mut shared = load("shared.json");
         shared.stored.client_id = auth::SHARED_WEB_CLIENT_ID.to_owned();
@@ -505,6 +521,7 @@ impl WebApi {
                     refresh_token: None,
                 },
                 access: None,
+                blocked_until: None,
             };
             self.save(WebApp::Personal, &personal.stored);
         }
@@ -556,6 +573,18 @@ impl WebApi {
         Ok(response.access_token)
     }
 
+    async fn blocked(self: &Arc<Self>, app: WebApp) -> bool {
+        let mut grant = self.grant(app).lock().await;
+        match grant.blocked_until {
+            Some(until) if Instant::now() < until => true,
+            Some(_) => {
+                grant.blocked_until = None;
+                false
+            }
+            None => false,
+        }
+    }
+
     async fn signed_in(self: &Arc<Self>, app: WebApp) -> bool {
         let grant = self.grant(app).lock().await;
         !grant.stored.client_id.is_empty() && grant.stored.refresh_token.is_some()
@@ -572,6 +601,10 @@ impl WebApi {
         let mut last_error = anyhow!("nenhum app da Web API conectado");
         for &app in apps {
             if !self.signed_in(app).await {
+                continue;
+            }
+            if self.blocked(app).await {
+                last_error = anyhow!("o Spotify limitou o acesso por um tempo; o app mostra o que tem guardado");
                 continue;
             }
             match self.get_with(app, path).await {
@@ -610,8 +643,13 @@ impl WebApi {
                         .and_then(|v| v.parse::<u64>().ok())
                         .map(Duration::from_secs)
                         .unwrap_or(RATE_LIMIT_WAIT);
+                    if wait > RATE_LIMIT_WAIT {
+                        // Asking again before then only spends more of the quota.
+                        self.grant(app).lock().await.blocked_until = Some(Instant::now() + wait);
+                        log::warn!("{app:?} paused by Spotify for {}s", wait.as_secs());
+                    }
                     if waited || wait > RATE_LIMIT_WAIT {
-                        bail!("limite de requisições ({}s)", wait.as_secs());
+                        bail!("o Spotify limitou o acesso por {}", pause_label(wait));
                     }
                     waited = true;
                     tokio::time::sleep(wait).await;
@@ -645,7 +683,7 @@ impl WebApi {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         if let Some((saved, value)) = &cached {
-            if !refresh {
+            if !refresh && *saved != CHANGED {
                 if now_secs().saturating_sub(*saved) >= ttl.as_secs() {
                     self.revalidate(path.to_owned(), route, file.clone());
                 }
@@ -1001,7 +1039,7 @@ impl WebApi {
         let url = format!("{API}{path}");
         let mut last_error = anyhow!("nenhum app da Web API conectado");
         for app in [WebApp::Personal, WebApp::Shared] {
-            if !self.signed_in(app).await {
+            if !self.signed_in(app).await || self.blocked(app).await {
                 continue;
             }
             let mut refreshed = false;
@@ -1040,9 +1078,16 @@ impl WebApi {
         Err(last_error)
     }
 
-    /// Drops the cached copy of a read, so the next one asks Spotify.
+    /// Marks the cached copy of a read as changed: the next read asks
+    /// Spotify first, and still has the copy if Spotify does not answer.
     fn forget(&self, path: &str) {
-        let _ = std::fs::remove_file(self.cache_file(path));
+        let file = self.cache_file(path);
+        let Some((_, value)) = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice::<(u64, serde_json::Value)>(&bytes).ok()) else {
+            return;
+        };
+        if let Ok(bytes) = serde_json::to_vec(&(CHANGED, value)) {
+            let _ = std::fs::write(&file, bytes);
+        }
     }
 
     fn forget_library(&self) {
@@ -1184,7 +1229,7 @@ impl WebApi {
     pub async fn player_tokens(self: &Arc<Self>) -> Vec<String> {
         let mut tokens = Vec::new();
         for app in [WebApp::Personal, WebApp::Shared] {
-            if self.signed_in(app).await {
+            if self.signed_in(app).await && !self.blocked(app).await {
                 match self.token(app, false).await {
                     Ok(token) => tokens.push(token),
                     Err(error) => log::info!("{app:?} has no player token: {error:#}"),

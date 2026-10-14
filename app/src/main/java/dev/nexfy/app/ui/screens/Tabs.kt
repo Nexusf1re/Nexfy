@@ -89,6 +89,12 @@ internal fun ConnectPrompt(actions: AppActions) = Column(horizontalAlignment = A
     PillButton("Abrir ajustes", { actions.open(Route.Settings) })
 }
 
+/** The sign-in prompt only when no Web API app is connected; any other failure says what happened. */
+@Composable
+internal fun ConnectOrError(error: String?, actions: AppActions, onRetry: () -> Unit) {
+    if (error?.contains("nenhum app da Web API") == true) ConnectPrompt(actions) else dev.nexfy.app.ui.LoadError(error, onRetry)
+}
+
 @Composable
 fun SearchScreen(actions: AppActions, list: LazyListState) {
     val c = MaterialTheme.colorScheme

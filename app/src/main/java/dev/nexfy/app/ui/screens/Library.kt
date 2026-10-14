@@ -186,7 +186,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
             }
             val shelfState = (if (shelf == Shelf.Playlists) playlists else albums).state
             if (entries == null && shelfState.error != null) {
-                item(key = "connect") { ConnectPrompt(actions) }
+                item(key = "connect") { ConnectOrError(shelfState.error, actions, (if (shelf == Shelf.Playlists) playlists else albums).refresh) }
             }
             if (entries == null && shelfState.loading) {
                 items(8, key = { "sk$it" }) { i ->

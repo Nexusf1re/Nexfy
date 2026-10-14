@@ -88,7 +88,17 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 if (!shown) return@collectLatest
                 while (true) {
                     refreshRemote()
-                    delay(if (bridge.state.value.remote != null) 2_500 else 5_000)
+                    // Each poll spends the Web API quota Spotify gives development apps:
+                    // often only while another device plays; this phone's own playback
+                    // already reports when another device takes over.
+                    val s = bridge.state.value
+                    delay(
+                        when {
+                            s.remote != null -> if (s.playing) 5_000 else 15_000
+                            s.playing -> 45_000
+                            else -> 20_000
+                        },
+                    )
                 }
             }
         }

@@ -132,7 +132,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             }
             item(key = "liked") { LikedTile { actions.open(Route.Liked) } }
             if (playlists.state.error != null && playlists.state.value == null) {
-                item(key = "connect") { ConnectPrompt(actions) }
+                item(key = "connect") { ConnectOrError(playlists.state.error, actions, playlists.refresh) }
             }
             homeRow("recent", "Tocadas recentemente", recent.state.pending() || playlists.state.pending(), recentCards.takeIf { it.isNotEmpty() }) { cards ->
                 Carousel(actions.nav.list("row:home-recent"), cards.first().key) {
