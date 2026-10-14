@@ -218,6 +218,10 @@ struct Inner {
     web: Arc<WebApi>,
     offline: offline::Offline,
     connected: Mutex<Option<Connected>>,
+    /// One reconnect at a time: screens that ask together after the session
+    /// drops would each start a session and a Spirc, and the player would
+    /// follow only one of them.
+    reconnecting: tokio::sync::Mutex<()>,
     queue: Mutex<QueueState>,
     /// Metadata for queue entries, fetched once per track.
     track_cache: Mutex<HashMap<String, Track>>,
@@ -255,6 +259,7 @@ impl NexfyCore {
                 connected: Mutex::new(None),
                 queue: Mutex::new(QueueState::default()),
                 track_cache: Mutex::new(tracks),
+                reconnecting: tokio::sync::Mutex::new(()),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
             }),
@@ -1473,6 +1478,11 @@ impl Inner {
     /// saving) before using it. The Connect device is registered again on
     /// the new session and what was playing resumes where it was.
     async fn ensure_session(&self) -> Result<(), CoreError> {
+        if self.session_alive()? {
+            return Ok(());
+        }
+        let _turn = self.reconnecting.lock().await;
+        // Someone else may have reconnected while this call waited.
         let (player, old_spirc) = {
             let connected = self.connected.lock().unwrap();
             let connected = connected
@@ -1500,6 +1510,15 @@ impl Inner {
             connected.spirc = spirc;
         }
         Ok(())
+    }
+
+    /// Whether the session is up; an error when there is none at all.
+    fn session_alive(&self) -> Result<bool, CoreError> {
+        let connected = self.connected.lock().unwrap();
+        let connected = connected
+            .as_ref()
+            .ok_or_else(|| CoreError::Session("não conectado".into()))?;
+        Ok(!connected.session.is_invalid())
     }
 
     fn with_spirc(&self, action: impl FnOnce(&Spirc) -> Result<(), LibrespotError>) -> Result<(), CoreError> {
