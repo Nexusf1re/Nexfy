@@ -8,7 +8,10 @@ use anyhow::{Result, anyhow};
 use futures_util::{StreamExt, stream};
 use librespot_core::SpotifyUri;
 use librespot_core::session::Session;
-use librespot_metadata::{Album as SessionAlbum, Artist as SessionArtist, Metadata, Playlist as SessionPlaylist, Track as SessionTrack};
+use librespot_metadata::{
+    Album as SessionAlbum, Artist as SessionArtist, Episode as SessionEpisode, Metadata, Playlist as SessionPlaylist,
+    Track as SessionTrack,
+};
 
 use crate::webapi::{Album, Artist, ArtistDetail, Track};
 
@@ -58,13 +61,37 @@ fn to_track(track: SessionTrack, large: bool) -> Track {
     }
 }
 
-/// Metadata for track URIs (the queue view), in order; failures are left out.
+/// A podcast episode as a queue row: the show stands where the artists do.
+fn episode_track(episode: SessionEpisode) -> Track {
+    Track {
+        uri: episode.id.to_uri(),
+        title: episode.name,
+        artists: episode.show_name,
+        artist_ids: Vec::new(),
+        album: String::new(),
+        album_id: None,
+        image_url: episode.covers.iter().max_by_key(|image| image.width).map(|image| cover_url(&image.id)),
+        duration_ms: episode.duration.max(0) as u32,
+        explicit: episode.is_explicit,
+        playable: !episode.audio.is_empty(),
+        added_at_ms: None,
+        added_by: None,
+    }
+}
+
+/// Metadata for track and episode URIs (the queue view), in order;
+/// failures are left out.
 pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
     let parsed: Vec<SpotifyUri> = uris.iter().filter_map(|uri| SpotifyUri::from_uri(uri).ok()).collect();
     stream::iter(parsed)
-        .map(|uri| async move { SessionTrack::get(session, &uri).await })
+        .map(|uri| async move {
+            match uri {
+                SpotifyUri::Episode { .. } => SessionEpisode::get(session, &uri).await.map(episode_track),
+                _ => SessionTrack::get(session, &uri).await.map(|track| to_track(track, true)),
+            }
+        })
         .buffered(CONCURRENCY)
-        .filter_map(|result| async move { result.ok().map(|track| to_track(track, true)) })
+        .filter_map(|result| async move { result.ok() })
         .collect()
         .await
 }

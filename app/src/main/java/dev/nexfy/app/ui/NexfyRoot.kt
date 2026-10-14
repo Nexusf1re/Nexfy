@@ -88,6 +88,7 @@ import dev.nexfy.app.ui.screens.LikedScreen
 import dev.nexfy.app.ui.screens.PlaylistScreen
 import dev.nexfy.app.ui.screens.SearchScreen
 import dev.nexfy.app.ui.screens.SettingsScreen
+import dev.nexfy.app.ui.screens.ShowScreen
 import dev.nexfy.app.ui.theme.accentColor
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.launch
@@ -116,6 +117,7 @@ sealed interface Route {
     data class Playlist(val id: String) : Route { override val key get() = "pl:$id" }
     data class Album(val id: String) : Route { override val key get() = "al:$id" }
     data class Artist(val id: String) : Route { override val key get() = "ar:$id" }
+    data class Show(val id: String) : Route { override val key get() = "sh:$id" }
     data object Liked : Route { override val key get() = "liked" }
     data object Settings : Route { override val key get() = "settings" }
 }
@@ -412,6 +414,7 @@ private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifie
         is Route.Playlist -> PlaylistScreen(actions, route.id, nav.list(route.key), modifier)
         is Route.Album -> AlbumScreen(actions, route.id, nav.list(route.key), modifier)
         is Route.Artist -> ArtistScreen(actions, route.id, nav.list(route.key), modifier)
+        is Route.Show -> ShowScreen(actions, route.id, nav.list(route.key), modifier)
         Route.Liked -> LikedScreen(actions, nav.list(route.key), modifier)
         Route.Settings -> SettingsScreen(actions, modifier.safeDrawingPadding())
         null -> {
