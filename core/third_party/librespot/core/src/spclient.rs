@@ -21,6 +21,7 @@ use crate::{
         extended_metadata::BatchedEntityRequest,
         extended_metadata::{BatchedExtensionResponse, EntityRequest, ExtensionQuery},
         extension_kind::ExtensionKind,
+        playlist4_external::{ListChanges, OpList},
     },
     token::Token,
     util,
@@ -949,6 +950,45 @@ impl SpClient {
         self.request(&Method::GET, &endpoint, None, None).await
     }
 
+    /// Applies `changes` (add, remove, move, rename) to a playlist, as
+    /// Spotify's own clients do: no Web API quota involved.
+    pub async fn change_playlist(
+        &self,
+        playlist_id: &SpotifyId,
+        changes: &ListChanges,
+    ) -> SpClientResult {
+        let endpoint = format!("/playlist/v2/playlist/{}/changes", playlist_id.to_base62());
+        self.post_playlist_json(&endpoint, changes).await
+    }
+
+    /// Applies `changes` to the user's rootlist, the playlists in their library.
+    pub async fn change_rootlist(&self, changes: &ListChanges) -> SpClientResult {
+        let user = self.session().username();
+        let endpoint = format!("/playlist/v2/user/{user}/rootlist/changes");
+        self.post_playlist_json(&endpoint, changes).await
+    }
+
+    /// Creates a playlist with the attributes `ops` set and answers its
+    /// `uri` and `revision`. It is in no library until added to a rootlist.
+    pub async fn create_playlist(&self, ops: &OpList) -> SpClientResult {
+        self.post_playlist_json("/playlist/v2/playlist", ops).await
+    }
+
+    async fn post_playlist_json<M: MessageFull>(&self, endpoint: &str, message: &M) -> SpClientResult {
+        let body = playlist_json(message)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        self.request_with_options(
+            &Method::POST,
+            endpoint,
+            Some(headers),
+            Some(body.as_bytes()),
+            &NO_METRICS_AND_SALT,
+        )
+        .await
+    }
+
     /// Sends a player command (pause, resume, skip_next, seek_to, play...)
     /// to another Connect device, as Spotify's own clients do: no Web API
     /// quota involved. `command` is the JSON of the `command` field.
@@ -1014,6 +1054,17 @@ impl SpClient {
         )
         .await
     }
+}
+
+/// The protobuf JSON mapping, the form Spotify's web player writes
+/// playlists in; enums as numbers, as it sends them.
+fn playlist_json<M: MessageFull>(message: &M) -> Result<String, Error> {
+    let options = protobuf_json_mapping::PrintOptions {
+        enum_values_int: true,
+        ..Default::default()
+    };
+    protobuf_json_mapping::print_to_string_with_options(message, &options)
+        .map_err(Error::invalid_argument)
 }
 
 fn playlist_range_endpoint(playlist_id: &SpotifyId, from: usize, length: usize) -> String {
