@@ -12,6 +12,7 @@ mod lyrics;
 mod offline;
 mod remote;
 mod session_reads;
+mod sound;
 mod webapi;
 
 use std::collections::HashMap;
@@ -29,7 +30,7 @@ use librespot_core::session::Session;
 use librespot_core::{Error as LibrespotError, SpotifyId, SpotifyUri};
 use librespot_metadata::audio::{AudioItem, UniqueFields};
 use librespot_playback::audio_backend;
-use librespot_playback::config::{AudioFormat, PlayerConfig};
+use librespot_playback::config::AudioFormat;
 use librespot_playback::mixer::{Mixer, MixerConfig, VolumeGetter};
 use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel, QueueTrack};
 use tokio::net::TcpListener;
@@ -42,11 +43,9 @@ pub use webapi::{
 use webapi::WebApi;
 pub use offline::CacheInfo;
 pub use remote::{Device, RemoteCommand, RemoteState};
+pub use sound::{AudioQuality, SoundSettings};
 
 uniffi::setup_scaffolding!();
-
-/// Volume while another app's sound has focus (navigation, notifications).
-const DUCKED_VOLUME: f64 = 0.2;
 
 /// Flat: Kotlin sees each variant with its Display text as the message.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -155,26 +154,27 @@ struct Connected {
 }
 
 /// Software volume: Connect's volume (other devices can set it) times the
-/// ducking gain (another app speaking). The phone's own volume keys still
-/// work on top, through Android's stream volume.
+/// sound levels (ducking while another app speaks, the sleep timer's fade,
+/// normalisation). The phone's own volume keys still work on top, through
+/// Android's stream volume.
 #[derive(Clone)]
 struct NexfyMixer {
     volume: Arc<AtomicU64>,
-    duck: Arc<AtomicU64>,
+    levels: Arc<sound::Levels>,
 }
 
 impl NexfyMixer {
-    fn new(duck: Arc<AtomicU64>) -> Self {
+    fn new(levels: Arc<sound::Levels>) -> Self {
         Self {
             volume: Arc::new(AtomicU64::new(1.0f64.to_bits())),
-            duck,
+            levels,
         }
     }
 }
 
 impl Mixer for NexfyMixer {
     fn open(_: MixerConfig) -> Result<Self, LibrespotError> {
-        Ok(Self::new(Arc::new(AtomicU64::new(1.0f64.to_bits()))))
+        Ok(Self::new(Arc::new(sound::Levels::new(true))))
     }
 
     fn volume(&self) -> u16 {
@@ -189,21 +189,21 @@ impl Mixer for NexfyMixer {
     fn get_soft_volume(&self) -> Box<dyn VolumeGetter + Send> {
         Box::new(Gain {
             volume: self.volume.clone(),
-            duck: self.duck.clone(),
+            levels: self.levels.clone(),
         })
     }
 }
 
 struct Gain {
     volume: Arc<AtomicU64>,
-    duck: Arc<AtomicU64>,
+    levels: Arc<sound::Levels>,
 }
 
 impl VolumeGetter for Gain {
     fn attenuation_factor(&self) -> f64 {
         // Squared: Connect sliders feel linear to the ear this way.
         let volume = f64::from_bits(self.volume.load(Ordering::Relaxed));
-        volume * volume * f64::from_bits(self.duck.load(Ordering::Relaxed))
+        volume * volume * self.levels.gain()
     }
 }
 
@@ -220,7 +220,9 @@ struct Inner {
     track_cache: Mutex<HashMap<String, Track>>,
     listener: Mutex<Option<Arc<dyn CoreListener>>>,
     playing: AtomicBool,
-    duck: Arc<AtomicU64>,
+    levels: Arc<sound::Levels>,
+    /// Read at start: the player is built with it.
+    quality: AudioQuality,
 }
 
 #[derive(uniffi::Object)]
@@ -237,10 +239,13 @@ impl NexfyCore {
     pub fn new(cache_dir: String, device_name: String) -> Arc<Self> {
         let cache_dir = PathBuf::from(cache_dir);
         let tracks = load_track_cache(&cache_dir);
+        let quality = AudioQuality::load(&cache_dir);
         Arc::new(Self {
             inner: Arc::new(Inner {
                 web: Arc::new(WebApi::new(&cache_dir)),
-                offline: offline::Offline::new(&cache_dir),
+                offline: offline::Offline::new(&cache_dir, quality),
+                levels: Arc::new(sound::Levels::new(sound::load_normalize(&cache_dir))),
+                quality,
                 cache_dir,
                 device_name,
                 pending_login: Mutex::new(None),
@@ -249,7 +254,6 @@ impl NexfyCore {
                 track_cache: Mutex::new(tracks),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
-                duck: Arc::new(AtomicU64::new(1.0f64.to_bits())),
             }),
         })
     }
@@ -643,8 +647,34 @@ impl NexfyCore {
 
     /// Lower the volume while another app speaks (audio focus "can duck").
     pub fn set_ducked(&self, ducked: bool) {
-        let gain = if ducked { DUCKED_VOLUME } else { 1.0 };
-        self.inner.duck.store(gain.to_bits(), Ordering::Relaxed);
+        self.inner.levels.set_ducked(ducked)
+    }
+
+    // ---------------------------------------------------------- sound --
+
+    pub fn sound_settings(&self) -> SoundSettings {
+        SoundSettings {
+            quality: AudioQuality::load(&self.inner.cache_dir),
+            active_quality: self.inner.quality,
+            normalize: self.inner.levels.normalize(),
+        }
+    }
+
+    /// Takes effect on the next app start, with the player built anew.
+    pub fn set_audio_quality(&self, quality: AudioQuality) {
+        quality.save(&self.inner.cache_dir)
+    }
+
+    /// Heard at once, even mid-song.
+    pub fn set_normalize(&self, on: bool) {
+        self.inner.levels.set_normalize(on);
+        sound::save_normalize(&self.inner.cache_dir, on);
+    }
+
+    /// Extra gain from 0 to 1 over everything else, for the sleep timer's
+    /// fade out; the caller sets it back to 1.
+    pub fn set_fade(&self, gain: f64) {
+        self.inner.levels.set_fade(gain)
     }
 
     pub fn queue_state(&self) -> QueueState {
@@ -862,7 +892,7 @@ impl Inner {
             emit_set_queue_events: true,
             ..ConnectConfig::default()
         };
-        let mixer: Arc<dyn Mixer> = Arc::new(NexfyMixer::new(self.duck.clone()));
+        let mixer: Arc<dyn Mixer> = Arc::new(NexfyMixer::new(self.levels.clone()));
         let (spirc, task) = Spirc::new(config, session.clone(), credentials, player, mixer)
             .await
             .map_err(|e| CoreError::Session(e.to_string()))?;
@@ -875,9 +905,9 @@ impl Inner {
 
         let backend = audio_backend::find(None)
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
-        let mixer = NexfyMixer::new(self.duck.clone());
+        let mixer = NexfyMixer::new(self.levels.clone());
         let player = Player::new(
-            PlayerConfig::default(),
+            sound::player_config(self.quality, &self.levels),
             session.clone(),
             mixer.get_soft_volume(),
             move || backend(None, AudioFormat::default()),
