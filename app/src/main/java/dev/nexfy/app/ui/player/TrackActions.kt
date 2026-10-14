@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.LibraryAdd
@@ -49,7 +50,7 @@ private fun webLink(uri: String) = "https://open.spotify.com/track/" + uri.subst
 
 /**
  * What can be done with the song playing: go to its artists or album, copy
- * or share its link. [onNavigate] runs before opening a page (the player
+ * or share its link, set a sleep timer. [onNavigate] runs before opening a page (the player
  * collapses to show it).
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,6 +72,11 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
     var adding by remember { mutableStateOf(false) }
     if (adding) {
         dev.nexfy.app.ui.screens.AddToPlaylistSheet(listOf(track.uri)) { adding = false; onDismiss() }
+        return
+    }
+    var sleeping by remember { mutableStateOf(false) }
+    if (sleeping) {
+        SleepTimerSheet { sleeping = false; onDismiss() }
         return
     }
     val go = { open: () -> Unit ->
@@ -120,6 +126,7 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
                 context.startActivity(Intent.createChooser(send, null))
                 onDismiss()
             }
+            Action(Icons.Rounded.Bedtime, sleepTimerLabel()) { sleeping = true }
         }
     }
 }

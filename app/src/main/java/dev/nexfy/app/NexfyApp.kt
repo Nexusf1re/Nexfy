@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
 import dev.nexfy.app.playback.PlaybackService
+import dev.nexfy.app.playback.SleepTimer
 import dev.nexfy.app.widget.NexfyWidget
 import androidx.glance.appwidget.updateAll
 import dev.nexfy.core.NativeInit
@@ -56,6 +57,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
 
     /** Playback commands for the screens and the widget. */
     val commands: Commands by lazy { Commands(this, scope) }
+    val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
     val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
 
     /** Covers fade in as they load instead of popping over their placeholder. */

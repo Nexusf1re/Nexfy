@@ -12,22 +12,12 @@ use anyhow::{anyhow, Result};
 use librespot_audio::AudioFile;
 use librespot_core::session::Session;
 use librespot_core::{FileId, SpotifyUri};
-use librespot_metadata::audio::{AudioFileFormat, AudioItem};
+use librespot_metadata::audio::AudioItem;
+
+use crate::sound::AudioQuality;
 
 /// Audio cache size when the user has not chosen one.
 pub const DEFAULT_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
-
-/// The formats the player picks at its default 160 kbps, in its order:
-/// prefetching any other file would not be the one that plays.
-const FORMATS: [AudioFileFormat; 7] = [
-    AudioFileFormat::OGG_VORBIS_160,
-    AudioFileFormat::MP3_160,
-    AudioFileFormat::OGG_VORBIS_96,
-    AudioFileFormat::MP3_96,
-    AudioFileFormat::MP3_256,
-    AudioFileFormat::OGG_VORBIS_320,
-    AudioFileFormat::MP3_320,
-];
 
 /// How much the audio cache holds and may hold.
 #[derive(Debug, Clone, uniffi::Record)]
@@ -38,19 +28,22 @@ pub struct CacheInfo {
 
 pub struct Offline {
     dir: PathBuf,
+    /// The quality the player streams at; downloads pick the same file.
+    quality: AudioQuality,
     /// Song URI → the audio file it plays from (base16), so checking what
     /// is on the phone needs no network.
     files: Mutex<HashMap<String, String>>,
 }
 
 impl Offline {
-    pub fn new(cache_dir: &Path) -> Self {
-        let files = std::fs::read(cache_dir.join("audio_files.json"))
+    pub fn new(cache_dir: &Path, quality: AudioQuality) -> Self {
+        let files = std::fs::read(cache_dir.join(files_name(quality)))
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         Self {
             dir: cache_dir.to_owned(),
+            quality,
             files: Mutex::new(files),
         }
     }
@@ -93,7 +86,7 @@ impl Offline {
         let mut files = self.files.lock().unwrap();
         files.insert(uri.to_owned(), file.to_base16());
         if let Ok(json) = serde_json::to_vec(&*files) {
-            let _ = std::fs::write(self.dir.join("audio_files.json"), json);
+            let _ = std::fs::write(self.dir.join(files_name(self.quality)), json);
         }
     }
 
@@ -113,7 +106,9 @@ impl Offline {
         }
         let parsed = SpotifyUri::from_uri(uri).map_err(|e| anyhow!("{e}"))?;
         let item = AudioItem::get_file(session, parsed).await.map_err(|e| anyhow!("{e}"))?;
-        let file = FORMATS
+        let file = self
+            .quality
+            .formats()
             .iter()
             .find_map(|format| item.files.get(format).copied())
             .ok_or_else(|| anyhow!("sem arquivo de áudio para {uri}"))?;
@@ -143,6 +138,14 @@ impl Offline {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         Err(anyhow!("download de {uri} não foi salvo"))
+    }
+}
+
+/// Each quality plays other files, so each keeps its own song → file map.
+fn files_name(quality: AudioQuality) -> &'static str {
+    match quality {
+        AudioQuality::Normal => "audio_files.json",
+        AudioQuality::High => "audio_files_320.json",
     }
 }
 

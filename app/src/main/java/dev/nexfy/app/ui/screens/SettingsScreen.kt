@@ -44,6 +44,7 @@ import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.RoundIconButton
 import dev.nexfy.app.ui.theme.accentColor
 import kotlinx.coroutines.launch
+import uniffi.nexfy_core.AudioQuality
 import uniffi.nexfy_core.WebApp
 import uniffi.nexfy_core.WebStatus
 
@@ -135,7 +136,38 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
             )
         }
 
+        SoundSection(actions)
         StorageSection(actions)
+    }
+}
+
+/** Stream quality and volume normalisation, for what plays on this phone. */
+@Composable
+private fun SoundSection(actions: AppActions) {
+    val c = MaterialTheme.colorScheme
+    val core = actions.core
+    var sound by remember { mutableStateOf(core.soundSettings()) }
+    Section("Som", "Como as músicas tocam neste celular.") {
+        Text("Qualidade de áudio", fontSize = 14.sp)
+        PillSelector(listOf(AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
+            if (it == AudioQuality.NORMAL) "Normal · 160 kbps" else "Alta · 320 kbps"
+        }, {
+            core.setAudioQuality(it)
+            sound = core.soundSettings()
+        }, Modifier.fillMaxWidth())
+        if (sound.quality != sound.activeQuality) {
+            Text("A nova qualidade vale na próxima vez que o app abrir.", color = c.onSurfaceVariant, fontSize = 13.sp)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Normalizar volume", fontSize = 14.sp)
+                Text("Deixa as músicas num volume parecido.", color = c.onSurfaceVariant, fontSize = 13.sp)
+            }
+            Switch(sound.normalize, {
+                core.setNormalize(it)
+                sound = core.soundSettings()
+            })
+        }
     }
 }
 
