@@ -406,7 +406,7 @@ enum class TrackSort(val label: String) {
 }
 
 /** Lower case without accents, for matching and sorting "Á" with "a". */
-private fun fold(text: String): String =
+internal fun fold(text: String): String =
     java.text.Normalizer.normalize(text.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
 
 /** Tracks whose title, artists or album contain every word of [query]. */

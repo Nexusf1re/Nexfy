@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.IconButton
@@ -138,6 +140,11 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
             }
         }
     }
+    var query by rememberSaveable { mutableStateOf("") }
+    val needle = fold(query.trim())
+    // Filtered by name and owner or artist, accents aside.
+    val found = if (needle.isEmpty()) entries else entries?.filter { fold(it.title).contains(needle) || fold(it.subtitle).contains(needle) }
+    val likedShown = needle.isEmpty() || fold("Músicas curtidas").contains(needle)
     val cascadeClock = rememberCascade(shelf to (entries != null))
     var menuFor by remember { mutableStateOf<Entry?>(null) }
     var grid by remember { mutableStateOf(library.libraryGrid) }
@@ -188,7 +195,20 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     }
                 }
             }
-            if (shelf == Shelf.Playlists && !grid) {
+            item(key = "search") {
+                LibrarySearch(query, { query = it }, Modifier.padding(bottom = 6.dp))
+            }
+            if (needle.isNotEmpty() && found != null && found.isEmpty() && !likedShown) {
+                item(key = "none") {
+                    Text(
+                        "Nada encontrado para “${query.trim()}”",
+                        Modifier.fillMaxWidth().padding(24.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+            }
+            if (shelf == Shelf.Playlists && !grid && likedShown) {
                 item(key = "liked") {
                     LibraryRow(null, "Músicas curtidas", "Playlist", liked = true, onClick = { actions.open(Route.Liked) })
                 }
@@ -208,7 +228,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
             }
             if (grid) {
                 // Liked songs lead the grid as they lead the list.
-                val tiles = if (shelf == Shelf.Playlists && entries != null) listOf<Entry?>(null) + entries else entries.orEmpty()
+                val tiles = if (shelf == Shelf.Playlists && found != null && likedShown) listOf<Entry?>(null) + found else found.orEmpty()
                 itemsIndexed(tiles.chunked(GRID_COLUMNS), key = { _, row -> row.joinToString { it?.key ?: "liked" } }) { i, row ->
                     Row(Modifier.cascade(i, cascadeClock), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         row.forEach { e ->
@@ -229,7 +249,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     }
                 }
             } else {
-                itemsIndexed(entries.orEmpty(), key = { _, e -> e.key }) { i, e ->
+                itemsIndexed(found.orEmpty(), key = { _, e -> e.key }) { i, e ->
                     Box(Modifier.cascade(i, cascadeClock)) {
                         LibraryRow(
                             e.imageUrl, e.title, e.subtitle,
@@ -427,6 +447,33 @@ private fun LibraryTile(
                 Spacer(Modifier.width(3.dp))
             }
             Text(subtitle, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** A quiet search pill: filters the shelf by name and owner or artist as you type. */
+@Composable
+private fun LibrarySearch(query: String, onQuery: (String) -> Unit, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    Row(
+        modifier.fillMaxWidth().height(44.dp).clip(CircleShape).background(c.surfaceVariant).padding(start = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        androidx.compose.foundation.text.BasicTextField(
+            query,
+            onQuery,
+            Modifier.weight(1f).padding(horizontal = 10.dp),
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.onSurface),
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(c.onSurface),
+            decorationBox = { field ->
+                if (query.isEmpty()) Text("Buscar na biblioteca", color = c.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                field()
+            },
+        )
+        if (query.isNotEmpty()) {
+            IconButton({ onQuery("") }) { Icon(Icons.Rounded.Close, "Limpar", tint = c.onSurfaceVariant) }
         }
     }
 }
