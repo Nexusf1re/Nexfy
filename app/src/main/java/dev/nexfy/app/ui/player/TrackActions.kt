@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -67,6 +68,11 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
             null
         }
     }
+    var adding by remember { mutableStateOf(false) }
+    if (adding) {
+        dev.nexfy.app.ui.screens.AddToPlaylistSheet(listOf(track.uri)) { adding = false; onDismiss() }
+        return
+    }
     val go = { open: () -> Unit ->
         haptics.tick()
         onDismiss()
@@ -84,6 +90,8 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
                     Text(track.artists, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
                 }
             }
+            dev.nexfy.app.ui.screens.LikeAction(track.uri, onDismiss)
+            Action(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
             val d = details
             // One row per artist (names and ids come in the same order).
             val names = (d?.artists ?: track.artists).split(", ")

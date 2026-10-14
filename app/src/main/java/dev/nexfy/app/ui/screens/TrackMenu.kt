@@ -13,6 +13,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.LibraryAdd
+import androidx.compose.material.icons.rounded.RemoveCircleOutline
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -34,7 +40,18 @@ import uniffi.nexfy_core.Track
 /** Long-press actions for a song: queue it, or open its album or artist. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TrackMenu(track: Track, actions: AppActions, onDismiss: () -> Unit) {
+fun TrackMenu(
+    track: Track,
+    actions: AppActions,
+    /** The user's own playlist this menu was opened from: offers removing the song. */
+    playlistId: String? = null,
+    onDismiss: () -> Unit,
+) {
+    var adding by remember { mutableStateOf(false) }
+    if (adding) {
+        AddToPlaylistSheet(listOf(track.uri)) { adding = false; onDismiss() }
+        return
+    }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -45,9 +62,17 @@ fun TrackMenu(track: Track, actions: AppActions, onDismiss: () -> Unit) {
                     Text(track.artists, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
                 }
             }
+            LikeAction(track.uri, onDismiss)
             MenuAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "Adicionar à fila") {
                 actions.addToQueue(track)
                 onDismiss()
+            }
+            MenuAction(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
+            playlistId?.let { id ->
+                MenuAction(Icons.Rounded.RemoveCircleOutline, "Remover desta playlist") {
+                    actions.app.edits.removeFrom(id, track.uri)
+                    onDismiss()
+                }
             }
             track.albumId?.let { id ->
                 MenuAction(Icons.Rounded.Album, "Ir para o álbum") {
@@ -66,7 +91,7 @@ fun TrackMenu(track: Track, actions: AppActions, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun MenuAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun MenuAction(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,

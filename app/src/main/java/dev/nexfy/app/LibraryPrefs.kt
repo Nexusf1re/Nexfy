@@ -130,6 +130,11 @@ class LibraryPrefs(context: Context) {
         get() = prefs.getString(SHELF, null)
         set(value) = prefs.edit { putString(SHELF, value) }
 
+    /** Whether the library shows a grid of covers instead of a list. */
+    var libraryGrid: Boolean
+        get() = prefs.getBoolean(LIBRARY_GRID, false)
+        set(value) = prefs.edit { putBoolean(LIBRARY_GRID, value) }
+
     /** Whether the player showed lyrics when last used. */
     var lyricsOpen: Boolean
         get() = prefs.getBoolean(LYRICS_OPEN, false)
@@ -190,6 +195,7 @@ class LibraryPrefs(context: Context) {
         const val PREFETCH_QUEUE = "prefetch_queue"
         const val SHELF = "shelf"
         const val LYRICS_OPEN = "lyrics_open"
+        const val LIBRARY_GRID = "library_grid"
         const val RECENT_SEARCHES = "recent_searches"
     }
 }

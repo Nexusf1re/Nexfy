@@ -5,6 +5,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AddCircleOutline
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -36,23 +45,77 @@ private fun meta(vararg parts: String) = parts.filter { it.isNotBlank() }.joinTo
 
 private fun count(n: Int) = "$n ${if (n == 1) "faixa" else "faixas"}"
 
+private fun likes(n: UInt) = when {
+    n == 0u -> ""
+    n == 1u -> "1 curtida"
+    else -> "%,d curtidas".format(n.toLong())
+}
+
 @Composable
 fun PlaylistScreen(actions: AppActions, id: String, list: LazyListState, modifier: Modifier) {
-    val detail = rememberLoaded(id) { refresh -> actions.core.playlist(id, refresh) }
+    val edits = actions.app.edits
+    // Reloads after a change to the library (a song removed, a new name).
+    val version by edits.version.collectAsState()
+    val detail = rememberLoaded(id, reloadOn = version) { refresh -> actions.core.playlist(id, refresh) }
     val d = detail.state.value
     val peek = actions.nav.peek("pl:$id")
+    val uri = "spotify:playlist:$id"
+    val me = remember { actions.core.username() }
+    val own = me != null && d?.playlist?.ownerId == me
+    val ownerId = d?.playlist?.ownerId
+    val ownerPhoto by produceState<String?>(null, ownerId) {
+        value = ownerId?.takeIf { it.isNotEmpty() }?.let { actions.core.users(listOf(it)).firstOrNull()?.imageUrl }
+    }
+    var menu by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    LaunchedEffect(uri) { edits.load(listOf(uri)) }
+    val context = LocalContext.current
+    val name = d?.playlist?.name ?: peek?.title.orEmpty()
+
+    if (menu) {
+        PageMenu(name, d?.playlist?.imageUrl ?: peek?.imageUrl, { menu = false }) {
+            if (own) {
+                MenuAction(Icons.Rounded.Edit, "Editar detalhes") { menu = false; editing = true }
+                MenuAction(Icons.Rounded.DeleteOutline, "Excluir playlist") { menu = false; deleting = true }
+            } else {
+                val saved = edits.saved[uri] == true
+                MenuAction(if (saved) Icons.Rounded.CheckCircle else Icons.Rounded.AddCircleOutline, if (saved) "Remover da biblioteca" else "Salvar na biblioteca") {
+                    menu = false
+                    edits.setSaved(uri, !saved, if (saved) "Removida da biblioteca" else "Salva na biblioteca")
+                }
+            }
+            MenuAction(Icons.Rounded.Share, "Compartilhar") { menu = false; shareLink(context, name, "playlist/$id") }
+        }
+    }
+    if (editing && d != null) {
+        NameDialogFull("Editar playlist", d.playlist.name, "Salvar", d.playlist.description, { editing = false }) { newName, description ->
+            editing = false
+            edits.edit(id, newName, description)
+        }
+    }
+    if (deleting) {
+        ConfirmDialog("Excluir playlist?", "“$name” sai da tua biblioteca no Spotify.", "Excluir", { deleting = false }) {
+            deleting = false
+            edits.setSaved(uri, false, "Playlist excluída")
+            actions.back()
+        }
+    }
     CollectionScreen(
         actions, list,
-        title = d?.playlist?.name ?: peek?.title.orEmpty(),
-        subtitle = d?.playlist?.owner ?: peek?.subtitle,
-        meta = d?.let { meta("Playlist", count(it.tracks.size), minutes(it.tracks)) }.orEmpty(),
+        title = name,
+        subtitle = d?.playlist?.owner?.takeIf { it.isNotEmpty() } ?: peek?.subtitle,
+        meta = d?.let { meta("Playlist", count(it.tracks.size), minutes(it.tracks), likes(it.playlist.followers)) }.orEmpty(),
         imageUrl = d?.playlist?.imageUrl ?: peek?.imageUrl,
         tracks = d?.tracks,
         modifier = modifier,
         error = detail.state.failure(),
         onRetry = detail.refresh,
         source = "pl:$id",
-        contextUri = "spotify:playlist:$id",
+        contextUri = uri,
+        ownPlaylist = id.takeIf { own },
+        subtitleImage = ownerPhoto,
+        onMore = { menu = true },
     )
 }
 
@@ -62,8 +125,25 @@ fun AlbumScreen(actions: AppActions, id: String, list: LazyListState, modifier: 
     val d = detail.state.value
     val peek = actions.nav.peek("al:$id")
     val artistId = d?.tracks?.firstOrNull()?.artistIds?.firstOrNull()
+    val edits = actions.app.edits
+    val uri = "spotify:album:$id"
+    LaunchedEffect(uri) { edits.load(listOf(uri)) }
+    var menu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    if (menu) {
+        val name = d?.album?.name ?: peek?.title.orEmpty()
+        PageMenu(name, d?.album?.imageUrl ?: peek?.imageUrl, { menu = false }) {
+            val saved = edits.saved[uri] == true
+            MenuAction(if (saved) Icons.Rounded.CheckCircle else Icons.Rounded.AddCircleOutline, if (saved) "Remover dos salvos" else "Salvar álbum") {
+                menu = false
+                edits.setSaved(uri, !saved, if (saved) "Álbum removido" else "Álbum salvo")
+            }
+            MenuAction(Icons.Rounded.Share, "Compartilhar") { menu = false; shareLink(context, name, "album/$id") }
+        }
+    }
     CollectionScreen(
         actions, list,
+        onMore = { menu = true },
         title = d?.album?.name ?: peek?.title.orEmpty(),
         subtitle = d?.album?.artists ?: peek?.subtitle,
         meta = d?.let { meta("Álbum", it.album.year.orEmpty(), count(it.tracks.size), minutes(it.tracks)) }.orEmpty(),
@@ -152,6 +232,19 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
             nextOffset = null
         } finally {
             loading = false
+        }
+    }
+    // A song liked or unliked elsewhere: the first page again, in place.
+    val version by actions.app.edits.version.collectAsState()
+    LaunchedEffect(version) {
+        if (version == 0) return@LaunchedEffect
+        try {
+            val page = actions.core.likedTracks(0u, 50u, false)
+            tracks.clear()
+            tracks.addAll(page.tracks)
+            total = page.total.toInt()
+            nextOffset = page.nextOffset
+        } catch (_: Exception) {
         }
     }
     // Nothing yet and more to come: still loading the first page.

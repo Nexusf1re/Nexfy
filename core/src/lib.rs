@@ -345,6 +345,7 @@ impl NexfyCore {
                                     owner_id: String::new(),
                                     image_url: data.tracks.first().and_then(|t| t.image_url.clone()),
                                     track_count: data.tracks.len() as u32,
+                                    followers: 0,
                                 },
                                 tracks: data.tracks,
                             });
@@ -392,6 +393,57 @@ impl NexfyCore {
                 Ok(detail)
             }
         }
+    }
+
+    // ------------------------------------------------ library writes --
+
+    /// Save (or with `on` false, remove) songs, albums or playlists.
+    pub async fn set_saved(&self, uris: Vec<String>, on: bool) -> Result<(), CoreError> {
+        self.inner.web.set_saved(&uris, on).await.map_err(web_error)
+    }
+
+    /// Whether each URI is in the library, in order.
+    pub async fn saved(&self, uris: Vec<String>) -> Result<Vec<bool>, CoreError> {
+        self.inner.web.saved(&uris).await.map_err(web_error)
+    }
+
+    pub async fn create_playlist(&self, name: String, description: String) -> Result<Playlist, CoreError> {
+        self.inner.web.create_playlist(&name, &description).await.map_err(web_error)
+    }
+
+    pub async fn add_to_playlist(&self, id: String, uris: Vec<String>) -> Result<(), CoreError> {
+        self.inner.web.add_to_playlist(&id, &uris).await.map_err(web_error)
+    }
+
+    pub async fn remove_from_playlist(&self, id: String, uris: Vec<String>) -> Result<(), CoreError> {
+        self.inner.web.remove_from_playlist(&id, &uris).await.map_err(web_error)
+    }
+
+    pub async fn edit_playlist(&self, id: String, name: String, description: String) -> Result<(), CoreError> {
+        self.inner.web.edit_playlist(&id, &name, &description).await.map_err(web_error)
+    }
+
+    /// New albums and singles (last 90 days) from the artists the user
+    /// listens to most and lately. Cached 12 h; an older copy answers at
+    /// once while a fresh one is read in the background.
+    pub async fn new_releases(&self, refresh: bool) -> Result<Vec<Album>, CoreError> {
+        const KEY: &str = "session:releases";
+        let web = &self.inner.web;
+        if !refresh {
+            if let Some(fresh) = web.load_local::<Vec<Album>>(KEY, std::time::Duration::from_secs(12 * 3600)) {
+                return Ok(fresh);
+            }
+            if let Some(stale) = web.load_local::<Vec<Album>>(KEY, std::time::Duration::from_secs(30 * 86_400)) {
+                let inner = self.inner.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = read_releases(&inner).await {
+                        log::info!("new releases: {error:#}");
+                    }
+                });
+                return Ok(stale);
+            }
+        }
+        read_releases(&self.inner).await
     }
 
     /// Names and photos of playlist contributors, cached a week; users
@@ -917,6 +969,27 @@ fn entry(track: QueueTrack) -> QueueEntry {
 
 /// Forward librespot's player and Connect events to Kotlin. Spirc drives
 /// the queue itself (next track, autoplay, remote commands).
+/// Reads the new releases over the session and keeps them for [`Core::new_releases`].
+async fn read_releases(inner: &Arc<Inner>) -> Result<Vec<Album>, CoreError> {
+    let web = &inner.web;
+    let mut ids: Vec<String> = web.top_artists(false).await.map(|artists| artists.into_iter().map(|a| a.id).collect()).unwrap_or_default();
+    if let Ok(recent) = web.recently_played(false).await {
+        for play in recent {
+            for id in play.track.artist_ids {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+    let session = inner.live_session().await?;
+    let albums = session_reads::releases(&session, &ids, 90, 20).await;
+    if !albums.is_empty() {
+        web.save_local("session:releases", &albums);
+    }
+    Ok(albums)
+}
+
 async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
     while let Some(event) = events.recv().await {
         let Some(inner) = inner.upgrade() else { break };

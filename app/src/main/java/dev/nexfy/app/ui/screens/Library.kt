@@ -1,5 +1,13 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.automirrored.rounded.ViewList
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -83,7 +91,12 @@ private data class Entry(
     val imageUrl: String?,
     val route: Route,
     val peek: Peek,
+    val uri: String,
+    /** The user's own playlist (deleted, not just removed). */
+    val own: Boolean = false,
 )
+
+private const val GRID_COLUMNS = 3
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,25 +111,42 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
     val playlistSort by library.playlistSort.collectAsState()
     val albumSort by library.albumSort.collectAsState()
 
-    val playlists = rememberLoaded("lib-pl") { core.myPlaylists(it) }
-    val albums = rememberLoaded("lib-al", shelf) { if (shelf == Shelf.Albums) core.savedAlbums(it) else emptyList() }
+    val version by actions.app.edits.version.collectAsState()
+    val playlists = rememberLoaded("lib-pl", reloadOn = version) { core.myPlaylists(it) }
+    val albums = rememberLoaded("lib-al", shelf, reloadOn = version) { if (shelf == Shelf.Albums) core.savedAlbums(it) else emptyList() }
     val recent = rememberLoaded("lib-recent") { core.recentlyPlayed(it) }
     val scores = playScores(plays, recent.state.value.orEmpty())
+    val me = remember { core.username() }
 
     val entries: List<Entry>? = when (shelf) {
         Shelf.Playlists -> playlists.state.value?.let { all ->
             pinnedFirst(playlistSort.apply(all, scores), pinned) { "pl:${it.id}" }.map {
-                Entry("pl:${it.id}", it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(it.id), Peek(it.name, it.owner, it.imageUrl))
+                Entry("pl:${it.id}", it.name, "Playlist · ${it.owner}", it.imageUrl, Route.Playlist(it.id), Peek(it.name, it.owner, it.imageUrl), it.uri, own = it.ownerId == me)
             }
         }
         Shelf.Albums -> albums.state.value?.let { all ->
             pinnedFirst(albumSort.apply(all, scores), pinned) { "al:${it.id}" }.map {
-                Entry("al:${it.id}", it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(it.id), Peek(it.name, it.artists, it.imageUrl))
+                Entry("al:${it.id}", it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(it.id), Peek(it.name, it.artists, it.imageUrl), it.uri)
             }
         }
     }
     val cascadeClock = rememberCascade(shelf to (entries != null))
     var menuFor by remember { mutableStateOf<Entry?>(null) }
+    var grid by remember { mutableStateOf(library.libraryGrid) }
+    var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<Entry?>(null) }
+    if (creating) {
+        NameDialog("Nova playlist", "", "Criar", onDismiss = { creating = false }) { name ->
+            creating = false
+            actions.app.edits.create(name) { actions.open(Route.Playlist(it.id), Peek(it.name, it.owner)) }
+        }
+    }
+    deleting?.let { entry ->
+        ConfirmDialog("Excluir playlist?", "“${entry.title}” sai da tua biblioteca no Spotify.", "Excluir", { deleting = null }) {
+            deleting = null
+            actions.app.edits.setSaved(entry.uri, false, "Playlist excluída")
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         RootHeader("Biblioteca", collapse, actions)
@@ -131,12 +161,25 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                 PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it; library.shelf = it.name }, Modifier.fillMaxWidth().padding(top = 12.dp))
             }
             item(key = "sort") {
-                when (shelf) {
-                    Shelf.Playlists -> SortButton(PlaylistSort.entries, playlistSort, { it.label }, library::setPlaylistSort)
-                    Shelf.Albums -> SortButton(AlbumSort.entries, albumSort, { it.label }, library::setAlbumSort)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when (shelf) {
+                        Shelf.Playlists -> SortButton(PlaylistSort.entries, playlistSort, { it.label }, library::setPlaylistSort)
+                        Shelf.Albums -> SortButton(AlbumSort.entries, albumSort, { it.label }, library::setAlbumSort)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (shelf == Shelf.Playlists) {
+                        IconButton({ creating = true }) { Icon(Icons.Rounded.Add, "Nova playlist", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                    IconButton({ grid = !grid; library.libraryGrid = grid }) {
+                        Icon(
+                            if (grid) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
+                            if (grid) "Ver em lista" else "Ver em grade",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-            if (shelf == Shelf.Playlists) {
+            if (shelf == Shelf.Playlists && !grid) {
                 item(key = "liked") {
                     LibraryRow(null, "Músicas curtidas", "Playlist", liked = true, onClick = { actions.open(Route.Liked) })
                 }
@@ -150,15 +193,39 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     ListRowSkeleton(i, Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = skeletonFade()))
                 }
             }
-            itemsIndexed(entries.orEmpty(), key = { _, e -> e.key }) { i, e ->
-                Box(Modifier.cascade(i, cascadeClock)) {
-                    LibraryRow(
-                        e.imageUrl, e.title, e.subtitle,
-                        pinned = e.key in pinned,
-                        sharedKey = "lib/${e.key}",
-                        onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
-                        onLongClick = { menuFor = e },
-                    )
+            if (grid) {
+                // Liked songs lead the grid as they lead the list.
+                val tiles = if (shelf == Shelf.Playlists && entries != null) listOf<Entry?>(null) + entries else entries.orEmpty()
+                itemsIndexed(tiles.chunked(GRID_COLUMNS), key = { _, row -> row.joinToString { it?.key ?: "liked" } }) { i, row ->
+                    Row(Modifier.cascade(i, cascadeClock), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        row.forEach { e ->
+                            val tile = Modifier.weight(1f)
+                            if (e == null) {
+                                LibraryTile(null, "Músicas curtidas", "Playlist", tile, liked = true, onClick = { actions.open(Route.Liked) })
+                            } else {
+                                LibraryTile(
+                                    e.imageUrl, e.title, e.subtitle, tile,
+                                    pinned = e.key in pinned,
+                                    sharedKey = "lib/${e.key}",
+                                    onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
+                                    onLongClick = { menuFor = e },
+                                )
+                            }
+                        }
+                        repeat(GRID_COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            } else {
+                itemsIndexed(entries.orEmpty(), key = { _, e -> e.key }) { i, e ->
+                    Box(Modifier.cascade(i, cascadeClock)) {
+                        LibraryRow(
+                            e.imageUrl, e.title, e.subtitle,
+                            pinned = e.key in pinned,
+                            sharedKey = "lib/${e.key}",
+                            onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
+                            onLongClick = { menuFor = e },
+                        )
+                    }
                 }
             }
         }
@@ -183,6 +250,17 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                 SheetAction(Icons.Rounded.OpenInNew, "Abrir") {
                     menuFor = null
                     actions.open(entry.route, entry.peek)
+                }
+                if (entry.own) {
+                    SheetAction(Icons.Rounded.DeleteOutline, "Excluir playlist") {
+                        menuFor = null
+                        deleting = entry
+                    }
+                } else {
+                    SheetAction(Icons.Rounded.RemoveCircleOutline, "Remover da biblioteca") {
+                        menuFor = null
+                        actions.app.edits.setSaved(entry.uri, false, "Removida da biblioteca")
+                    }
                 }
             }
         }
@@ -281,6 +359,61 @@ private fun LibraryRow(
                 }
                 Text(subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+    }
+}
+
+/** A library entry as a grid tile: the cover, the name and its line under it. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LibraryTile(
+    imageUrl: String?,
+    title: String,
+    subtitle: String,
+    modifier: Modifier,
+    pinned: Boolean = false,
+    liked: Boolean = false,
+    sharedKey: String? = null,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val c = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    val haptics = rememberHaptics()
+    Column(
+        modifier.weightedPress(source, 14.dp).clip(RoundedCornerShape(14.dp))
+            .combinedClickable(
+                source, null,
+                onClick = {
+                    haptics.tick()
+                    onClick()
+                },
+                onLongClick = onLongClick?.let {
+                    {
+                        haptics.press()
+                        it()
+                    }
+                },
+            )
+            .padding(vertical = 6.dp),
+    ) {
+        if (liked) {
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF4B2BD6), accentColor().copy(alpha = .85f)))),
+                contentAlignment = Alignment.Center,
+            ) { Icon(Icons.Rounded.Favorite, null, tint = Color.White, modifier = Modifier.size(32.dp)) }
+        } else {
+            Cover(imageUrl, Modifier.fillMaxWidth().aspectRatio(1f), 12.dp, sharedKey = sharedKey)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (pinned || liked) {
+                Icon(Icons.Rounded.PushPin, "Fixado", tint = accentColor(), modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(3.dp))
+            }
+            Text(subtitle, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -124,16 +124,7 @@ pub async fn artist(session: &Session, id: &str) -> Result<ArtistDetail> {
         .map(|uri| async move { SessionAlbum::get(session, &uri).await })
         .buffered(CONCURRENCY)
         .filter_map(|result| async move {
-            let album = result.ok()?;
-            Some(Album {
-                id: album.id.to_id(),
-                uri: album.id.to_uri(),
-                name: album.name.clone(),
-                artists: album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "),
-                image_url: album.covers.first().map(|image| cover_url(&image.id)),
-                year: Some(album.date.year().to_string()),
-                track_count: album.discs.iter().map(|disc| disc.tracks.len() as u32).sum(),
-            })
+            result.ok().map(|album| session_album(&album))
         })
         .collect()
         .await;
@@ -170,4 +161,68 @@ pub async fn user(session: &Session, id: &str) -> Result<UserFace> {
         name: text("name").unwrap_or_else(|| id.to_owned()),
         image_url: text("image_url"),
     })
+}
+
+/// Most artists looked at for new releases.
+const RELEASE_ARTISTS: usize = 24;
+
+/// The newest albums and singles of these artists from the last `days`,
+/// newest first, at most `limit`. An artist that fails is left out.
+pub async fn releases(session: &Session, artist_ids: &[String], days: i64, limit: usize) -> Vec<Album> {
+    let cutoff = librespot_core::date::Date::now_utc().as_timestamp_ms() - days * 86_400_000;
+    let artists: Vec<SpotifyUri> = artist_ids
+        .iter()
+        .take(RELEASE_ARTISTS)
+        .filter_map(|id| SpotifyUri::from_uri(&format!("spotify:artist:{id}")).ok())
+        .collect();
+    let candidates: Vec<SpotifyUri> = stream::iter(artists)
+        .map(|uri| async move { SessionArtist::get(session, &uri).await })
+        .buffered(CONCURRENCY)
+        .filter_map(|result| async move {
+            let artist = result.ok()?;
+            // The order of an artist's releases is not documented: both ends.
+            let ends = |list: Vec<SpotifyUri>| {
+                let n = list.len();
+                list.into_iter().enumerate().filter(move |(i, _)| *i < 2 || *i + 2 >= n).map(|(_, uri)| uri)
+            };
+            let mut picked: Vec<SpotifyUri> = ends(artist.albums_current().cloned().collect()).collect();
+            picked.extend(ends(artist.singles_current().cloned().collect()));
+            Some(picked)
+        })
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut found: Vec<(i64, Album)> = stream::iter(candidates)
+        .map(|uri| async move { SessionAlbum::get(session, &uri).await })
+        .buffered(CONCURRENCY)
+        .filter_map(|result| async move {
+            let album = result.ok()?;
+            let released = album.date.as_timestamp_ms();
+            (released >= cutoff).then(|| (released, session_album(&album)))
+        })
+        .collect()
+        .await;
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut seen = std::collections::HashSet::new();
+    found
+        .into_iter()
+        .map(|(_, album)| album)
+        // The same release under two ids (explicit and clean) shows once.
+        .filter(|album| seen.insert((album.name.to_lowercase(), album.artists.clone())))
+        .take(limit)
+        .collect()
+}
+
+fn session_album(album: &SessionAlbum) -> Album {
+    Album {
+        id: album.id.to_id(),
+        uri: album.id.to_uri(),
+        name: album.name.clone(),
+        artists: album.artists.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", "),
+        image_url: album.covers.first().map(|image| cover_url(&image.id)),
+        year: Some(album.date.year().to_string()),
+        track_count: album.discs.iter().map(|disc| disc.tracks.len() as u32).sum(),
+    }
 }

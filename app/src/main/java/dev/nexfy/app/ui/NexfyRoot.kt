@@ -104,8 +104,8 @@ import uniffi.nexfy_core.Track
 import uniffi.nexfy_core.TrackInfo
 
 enum class Tab(val label: String, val icon: ImageVector) {
-    Home("Início", Icons.Rounded.Home),
     Search("Buscar", Icons.Rounded.Search),
+    Home("Início", Icons.Rounded.Home),
     Library("Biblioteca", Icons.Rounded.LibraryMusic),
 }
 

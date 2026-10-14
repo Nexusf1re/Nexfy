@@ -103,11 +103,13 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val plays by library.plays.collectAsState()
 
     val profile = rememberLoaded("profile") { core.profile(it) }
-    val playlists = rememberLoaded("home-pl") { core.myPlaylists(it) }
-    val albums = rememberLoaded("home-al") { core.savedAlbums(it) }
+    val version by actions.app.edits.version.collectAsState()
+    val playlists = rememberLoaded("home-pl", reloadOn = version) { core.myPlaylists(it) }
+    val albums = rememberLoaded("home-al", reloadOn = version) { core.savedAlbums(it) }
     val recent = rememberLoaded("home-recent") { core.recentlyPlayed(it) }
     val topTracks = rememberLoaded("home-top-tracks") { core.topTracks(it) }
     val topArtists = rememberLoaded("home-top-artists") { core.topArtists(it) }
+    val releases = rememberLoaded("home-releases") { core.newReleases(it) }
 
     val name = profile.state.value?.displayName?.substringBefore(' ')
     val scores = playScores(plays, recent.state.value.orEmpty())
@@ -136,6 +138,16 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 Carousel(actions.nav.list("row:home-recent"), cards.first().key) {
                     items(cards, key = { it.key }) { r ->
                         CoverCard(r.imageUrl, r.title, r.subtitle, r.key, shared = "home-recent/${r.key}") { actions.open(r.route, r.peek, "home-recent/${r.key}") }
+                    }
+                }
+            }
+            homeRow("releases", "Lançamentos dos teus artistas", releases.state.pending(), releases.state.value?.takeIf { it.isNotEmpty() }) { items ->
+                Carousel(actions.nav.list("row:home-releases"), items.first().id) {
+                    items(items, key = { it.id }) { a ->
+                        val kind = if (a.trackCount in 1u..3u) "Single" else "Álbum"
+                        CoverCard(a.imageUrl, a.name, "$kind · ${a.artists}", "rel-${a.id}", shared = "home-rel/${a.id}") {
+                            actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "home-rel/${a.id}")
+                        }
                     }
                 }
             }

@@ -30,15 +30,16 @@ private val lastValues = java.util.concurrent.ConcurrentHashMap<String, Any>()
 /**
  * Run [load] when [keys] change. The first load may come from the core's
  * cache; [LoadHandle.refresh] reloads from the network. A screen shown
- * again starts from the last value while it reloads.
+ * again starts from the last value while it reloads. A change of [reloadOn]
+ * loads again too, keeping the value shown meanwhile.
  */
 @Suppress("UNCHECKED_CAST")
 @Composable
-fun <T> rememberLoaded(vararg keys: Any?, load: suspend (refresh: Boolean) -> T): LoadHandle<T> {
+fun <T> rememberLoaded(vararg keys: Any?, reloadOn: Any? = null, load: suspend (refresh: Boolean) -> T): LoadHandle<T> {
     val memoryKey = keys.joinToString("|")
     var state by remember(*keys) { mutableStateOf(Loaded(value = lastValues[memoryKey] as T?)) }
     var refreshes by remember(*keys) { mutableIntStateOf(0) }
-    LaunchedEffect(*keys, refreshes) {
+    LaunchedEffect(*keys, refreshes, reloadOn) {
         state = state.copy(loading = true, error = null)
         state = try {
             Loaded(load(refreshes > 0).also { value -> value?.let { lastValues[memoryKey] = it } }, null, false)

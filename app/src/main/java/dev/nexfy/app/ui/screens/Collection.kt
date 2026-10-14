@@ -3,6 +3,7 @@ package dev.nexfy.app.ui.screens
 import androidx.compose.runtime.derivedStateOf
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.animation.core.Animatable
@@ -152,6 +153,12 @@ fun CollectionScreen(
     contextUri: String? = null,
     /** Told whether a search is active (liked songs then load every page). */
     onFiltering: (Boolean) -> Unit = {},
+    /** The playlist is the user's own: its songs can be removed from their menus. */
+    ownPlaylist: String? = null,
+    /** A small photo before the subtitle (the playlist's creator). */
+    subtitleImage: String? = null,
+    /** The page's own menu (save, edit, share), behind a button by the play button. */
+    onMore: (() -> Unit)? = null,
     footer: LazyListScope.() -> Unit = {},
 ) {
     val c = MaterialTheme.colorScheme
@@ -193,7 +200,7 @@ fun CollectionScreen(
     // A filtered or re-sorted view plays as an explicit list, not as the context.
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
     var menuFor by remember { mutableStateOf<Track?>(null) }
-    menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
+    menuFor?.let { TrackMenu(it, actions, ownPlaylist) { menuFor = null } }
     // Who added each song, shown only where more than one person adds.
     val contributors = remember(all, all.size) { all.mapNotNull { it.addedBy }.distinct() }
     var faces by remember(contributors) { mutableStateOf(contributors.mapNotNull { knownFaces[it] }.associateBy { it.id }) }
@@ -245,14 +252,22 @@ fun CollectionScreen(
                         }
                         Spacer(Modifier.height(4.dp))
                         if (!subtitle.isNullOrBlank()) {
-                            Text(
-                                subtitle,
+                            Row(
                                 Modifier.clip(CircleShape)
                                     .then(if (onSubtitle != null) Modifier.clickable { haptics.tick(); onSubtitle() } else Modifier)
                                     .padding(horizontal = 12.dp, vertical = 4.dp),
-                                color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (subtitleImage != null) {
+                                    dev.nexfy.app.ui.design.UserAvatar(UserFace("", subtitle, subtitleImage), Modifier.size(22.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(
+                                    subtitle,
+                                    color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                         if (loading && meta.isBlank()) {
                             Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
@@ -294,6 +309,9 @@ fun CollectionScreen(
                                         android.widget.Toast.LENGTH_SHORT,
                                     ).show()
                                 }, enabled = all.isNotEmpty())
+                            }
+                            onMore?.let { more ->
+                                GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); more() })
                             }
                         }
                         if (kept && all.isNotEmpty()) {

@@ -115,6 +115,9 @@ pub struct Playlist {
     pub owner_id: String,
     pub image_url: Option<String>,
     pub track_count: u32,
+    /// How many people saved it; 0 when unknown.
+    #[serde(default)]
+    pub followers: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
@@ -261,6 +264,7 @@ struct RawPlaylist {
     // `tracks` before the 2025 rename, `items` after.
     tracks: Option<Count>,
     items: Option<Count>,
+    followers: Option<Count>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -390,6 +394,7 @@ impl RawPlaylist {
             owner_id: self.owner.id,
             image_url: self.images.as_deref().and_then(pick_image),
             track_count: self.items.or(self.tracks).map(|c| c.total).unwrap_or_default(),
+            followers: self.followers.map(|c| c.total).unwrap_or_default(),
         }
     }
 }
@@ -736,7 +741,7 @@ impl WebApi {
     pub async fn playlist_meta(self: &Arc<Self>, id: &str, refresh: bool) -> Result<Playlist> {
         let raw: RawPlaylist = self
             .cached(
-                &format!("/playlists/{id}?fields=id,uri,name,description,images,owner(id,display_name),tracks(total),items(total)"),
+                &playlist_meta_path(id),
                 Route::Personal,
                 Duration::from_secs(600),
                 refresh,
@@ -966,6 +971,147 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default()
+}
+
+/// Also the cache key [`WebApi::forget_playlist`] drops.
+fn playlist_meta_path(id: &str) -> String {
+    format!("/playlists/{id}?fields=id,uri,name,description,images,owner(id,display_name),tracks(total),items(total),followers(total)")
+}
+
+// ------------------------------------------------------------- writes --
+
+/// Most URIs one library request takes.
+const LIBRARY_CHUNK: usize = 40;
+/// Most URIs one playlist request takes.
+const PLAYLIST_CHUNK: usize = 100;
+
+fn encode_uris(uris: &[String]) -> String {
+    uris.iter().map(|uri| uri.replace(':', "%3A")).collect::<Vec<_>>().join(",")
+}
+
+impl WebApi {
+    /// A change to the user's account, with the personal app and then the
+    /// shared one. Answers the JSON body, or Null when there is none.
+    async fn write(
+        self: &Arc<Self>,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let url = format!("{API}{path}");
+        let mut last_error = anyhow!("nenhum app da Web API conectado");
+        for app in [WebApp::Personal, WebApp::Shared] {
+            if !self.signed_in(app).await {
+                continue;
+            }
+            let mut refreshed = false;
+            let result: Result<serde_json::Value> = loop {
+                let token = self.token(app, refreshed).await?;
+                let mut request = self.http.request(method.clone(), &url).bearer_auth(&token);
+                request = match &body {
+                    Some(body) => request.json(body),
+                    // Spotify answers 411 to a bodiless write without it.
+                    None => request.header(reqwest::header::CONTENT_LENGTH, 0),
+                };
+                let response = request.send().await?;
+                let status = response.status().as_u16();
+                if status == 401 && !refreshed {
+                    refreshed = true;
+                    continue;
+                }
+                let text = response.text().await.unwrap_or_default();
+                break match status {
+                    200..=299 => Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)),
+                    403 => Err(anyhow!("o Spotify não deixou mudar isto (403)")),
+                    404 => Err(anyhow!("não encontrado no Spotify (404)")),
+                    429 => Err(anyhow!("muitas mudanças seguidas, tente em instantes")),
+                    _ => Err(anyhow!("o Spotify recusou a mudança ({status})")),
+                }
+                .map_err(|error| {
+                    log::warn!("{app:?} {method} {path}: {status} {}", text.chars().take(200).collect::<String>());
+                    error
+                });
+            };
+            match result {
+                Ok(value) => return Ok(value),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
+
+    /// Drops the cached copy of a read, so the next one asks Spotify.
+    fn forget(&self, path: &str) {
+        let _ = std::fs::remove_file(self.cache_file(path));
+    }
+
+    fn forget_library(&self) {
+        self.forget("/me/playlists?limit=50");
+        self.forget("/me/albums?limit=50");
+        self.forget("/me/tracks?limit=50&offset=0&market=from_token");
+    }
+
+    fn forget_playlist(&self, id: &str) {
+        self.forget(&format!("/playlists/{id}/items?limit=100&market=from_token"));
+        self.forget(&playlist_meta_path(id));
+        self.forget("/me/playlists?limit=50");
+    }
+
+    /// Saves songs, albums or playlists (any Spotify URI) to the library.
+    pub async fn set_saved(self: &Arc<Self>, uris: &[String], on: bool) -> Result<()> {
+        let method = if on { reqwest::Method::PUT } else { reqwest::Method::DELETE };
+        for chunk in uris.chunks(LIBRARY_CHUNK) {
+            self.write(method.clone(), &format!("/me/library?uris={}", encode_uris(chunk)), None).await?;
+        }
+        self.forget_library();
+        Ok(())
+    }
+
+    /// Whether each URI is in the library, in order.
+    pub async fn saved(self: &Arc<Self>, uris: &[String]) -> Result<Vec<bool>> {
+        let mut found = Vec::with_capacity(uris.len());
+        for chunk in uris.chunks(LIBRARY_CHUNK) {
+            let value = self.get_json(&format!("/me/library/contains?uris={}", encode_uris(chunk)), Route::Personal).await?;
+            let flags: Vec<bool> = serde_json::from_value(value)?;
+            found.extend(flags);
+        }
+        Ok(found)
+    }
+
+    pub async fn create_playlist(self: &Arc<Self>, name: &str, description: &str) -> Result<Playlist> {
+        let body = serde_json::json!({ "name": name, "description": description, "public": false });
+        let value = self.write(reqwest::Method::POST, "/me/playlists", Some(body)).await?;
+        self.forget("/me/playlists?limit=50");
+        let raw: RawPlaylist = serde_json::from_value(value)?;
+        Ok(raw.into_playlist())
+    }
+
+    pub async fn add_to_playlist(self: &Arc<Self>, id: &str, uris: &[String]) -> Result<()> {
+        for chunk in uris.chunks(PLAYLIST_CHUNK) {
+            let body = serde_json::json!({ "uris": chunk });
+            self.write(reqwest::Method::POST, &format!("/playlists/{id}/items"), Some(body)).await?;
+        }
+        self.forget_playlist(id);
+        Ok(())
+    }
+
+    /// Removes every occurrence of these songs from the playlist.
+    pub async fn remove_from_playlist(self: &Arc<Self>, id: &str, uris: &[String]) -> Result<()> {
+        for chunk in uris.chunks(PLAYLIST_CHUNK) {
+            let items: Vec<serde_json::Value> = chunk.iter().map(|uri| serde_json::json!({ "uri": uri })).collect();
+            let body = serde_json::json!({ "items": items });
+            self.write(reqwest::Method::DELETE, &format!("/playlists/{id}/items"), Some(body)).await?;
+        }
+        self.forget_playlist(id);
+        Ok(())
+    }
+
+    pub async fn edit_playlist(self: &Arc<Self>, id: &str, name: &str, description: &str) -> Result<()> {
+        let body = serde_json::json!({ "name": name, "description": description });
+        self.write(reqwest::Method::PUT, &format!("/playlists/{id}"), Some(body)).await?;
+        self.forget_playlist(id);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

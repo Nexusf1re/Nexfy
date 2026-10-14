@@ -56,6 +56,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
 
     /** Playback commands for the screens and the widget. */
     val commands: Commands by lazy { Commands(this, scope) }
+    val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
 
     /** Covers fade in as they load instead of popping over their placeholder. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
