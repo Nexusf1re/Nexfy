@@ -226,3 +226,63 @@ fn session_album(album: &SessionAlbum) -> Album {
         track_count: album.discs.iter().map(|disc| disc.tracks.len() as u32).sum(),
     }
 }
+
+/// A song's or artist's radio, as something to play.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct Radio {
+    /// The playlist Spotify generates for the seed ("Rádio de ..."), played
+    /// as a context so Spotify keeps its queue and autoplay going after it.
+    pub context_uri: Option<String>,
+    /// The station's songs, when only those could be read; the seed song first.
+    pub track_uris: Vec<String>,
+}
+
+/// Songs read from a station when there is no radio playlist.
+const RADIO_TRACKS: usize = 50;
+
+/// The radio for a `spotify:track:` or `spotify:artist:` seed. Spotify's
+/// own clients now play song and artist radio as a generated playlist;
+/// the older radio-apollo station's song list is the fallback.
+pub async fn radio(session: &Session, seed: &str) -> Result<Radio> {
+    let uri = SpotifyUri::from_uri(seed).map_err(|e| anyhow!("{e}"))?;
+    match session.spclient().get_radio_for_track(&uri).await {
+        Ok(bytes) => {
+            let json: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if let Some(playlist) = uris_in(&json, "spotify:playlist:").into_iter().next() {
+                return Ok(Radio { context_uri: Some(playlist), track_uris: Vec::new() });
+            }
+            log::info!("radio {seed}: no playlist in the answer");
+        }
+        Err(error) => log::info!("radio playlist for {seed}: {error}"),
+    }
+    let bytes = session
+        .spclient()
+        .get_apollo_station("stations", seed, Some(RADIO_TRACKS), Vec::new(), false)
+        .await?;
+    let json: serde_json::Value = serde_json::from_slice(&bytes)?;
+    // The station's own list when there is one, so seeds and links are not taken for songs.
+    let mut tracks = uris_in(json.get("tracks").unwrap_or(&json), "spotify:track:");
+    if seed.starts_with("spotify:track:") {
+        tracks.retain(|t| t != seed);
+        tracks.insert(0, seed.to_owned());
+    }
+    if tracks.len() < 2 {
+        return Err(anyhow!("rádio indisponível"));
+    }
+    Ok(Radio { context_uri: None, track_uris: tracks })
+}
+
+/// Every distinct string under `value` starting with `prefix`; arrays keep their order.
+fn uris_in(value: &serde_json::Value, prefix: &str) -> Vec<String> {
+    fn walk(value: &serde_json::Value, prefix: &str, found: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(s) if s.starts_with(prefix) && !found.contains(s) => found.push(s.clone()),
+            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, prefix, found)),
+            serde_json::Value::Object(map) => map.values().for_each(|v| walk(v, prefix, found)),
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    walk(value, prefix, &mut found);
+    found
+}

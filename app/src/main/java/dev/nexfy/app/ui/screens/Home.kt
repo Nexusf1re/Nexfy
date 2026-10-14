@@ -128,7 +128,8 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
         ) {
             item(key = "title") {
                 LargeTitle(if (name != null) "${greeting()}, $name" else greeting(), collapse)
-                Spacer(Modifier.height(12.dp))
+                StatsShortcut(actions)
+                Spacer(Modifier.height(8.dp))
             }
             item(key = "liked") { LikedTile { actions.open(Route.Liked) } }
             if (playlists.state.error != null && playlists.state.value == null) {

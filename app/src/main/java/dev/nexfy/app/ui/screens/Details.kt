@@ -13,6 +13,7 @@ import androidx.compose.material.icons.rounded.AddCircleOutline
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -164,9 +165,19 @@ fun ArtistScreen(actions: AppActions, id: String, list: LazyListState, modifier:
     val detail = rememberLoaded(id) { refresh -> actions.core.artist(id, refresh) }
     val d = detail.state.value
     val peek = actions.nav.peek("ar:$id")
+    var menu by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val name = d?.artist?.name ?: peek?.title.orEmpty()
+    if (menu) {
+        PageMenu(name, d?.artist?.imageUrl ?: peek?.imageUrl, { menu = false }) {
+            MenuAction(Icons.Rounded.Radio, "Iniciar rádio") { menu = false; actions.startRadio("spotify:artist:$id") }
+            MenuAction(Icons.Rounded.Share, "Compartilhar") { menu = false; shareLink(context, name, "artist/$id") }
+        }
+    }
     CollectionScreen(
         actions, list,
-        title = d?.artist?.name ?: peek?.title.orEmpty(),
+        onMore = { menu = true },
+        title = name,
         subtitle = null,
         meta = when {
             d == null -> ""

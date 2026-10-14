@@ -578,6 +578,31 @@ impl NexfyCore {
         self.inner.load(LoadRequest::from_tracks(uris, options)).await
     }
 
+    /// The radio of a song or artist (`spotify:track:` / `spotify:artist:`),
+    /// for playing it on whichever device plays. The Web API refuses
+    /// recommendations to development-mode apps; the session reads the
+    /// radio Spotify's own clients use. Cached a day.
+    pub async fn radio(&self, seed_uri: String) -> Result<session_reads::Radio, CoreError> {
+        let web = &self.inner.web;
+        let key = format!("session:radio:{seed_uri}");
+        if let Some(radio) = web.load_local::<session_reads::Radio>(&key, std::time::Duration::from_secs(86_400)) {
+            return Ok(radio);
+        }
+        let session = self.inner.live_session().await?;
+        let radio = session_reads::radio(&session, &seed_uri).await.map_err(web_error)?;
+        web.save_local(&key, &radio);
+        Ok(radio)
+    }
+
+    /// Play the radio of a song or artist on this phone.
+    pub async fn start_radio(&self, seed_uri: String) -> Result<(), CoreError> {
+        let radio = self.radio(seed_uri).await?;
+        match radio.context_uri {
+            Some(context) => self.play_context(context, None, false).await,
+            None => self.play_tracks(radio.track_uris, 0, false).await,
+        }
+    }
+
     /// Jump to a song of the current context (from the queue view).
     pub async fn skip_to(&self, track_uri: String) -> Result<(), CoreError> {
         let context = self.inner.queue.lock().unwrap().context_uri.clone();

@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.runtime.getValue
@@ -68,6 +69,10 @@ fun TrackMenu(
                 onDismiss()
             }
             MenuAction(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
+            MenuAction(Icons.Rounded.Radio, "Iniciar rádio") {
+                actions.startRadio(track.uri)
+                onDismiss()
+            }
             playlistId?.let { id ->
                 MenuAction(Icons.Rounded.RemoveCircleOutline, "Remover desta playlist") {
                     actions.app.edits.removeFrom(id, track.uri)

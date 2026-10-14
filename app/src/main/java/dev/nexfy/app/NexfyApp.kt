@@ -58,6 +58,9 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     val commands: Commands by lazy { Commands(this, scope) }
     val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
 
+    /** Songs played here, for the listening stats. */
+    val playLog: PlayLog by lazy { PlayLog(this, scope) { core } }
+
     /** Covers fade in as they load instead of popping over their placeholder. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
@@ -69,6 +72,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
 
     override fun onCreate() {
         super.onCreate()
+        bridge.listening.onListen = playLog::record
         // Playback can start from another device (Spotify Connect) while no
         // screen is open: bring up the media service so it gets a
         // notification and stays alive.

@@ -88,6 +88,7 @@ import dev.nexfy.app.ui.screens.LikedScreen
 import dev.nexfy.app.ui.screens.PlaylistScreen
 import dev.nexfy.app.ui.screens.SearchScreen
 import dev.nexfy.app.ui.screens.SettingsScreen
+import dev.nexfy.app.ui.screens.StatsScreen
 import dev.nexfy.app.ui.theme.accentColor
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.launch
@@ -118,6 +119,7 @@ sealed interface Route {
     data class Artist(val id: String) : Route { override val key get() = "ar:$id" }
     data object Liked : Route { override val key get() = "liked" }
     data object Settings : Route { override val key get() = "settings" }
+    data object Stats : Route { override val key get() = "stats" }
 }
 
 /** What the tapped card already showed, drawn while the full page loads. */
@@ -229,6 +231,9 @@ class AppActions(
         if (remote != null) remoteCommand(RemoteCommand.Queue(track.uri)) else command { core.addToQueue(track.uri) }
         android.widget.Toast.makeText(app, "Adicionada à fila: ${track.title}", android.widget.Toast.LENGTH_SHORT).show()
     }
+
+    /** Play the radio of a song or artist, wherever playback is. */
+    fun startRadio(seedUri: String) = app.commands.startRadio(seedUri)
 
     /** The device playing elsewhere, if any: playback commands go to it. */
     private val remote get() = app.commands.remote
@@ -409,6 +414,7 @@ private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifie
         is Route.Artist -> ArtistScreen(actions, route.id, nav.list(route.key), modifier)
         Route.Liked -> LikedScreen(actions, nav.list(route.key), modifier)
         Route.Settings -> SettingsScreen(actions, modifier.safeDrawingPadding())
+        Route.Stats -> StatsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         null -> {
             val list = nav.list("root:${screen.tab.name}")
             Box(modifier.safeDrawingPadding()) {
