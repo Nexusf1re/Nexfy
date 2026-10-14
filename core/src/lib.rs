@@ -1515,11 +1515,27 @@ impl Inner {
     fn new_session(&self) -> Result<Session, CoreError> {
         // Our token comes from the desktop (keymaster) client; the session
         // must use the same id or login5 rejects it.
+        let defaults = SessionConfig::default();
         let config = SessionConfig {
             client_id: auth::PLAYBACK_CLIENT_ID.to_owned(),
-            ..SessionConfig::default()
+            device_id: self.device_id(&defaults.device_id),
+            ..defaults
         };
         Ok(Session::new(config, Some(self.cache()?)))
+    }
+
+    /// This phone's Connect id, kept across sessions: librespot makes a new
+    /// one each time, and Spotify listed every reconnect as another device
+    /// with the same name until the old ones expired.
+    fn device_id(&self, fresh: &str) -> String {
+        let path = self.cache_dir.join("device_id");
+        if let Some(id) = std::fs::read_to_string(&path).ok().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()) {
+            return id;
+        }
+        if let Err(e) = std::fs::write(&path, fresh) {
+            log::warn!("device id not kept: {e}");
+        }
+        fresh.to_owned()
     }
 
     /// The reusable credential librespot stored at sign-in.

@@ -275,10 +275,16 @@ fn kind_name(kind: librespot_protocol::devices::DeviceType) -> String {
 }
 
 fn cluster_devices(own: &str, cluster: &librespot_protocol::connect::Cluster) -> Vec<Device> {
+    // Earlier sessions of this phone linger under its name until Spotify
+    // drops them: only the current one is this phone.
+    let own_name = cluster.device.get(own).map(|info| info.name.as_str());
     let mut devices: Vec<Device> = cluster
         .device
         .iter()
         .filter(|(_, info)| !info.is_offline)
+        .filter(|(id, info)| {
+            id.as_str() == own || **id == cluster.active_device_id || Some(info.name.as_str()) != own_name
+        })
         .map(|(id, info)| Device {
             id: id.clone(),
             name: info.name.clone(),
