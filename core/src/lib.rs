@@ -27,6 +27,7 @@ use librespot_core::cache::Cache;
 use librespot_core::config::{DeviceType, SessionConfig};
 use librespot_core::session::Session;
 use librespot_core::{Error as LibrespotError, SpotifyId, SpotifyUri};
+use librespot_metadata::Metadata;
 use librespot_metadata::audio::{AudioItem, UniqueFields};
 use librespot_playback::audio_backend;
 use librespot_playback::config::{AudioFormat, PlayerConfig};
@@ -36,8 +37,8 @@ use tokio::net::TcpListener;
 
 pub use lyrics::{Lyrics, LyricsLine};
 pub use webapi::{
-    Album, AlbumDetail, Artist, ArtistDetail, Playlist, PlaylistDetail, Profile, RecentPlay,
-    SearchResults, Track, TrackPage, WebApp, WebStatus,
+    Album, AlbumDetail, Artist, ArtistDetail, Episode, Playlist, PlaylistDetail, Profile, RecentPlay,
+    SearchResults, Show, ShowDetail, Track, TrackPage, WebApp, WebStatus,
 };
 use webapi::WebApi;
 pub use offline::CacheInfo;
@@ -374,6 +375,15 @@ impl NexfyCore {
         self.inner.web.album(&id, refresh).await.map_err(web_error)
     }
 
+    pub async fn saved_shows(&self, refresh: bool) -> Result<Vec<Show>, CoreError> {
+        self.inner.web.saved_shows(refresh).await.map_err(web_error)
+    }
+
+    /// A podcast and its latest 50 episodes, newest first.
+    pub async fn show(&self, id: String, refresh: bool) -> Result<ShowDetail, CoreError> {
+        self.inner.web.show(&id, refresh).await.map_err(web_error)
+    }
+
     /// Web API first; Spotify refuses development-mode apps an artist's top
     /// tracks, so the page then comes from the session (cached a day).
     pub async fn artist(&self, id: String, refresh: bool) -> Result<ArtistDetail, CoreError> {
@@ -576,6 +586,38 @@ impl NexfyCore {
         }
         let options = self.inner.load_options(Some(PlayingTrack::Index(start_index)), shuffle);
         self.inner.load(LoadRequest::from_tracks(uris, options)).await
+    }
+
+    /// Play an episode with its show as the context (the next episode
+    /// follows), from `position_ms`. librespot streams only audio Spotify
+    /// hosts itself, so an episode served from the publisher's own feed is
+    /// refused here with a clear reason instead of failing in the player.
+    pub async fn play_episode(&self, show_id: String, episode_uri: String, position_ms: u32) -> Result<(), CoreError> {
+        let uri = SpotifyUri::from_uri(&episode_uri)
+            .ok()
+            .filter(|uri| matches!(uri, SpotifyUri::Episode { .. }))
+            .ok_or_else(|| CoreError::Playback(format!("episódio inválido: {episode_uri}")))?;
+        let session = self.inner.live_session().await?;
+        match librespot_metadata::Episode::get(&session, &uri).await {
+            Ok(episode) if episode.audio.is_empty() => {
+                return Err(CoreError::Playback(
+                    if episode.external_url.is_empty() {
+                        "este episódio não tem áudio que o Nexfy consiga tocar"
+                    } else {
+                        "este episódio fica hospedado fora do Spotify e o Nexfy não consegue tocá-lo"
+                    }
+                    .into(),
+                ));
+            }
+            Ok(_) => {}
+            // The player reports it if it really cannot load.
+            Err(error) => log::info!("episode {episode_uri} metadata: {error}"),
+        }
+        let mut options = self.inner.load_options(Some(PlayingTrack::Uri(episode_uri)), false);
+        options.seek_to = position_ms;
+        self.inner
+            .load(LoadRequest::from_context_uri(format!("spotify:show:{show_id}"), options))
+            .await
     }
 
     /// Jump to a song of the current context (from the queue view).
@@ -1019,7 +1061,11 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                 inner.emit(CoreEvent::Stopped);
             }
             PlayerEvent::Unavailable { track_id, .. } => inner.emit(CoreEvent::Error {
-                message: format!("faixa indisponível: {}", track_id.to_uri()),
+                message: match track_id {
+                    // Most often one hosted outside Spotify, which librespot cannot stream.
+                    SpotifyUri::Episode { .. } => format!("episódio indisponível no Nexfy: {}", track_id.to_uri()),
+                    _ => format!("faixa indisponível: {}", track_id.to_uri()),
+                },
             }),
             PlayerEvent::SetQueue {
                 context_uri,

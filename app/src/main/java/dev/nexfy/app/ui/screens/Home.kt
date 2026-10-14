@@ -110,6 +110,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val topTracks = rememberLoaded("home-top-tracks") { core.topTracks(it) }
     val topArtists = rememberLoaded("home-top-artists") { core.topArtists(it) }
     val releases = rememberLoaded("home-releases") { core.newReleases(it) }
+    val shows = rememberLoaded("home-sh", reloadOn = version) { core.savedShows(it) }
 
     val name = profile.state.value?.displayName?.substringBefore(' ')
     val scores = playScores(plays, recent.state.value.orEmpty())
@@ -181,6 +182,16 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                     items(items.take(20), key = { it.id }) { a ->
                         CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "home-al/${a.id}") {
                             actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "home-al/${a.id}")
+                        }
+                    }
+                }
+            }
+            // Never a skeleton: the row is there only for people who follow podcasts.
+            homeRow("shows", "Teus podcasts", false, shows.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "sh:${it.id}" } }) { items ->
+                Carousel(actions.nav.list("row:home-sh"), items.first().id) {
+                    items(items.take(20), key = { it.id }) { s ->
+                        CoverCard(s.imageUrl, s.name, s.publisher.ifEmpty { "Podcast" }, "sh-${s.id}", shared = "home-sh/${s.id}") {
+                            actions.open(Route.Show(s.id), Peek(s.name, s.publisher.ifEmpty { null }, s.imageUrl), "home-sh/${s.id}")
                         }
                     }
                 }

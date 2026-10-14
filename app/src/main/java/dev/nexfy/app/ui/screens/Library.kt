@@ -81,7 +81,7 @@ import dev.nexfy.app.ui.design.weightedPress
 import dev.nexfy.app.ui.rememberLoaded
 import dev.nexfy.app.ui.theme.accentColor
 
-private enum class Shelf(val label: String) { Playlists("Playlists"), Albums("Álbuns") }
+private enum class Shelf(val label: String) { Playlists("Playlists"), Albums("Álbuns"), Podcasts("Podcasts") }
 
 /** A row of the library list. */
 private data class Entry(
@@ -114,6 +114,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
     val version by actions.app.edits.version.collectAsState()
     val playlists = rememberLoaded("lib-pl", reloadOn = version) { core.myPlaylists(it) }
     val albums = rememberLoaded("lib-al", shelf, reloadOn = version) { if (shelf == Shelf.Albums) core.savedAlbums(it) else emptyList() }
+    val shows = rememberLoaded("lib-sh", shelf, reloadOn = version) { if (shelf == Shelf.Podcasts) core.savedShows(it) else emptyList() }
     val recent = rememberLoaded("lib-recent") { core.recentlyPlayed(it) }
     val scores = playScores(plays, recent.state.value.orEmpty())
     val me = remember { core.username() }
@@ -127,6 +128,13 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
         Shelf.Albums -> albums.state.value?.let { all ->
             pinnedFirst(albumSort.apply(all, scores), pinned) { "al:${it.id}" }.map {
                 Entry("al:${it.id}", it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(it.id), Peek(it.name, it.artists, it.imageUrl), it.uri)
+            }
+        }
+        // Kept in Spotify's order (latest saved first); there is no play count to sort by.
+        Shelf.Podcasts -> shows.state.value?.let { all ->
+            pinnedFirst(all, pinned) { "sh:${it.id}" }.map {
+                val subtitle = if (it.publisher.isEmpty()) "Podcast" else "Podcast · ${it.publisher}"
+                Entry("sh:${it.id}", it.name, subtitle, it.imageUrl, Route.Show(it.id), Peek(it.name, it.publisher.ifEmpty { null }, it.imageUrl), it.uri)
             }
         }
     }
@@ -165,6 +173,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     when (shelf) {
                         Shelf.Playlists -> SortButton(PlaylistSort.entries, playlistSort, { it.label }, library::setPlaylistSort)
                         Shelf.Albums -> SortButton(AlbumSort.entries, albumSort, { it.label }, library::setAlbumSort)
+                        Shelf.Podcasts -> Unit
                     }
                     Spacer(Modifier.weight(1f))
                     if (shelf == Shelf.Playlists) {
@@ -184,7 +193,11 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                     LibraryRow(null, "Músicas curtidas", "Playlist", liked = true, onClick = { actions.open(Route.Liked) })
                 }
             }
-            val shelfState = (if (shelf == Shelf.Playlists) playlists else albums).state
+            val shelfState = when (shelf) {
+                Shelf.Playlists -> playlists.state
+                Shelf.Albums -> albums.state
+                Shelf.Podcasts -> shows.state
+            }
             if (entries == null && shelfState.error != null) {
                 item(key = "connect") { ConnectPrompt(actions) }
             }

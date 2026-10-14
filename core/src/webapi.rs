@@ -143,6 +143,44 @@ pub struct RecentPlay {
     pub played_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct Show {
+    pub id: String,
+    pub uri: String,
+    pub name: String,
+    /// Empty when Spotify leaves it out, as its 2026 responses do.
+    pub publisher: String,
+    pub image_url: Option<String>,
+    pub episode_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct Episode {
+    pub uri: String,
+    pub id: String,
+    pub title: String,
+    /// The start of the description, plain text on one line.
+    pub description: String,
+    pub image_url: Option<String>,
+    pub duration_ms: u32,
+    /// `2026-03-14`, or only the year or month when that is all Spotify has.
+    pub release_date: String,
+    /// Where the user stopped; 0 when not started, or when the grant lacks
+    /// the playback-position scope.
+    pub resume_position_ms: u32,
+    pub fully_played: bool,
+    /// False when Spotify says it cannot play here (hosted elsewhere, or
+    /// not in the user's market).
+    pub playable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct ShowDetail {
+    pub show: Show,
+    /// Newest first.
+    pub episodes: Vec<Episode>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, uniffi::Record)]
 pub struct SearchResults {
     pub tracks: Vec<Track>,
@@ -304,6 +342,44 @@ struct TopTracks {
     tracks: Vec<RawTrack>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawShow {
+    id: String,
+    uri: String,
+    name: String,
+    publisher: Option<String>,
+    images: Option<Vec<RawImage>>,
+    total_episodes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SavedShow {
+    show: RawShow,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawResumePoint {
+    #[serde(default)]
+    fully_played: bool,
+    #[serde(default)]
+    resume_position_ms: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawEpisode {
+    id: String,
+    uri: String,
+    name: String,
+    description: Option<String>,
+    images: Option<Vec<RawImage>>,
+    #[serde(default)]
+    duration_ms: u32,
+    release_date: Option<String>,
+    resume_point: Option<RawResumePoint>,
+    is_playable: Option<bool>,
+    is_externally_hosted: Option<bool>,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawSearch {
     tracks: Option<Paging<RawTrack>>,
@@ -342,8 +418,8 @@ fn join_artists(artists: &[RawArtistRef]) -> String {
 }
 
 impl RawTrack {
-    /// None for podcast episodes and local files, which the player cannot
-    /// stream yet.
+    /// None for local files, which the player cannot stream, and for
+    /// podcast episodes, which have their own record and show page.
     fn into_track(self, album: Option<&RawAlbum>) -> Option<Track> {
         if self.is_local
             || self.id.is_none()
@@ -395,6 +471,52 @@ impl RawPlaylist {
             image_url: self.images.as_deref().and_then(pick_image),
             track_count: self.items.or(self.tracks).map(|c| c.total).unwrap_or_default(),
             followers: self.followers.map(|c| c.total).unwrap_or_default(),
+        }
+    }
+}
+
+impl RawShow {
+    fn into_show(self) -> Show {
+        Show {
+            id: self.id,
+            uri: self.uri,
+            name: self.name,
+            publisher: self.publisher.unwrap_or_default(),
+            image_url: self.images.as_deref().and_then(pick_image),
+            episode_count: self.total_episodes.unwrap_or_default(),
+        }
+    }
+}
+
+/// Most characters of an episode description kept for its row.
+const DESCRIPTION_CHARS: usize = 220;
+
+/// `text` on one line, cut at a word near `max` characters.
+fn short_text(text: &str, max: usize) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= max {
+        return line;
+    }
+    let cut: String = line.chars().take(max).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{}…", cut.trim_end_matches([',', '.', ';', ':']))
+}
+
+impl RawEpisode {
+    /// Episodes without their own art use the show's.
+    fn into_episode(self, show_image: Option<&str>) -> Episode {
+        let resume = self.resume_point;
+        Episode {
+            title: self.name,
+            description: short_text(self.description.as_deref().unwrap_or_default(), DESCRIPTION_CHARS),
+            image_url: self.images.as_deref().and_then(pick_image).or(show_image.map(str::to_owned)),
+            duration_ms: self.duration_ms,
+            release_date: self.release_date.unwrap_or_default(),
+            resume_position_ms: resume.as_ref().map_or(0, |r| r.resume_position_ms),
+            fully_played: resume.is_some_and(|r| r.fully_played),
+            playable: self.is_playable.unwrap_or(true) && !self.is_externally_hosted.unwrap_or(false),
+            uri: self.uri,
+            id: self.id,
         }
     }
 }
@@ -840,6 +962,37 @@ impl WebApi {
         })
     }
 
+    pub async fn saved_shows(self: &Arc<Self>, refresh: bool) -> Result<Vec<Show>> {
+        let first: Paging<SavedShow> = self
+            .cached("/me/shows?limit=50", Route::Personal, Duration::from_secs(600), refresh)
+            .await?;
+        let (items, _) = self.all_pages(first, Route::Personal).await?;
+        let shows = items.into_iter().map(|saved| saved.show.into_show()).collect();
+        Ok(dedupe(shows, |s: &Show| &s.id))
+    }
+
+    /// The show and its latest 50 episodes. Episodes are kept only briefly:
+    /// their resume points move as the user listens.
+    pub async fn show(self: &Arc<Self>, id: &str, refresh: bool) -> Result<ShowDetail> {
+        let show_path = format!("/shows/{id}?market=from_token");
+        let episodes_path = format!("/shows/{id}/episodes?limit=50&market=from_token");
+        let (raw, page) = tokio::join!(
+            self.cached::<RawShow>(&show_path, Route::Personal, Duration::from_secs(86_400), refresh),
+            self.cached::<Paging<RawEpisode>>(&episodes_path, Route::Personal, Duration::from_secs(300), refresh),
+        );
+        let show = raw?.into_show();
+        let episodes = page?
+            .items
+            .into_iter()
+            .flatten()
+            .map(|episode| episode.into_episode(show.image_url.as_deref()))
+            .collect();
+        Ok(ShowDetail {
+            episodes: dedupe(episodes, |e: &Episode| &e.id),
+            show,
+        })
+    }
+
     pub async fn artist(self: &Arc<Self>, id: &str, refresh: bool) -> Result<ArtistDetail> {
         let ttl = Duration::from_secs(86_400);
         let raw: RawArtist = self
@@ -1048,6 +1201,7 @@ impl WebApi {
     fn forget_library(&self) {
         self.forget("/me/playlists?limit=50");
         self.forget("/me/albums?limit=50");
+        self.forget("/me/shows?limit=50");
         self.forget("/me/tracks?limit=50&offset=0&market=from_token");
     }
 
@@ -1057,7 +1211,7 @@ impl WebApi {
         self.forget("/me/playlists?limit=50");
     }
 
-    /// Saves songs, albums or playlists (any Spotify URI) to the library.
+    /// Saves songs, albums, playlists or shows (any Spotify URI) to the library.
     pub async fn set_saved(self: &Arc<Self>, uris: &[String], on: bool) -> Result<()> {
         let method = if on { reqwest::Method::PUT } else { reqwest::Method::DELETE };
         for chunk in uris.chunks(LIBRARY_CHUNK) {
@@ -1150,6 +1304,32 @@ mod tests {
         )
         .unwrap();
         assert!(page.items.into_iter().flatten().all(|s| s.item.unwrap().into_track(None).is_none()));
+    }
+
+    #[test]
+    fn episodes_without_art_publisher_or_resume_point() {
+        let page: Paging<RawEpisode> = serde_json::from_str(
+            r#"{"items":[
+                {"id":"a","uri":"spotify:episode:a","name":"A","description":"One  two\nthree","images":null,
+                 "duration_ms":60000,"release_date":"2026-03-14","resume_point":{"fully_played":true,"resume_position_ms":0}},
+                {"id":"b","uri":"spotify:episode:b","name":"B","is_externally_hosted":true},
+                null
+            ],"total":2,"next":null}"#,
+        )
+        .unwrap();
+        let episodes: Vec<Episode> = page.items.into_iter().flatten().map(|e| e.into_episode(Some("show.jpg"))).collect();
+        assert_eq!(episodes[0].description, "One two three");
+        assert_eq!(episodes[0].image_url.as_deref(), Some("show.jpg"));
+        assert!(episodes[0].fully_played && episodes[0].playable);
+        assert!(!episodes[1].playable && episodes[1].resume_position_ms == 0);
+        let show: RawShow = serde_json::from_str(r#"{"id":"s","uri":"spotify:show:s","name":"S","images":[]}"#).unwrap();
+        assert_eq!(show.into_show().publisher, "");
+    }
+
+    #[test]
+    fn short_text_cuts_at_a_word() {
+        assert_eq!(short_text("one two three", 9), "one two…");
+        assert_eq!(short_text("short", 9), "short");
     }
 
     #[test]

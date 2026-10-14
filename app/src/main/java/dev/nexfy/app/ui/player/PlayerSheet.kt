@@ -435,7 +435,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     .then(
                         if (settled && !showLyrics && !flipped) {
                             Modifier.pointerInput(track.uri) {
-                                detectTapGestures(onTap = {
+                                // An episode has no album to turn to.
+                                detectTapGestures(onTap = if (track.uri.startsWith("spotify:episode:")) null else { _ ->
                                     haptics.tick()
                                     flipped = true
                                 }, onDoubleTap = { o ->

@@ -42,6 +42,8 @@ pub const WEB_SCOPES: &[&str] = &[
     "user-read-playback-state",
     "user-modify-playback-state",
     "user-read-currently-playing",
+    // Where each podcast episode was left; grants from before it lack it.
+    "user-read-playback-position",
 ];
 
 const REDIRECT_PATH: &str = "/login";
