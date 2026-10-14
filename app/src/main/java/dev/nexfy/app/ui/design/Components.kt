@@ -500,10 +500,10 @@ fun TrackRow(
 
 /** A user's photo in a circle, or their initial when they have none. */
 @Composable
-fun UserAvatar(user: UserFace, modifier: Modifier = Modifier) {
+fun UserAvatar(user: UserFace, modifier: Modifier = Modifier, description: String = "Adicionada por ${user.name}") {
     val c = MaterialTheme.colorScheme
     Box(
-        modifier.clip(CircleShape).background(c.surfaceVariant).semantics { contentDescription = "Adicionada por ${user.name}" },
+        modifier.clip(CircleShape).background(c.surfaceVariant).semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         if (user.imageUrl.isNullOrBlank()) {

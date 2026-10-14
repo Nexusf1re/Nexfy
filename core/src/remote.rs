@@ -380,7 +380,7 @@ pub fn session_queue_uris() -> Option<Vec<String>> {
 }
 
 /// A fresh id per command, as Spotify's clients send.
-fn command_id() -> String {
+pub(crate) fn command_id() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut a = std::collections::hash_map::RandomState::new().build_hasher();
     a.write_i64(now_ms());

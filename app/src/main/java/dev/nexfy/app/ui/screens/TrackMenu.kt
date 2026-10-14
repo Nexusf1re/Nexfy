@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.LibraryAdd
@@ -36,6 +37,7 @@ import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Cover
+import dev.nexfy.app.ui.player.JamState
 import uniffi.nexfy_core.Track
 
 /** Long-press actions for a song: queue it, or open its album or artist. */
@@ -69,6 +71,12 @@ fun TrackMenu(
             MenuAction(Icons.AutoMirrored.Rounded.PlaylistAdd, "Adicionar à fila") {
                 actions.addToQueue(track)
                 onDismiss()
+            }
+            if (JamState.current.value != null) {
+                MenuAction(Icons.Rounded.Groups, "Adicionar à Jam") {
+                    JamState.queue(actions.app, track.uri, track.title)
+                    onDismiss()
+                }
             }
             MenuAction(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
             MenuAction(Icons.Rounded.Radio, "Iniciar rádio") {
