@@ -135,7 +135,22 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
             )
         }
 
+        AppearanceSection(actions)
+
         StorageSection(actions)
+    }
+}
+
+/** The accent that follows the playing song's cover. */
+@Composable
+private fun AppearanceSection(actions: AppActions) {
+    val library = actions.app.library
+    val coverAccent by library.coverAccent.collectAsState()
+    Section("Aparência", "Os destaques do app pegam a cor da capa da música que está tocando.") {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Cor da música", Modifier.weight(1f), fontSize = 14.sp)
+            Switch(coverAccent, library::setCoverAccent)
+        }
     }
 }
 

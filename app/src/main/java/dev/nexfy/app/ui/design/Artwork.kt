@@ -27,6 +27,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
@@ -62,6 +63,36 @@ private fun <K, V> lruCache(max: Int): MutableMap<K, V> = java.util.Collections.
 private val Neutral = listOf(Color(0xFF2A2A2E), Color(0xFF151517), Color(0xFF3A3A40), Color(0xFF0B0B0C))
 private val PaletteCache = lruCache<String, List<Color>>(64)
 private val DominantCache = lruCache<String, Color>(200)
+
+/** Unspecified marks a cover known to have no usable colour. */
+private val AccentCache = lruCache<String, Color>(64)
+
+/**
+ * The cover's most vivid colour that is also really there (a speck of red
+ * on a grey cover does not count), as is: the theme makes it legible. Null
+ * for grey covers or when the cover does not load. Cached per URL.
+ */
+suspend fun coverAccent(context: Context, url: String): Color? {
+    AccentCache[url]?.let { return it.takeIf { c -> c.isSpecified } }
+    return try {
+        // Same size as the backdrop palette, so the decoded cover is shared.
+        val bitmap = smallBitmap(context, url, 96) ?: return null
+        val pick = withContext(Dispatchers.Default) {
+            val swatches = Palette.from(bitmap).maximumColorCount(16).generate().swatches
+            val total = swatches.sumOf { it.population }.coerceAtLeast(1).toFloat()
+            swatches
+                .filter { it.hsl[1] >= .3f && it.hsl[2] in .12f..0.9f && it.population / total >= .01f }
+                .maxByOrNull { it.hsl[1] * kotlin.math.sqrt(it.population / total) }
+                ?.let { Color(it.rgb) }
+        }
+        AccentCache[url] = pick ?: Color.Unspecified
+        pick
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /** Up to four colours from the cover, darkened enough for white text. Cached across screens. */
 @Composable

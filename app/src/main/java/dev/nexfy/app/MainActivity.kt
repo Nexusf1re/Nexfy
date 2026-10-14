@@ -21,6 +21,9 @@ import dev.nexfy.app.ui.NexfyRoot
 import dev.nexfy.app.ui.trackJank
 import androidx.metrics.performance.JankStats
 import dev.nexfy.app.ui.theme.NexfyTheme
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -39,8 +42,13 @@ class MainActivity : ComponentActivity() {
 
         enableEdgeToEdge()
         jank = trackJank(window)
+        // The cover the accent follows; only its URL, so position ticks pass it by.
+        val accentArt = combine(
+            app.bridge.state.map { it.track?.coverUrl }.distinctUntilChanged(),
+            app.library.coverAccent,
+        ) { url, on -> url.takeIf { on } }.distinctUntilChanged()
         setContent {
-            NexfyTheme {
+            NexfyTheme(accentArt = accentArt) {
                 NexfyRoot(
                     app = app,
                     controller = controller,

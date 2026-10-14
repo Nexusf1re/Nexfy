@@ -153,6 +153,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.Lyrics
+import uniffi.nexfy_core.LyricsLine
+import androidx.compose.runtime.withFrameMillis
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.drawText
 import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.QueueEntry
 import uniffi.nexfy_core.RepeatMode
@@ -584,7 +590,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     Box(Modifier.fillMaxWidth().height(artSpace), contentAlignment = Alignment.Center) {
                         if (showLyrics) {
                             Box(Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value * (1f - fullIn.value) }) {
-                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp))
+                                // Hidden under full-screen lyrics: its sweep holds still.
+                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), playback = s.takeUnless { lyricsFull })
                                 IconButton({ lyricsFull = true }, Modifier.align(Alignment.TopEnd)) {
                                     Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = Color.White.copy(.8f), modifier = Modifier.size(20.dp))
                                 }
@@ -694,7 +701,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         .pointerInput(Unit) { detectTapGestures { } }
                         .padding(horizontal = 28.dp),
                 ) {
-                    LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true)
+                    LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true, playback = s)
                     Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(track.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -983,10 +990,18 @@ sealed interface LyricsState {
 /**
  * Scrolling lyrics: the current line is large and sharp and stays near the
  * top third; the others shrink, fade and blur with their distance. Tapping
- * a timed line seeks to it.
+ * a timed line seeks to it. A current line with word timings lights up word
+ * by word, following [playback] frame by frame (null holds it at [position]).
  */
 @Composable
-private fun LyricsView(state: LyricsState, position: Long, controls: PlayerControls, modifier: Modifier, large: Boolean = false) {
+private fun LyricsView(
+    state: LyricsState,
+    position: Long,
+    controls: PlayerControls,
+    modifier: Modifier,
+    large: Boolean = false,
+    playback: PlaybackSnapshot? = null,
+) {
     if (state == LyricsState.Loading) {
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
         Column(modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -1017,6 +1032,17 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
         lines.indexOfLast { (it.atMs?.toLong() ?: Long.MAX_VALUE) <= position + 250 }
     } else {
         -1
+    }
+    // Song time for the word sweep, written each frame but read only while
+    // drawing the current line: frames redraw one line, never recompose.
+    val clock = remember { mutableLongStateOf(position) }
+    val timed = current >= 0 && lines[current].words.isNotEmpty()
+    LaunchedEffect(timed, playback) {
+        val p = playback ?: return@LaunchedEffect
+        if (!timed) return@LaunchedEffect
+        do {
+            withFrameMillis { clock.longValue = p.currentPositionMs() }
+        } while (p.playing)
     }
     val list = rememberLazyListState()
     LaunchedEffect(current) {
@@ -1055,6 +1081,8 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
                     val d by animateFloatAsState(target, Motion.settle(169f), label = "distance")
                     val focus = (1f - d).coerceIn(0f, 1f)
                     val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.8f).dp else 0.dp
+                    val sweep = if (i == current) remember(line) { wordSweep(line, lines.getOrNull(i + 1)?.atMs?.toLong()) } else null
+                    val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
                     Text(
                         line.text,
                         Modifier.fillMaxWidth()
@@ -1070,7 +1098,21 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
                                 enabled = line.atMs != null,
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() },
-                            ) { line.atMs?.let { controls.seek(it.toLong()) } },
+                            ) { line.atMs?.let { controls.seek(it.toLong()) } }
+                            .then(
+                                if (sweep == null) {
+                                    Modifier
+                                } else {
+                                    Modifier.drawWithContent {
+                                        val text = layout[0] ?: return@drawWithContent drawContent()
+                                        // A hair early: the eye leads the ear.
+                                        val t = (if (playback != null) clock.longValue else position) + 50
+                                        // Unsung words settle dim as the line comes into focus.
+                                        drawSweep(text, sweep.reach(t), 16.dp.toPx(), Color.White, Color.White.copy(alpha = 1f - .62f * focus))
+                                    }
+                                },
+                            ),
+                        onTextLayout = { layout[0] = it },
                         color = Color.White,
                         fontSize = when { large && lyrics.synced -> 30.sp; large -> 22.sp; lyrics.synced -> 24.sp; else -> 19.sp },
                         fontWeight = FontWeight.Bold,
@@ -1085,6 +1127,70 @@ private fun LyricsView(state: LyricsState, position: Long, controls: PlayerContr
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 6.dp),
         )
+    }
+}
+
+/** Where each timed piece of a line starts in its text, and when it is sung. */
+private class WordSweep(private val starts: IntArray, private val at: LongArray, private val end: LongArray, private val length: Int) {
+    /** How far the singing has reached at [t], in characters; fractional inside a word. */
+    fun reach(t: Long): Float {
+        if (t < at[0]) return 0f
+        var k = at.size - 1
+        while (k > 0 && at[k] > t) k--
+        val size = (if (k + 1 < starts.size) starts[k + 1] else length) - starts[k]
+        val done = ((t - at[k]).toFloat() / (end[k] - at[k]).coerceAtLeast(1)).coerceIn(0f, 1f)
+        return starts[k] + done * size
+    }
+}
+
+/** The sweep for [line], or null when it has no word timings that fit its text. */
+private fun wordSweep(line: LyricsLine, nextAt: Long?): WordSweep? {
+    val words = line.words
+    if (words.isEmpty() || words.joinToString("") { it.text } != line.text) return null
+    val starts = IntArray(words.size)
+    var offset = 0
+    words.forEachIndexed { i, w ->
+        starts[i] = offset
+        offset += w.text.length
+    }
+    val at = LongArray(words.size) { words[it].atMs.toLong() }
+    // The last word ends where the source says, else after a beat, and never
+    // inside the next line. A word held across a pause stops filling after
+    // two seconds instead of crawling through it.
+    val last = line.endMs?.toLong() ?: (at.last() + 700).let { e -> nextAt?.let { minOf(e, it) } ?: e }
+    val end = LongArray(words.size) { k ->
+        val next = if (k + 1 < words.size) at[k + 1] else last
+        minOf(next, at[k] + 2_000).coerceAtLeast(at[k] + 1)
+    }
+    return WordSweep(starts, at, end, line.text.length)
+}
+
+/**
+ * [text] lit up to [reach] characters and dim after, with a soft edge
+ * [edge] px wide. Each visual line is drawn on its own (clipped), so a
+ * wrapped line fills one row after the other.
+ */
+private fun DrawScope.drawSweep(text: TextLayoutResult, reach: Float, edge: Float, lit: Color, dim: Color) {
+    val length = text.layoutInput.text.length
+    if (reach >= length) return drawText(text, lit)
+    if (reach <= 0f) return drawText(text, dim)
+    for (row in 0 until text.lineCount) {
+        val from = text.getLineStart(row)
+        val to = text.getLineEnd(row)
+        clipRect(top = text.getLineTop(row), bottom = text.getLineBottom(row)) {
+            when {
+                reach >= to -> drawText(text, lit)
+                reach <= from -> drawText(text, dim)
+                else -> {
+                    val i = reach.toInt()
+                    val x0 = text.getHorizontalPosition(i, true)
+                    // At the row's end the next offset belongs to the row below.
+                    val x1 = if (i + 1 >= to) text.getLineRight(row) else text.getHorizontalPosition(i + 1, true)
+                    val x = x0 + (x1 - x0) * (reach - i)
+                    drawText(text, Brush.horizontalGradient(listOf(lit, dim), startX = x - edge / 2, endX = x + edge / 2))
+                }
+            }
+        }
     }
 }
 
