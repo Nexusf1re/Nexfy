@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Computer
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -42,9 +43,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.playback.PlaybackSnapshot
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.Motion
@@ -54,7 +57,9 @@ import dev.nexfy.app.ui.design.boneWidth
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.theme.accentColor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import uniffi.nexfy_core.Device
 
 fun deviceIcon(kind: String): ImageVector = when (kind.lowercase()) {
@@ -93,6 +98,22 @@ fun DevicesSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () ->
     val haptics = rememberHaptics()
     var devices by remember { mutableStateOf<List<Device>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var jamOpen by remember { mutableStateOf(false) }
+    if (jamOpen) {
+        JamSheet(onDismiss)
+        return
+    }
+    val context = LocalContext.current
+    // Whether this account is in a Jam, for the Jam row; quietly nothing on failure.
+    LaunchedEffect(Unit) {
+        try {
+            val core = (context.applicationContext as NexfyApp).core
+            JamState.current.value = withContext(Dispatchers.IO) { core.jamCurrent() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
     // Devices come and go (a PC closing Spotify): keep the list fresh while open.
     LaunchedEffect(Unit) {
         while (true) {
@@ -138,6 +159,37 @@ fun DevicesSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () ->
                     }
                 }
             }
+            JamRow { haptics.tick(); jamOpen = true }
+        }
+    }
+}
+
+/** The way into the Jam, under the devices and drawn like one. */
+@Composable
+private fun JamRow(onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val accent = accentColor()
+    val jam = JamState.current.value
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp).clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(44.dp).clip(CircleShape).background(if (jam != null) accent.copy(alpha = .16f) else c.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.Groups, null, tint = if (jam != null) accent else c.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text("Jam", style = MaterialTheme.typography.titleMedium, color = if (jam != null) accent else c.onSurface)
+            Text(
+                jam?.let { "Na Jam · ${it.members.size} ${if (it.members.size == 1) "pessoa" else "pessoas"}" }
+                    ?: "Ouça junto com amigos",
+                fontSize = 13.sp, color = c.onSurfaceVariant, maxLines = 1,
+            )
         }
     }
 }

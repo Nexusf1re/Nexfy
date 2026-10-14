@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Radio
@@ -99,6 +100,13 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
             }
             dev.nexfy.app.ui.screens.LikeAction(track.uri, onDismiss)
             Action(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
+            if (JamState.current.value != null) {
+                Action(Icons.Rounded.Groups, "Adicionar à Jam") {
+                    haptics.tick()
+                    JamState.queue(context, track.uri, track.title)
+                    onDismiss()
+                }
+            }
             Action(Icons.Rounded.Radio, "Iniciar rádio") {
                 haptics.tick()
                 (context.applicationContext as dev.nexfy.app.NexfyApp).commands.startRadio(track.uri)

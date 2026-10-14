@@ -14,6 +14,7 @@ mod offline;
 mod playlist_edit;
 mod remote;
 mod session_reads;
+mod social;
 mod sound;
 mod webapi;
 
@@ -66,6 +67,12 @@ pub enum CoreError {
 
 fn web_error(error: anyhow::Error) -> CoreError {
     CoreError::Web(format!("{error:#}"))
+}
+
+/// Jam calls are undocumented: every failure is logged for checking on the phone.
+fn jam_error(error: anyhow::Error) -> CoreError {
+    log::warn!("jam: {error:#}");
+    web_error(error)
 }
 
 /// Which grant a pending browser sign-in is for.
@@ -1262,6 +1269,56 @@ impl NexfyCore {
         }
         Ok(downloaded)
     }
+    // --------------------------------------------------------- social --
+
+    /// What friends play or played last (the desktop client's buddy list),
+    /// newest first, kept a minute unless `refresh`. An error means the
+    /// list is not reachable from this client: the UI hides it.
+    pub async fn friend_activity(&self, refresh: bool) -> Result<Vec<social::FriendActivity>, CoreError> {
+        let session = self.inner.live_session().await?;
+        social::friend_activity(&session, refresh).await.map_err(|error| {
+            log::warn!("friend activity: {error:#}");
+            web_error(error)
+        })
+    }
+
+    /// The Jam this account is in, None when it is in none.
+    pub async fn jam_current(&self) -> Result<Option<social::JamSession>, CoreError> {
+        let session = self.inner.live_session().await?;
+        social::jam_current(&session).await.map_err(jam_error)
+    }
+
+    /// Starts a Jam playing on this phone (or answers the one going).
+    pub async fn jam_start(&self) -> Result<social::JamSession, CoreError> {
+        let session = self.inner.live_session().await?;
+        social::jam_start(&session).await.map_err(jam_error)
+    }
+
+    /// Joins the Jam of a pasted link (open.spotify.com/socialsession/...,
+    /// spotify.link/...) or bare token.
+    pub async fn jam_join(&self, link: String) -> Result<social::JamSession, CoreError> {
+        let session = self.inner.live_session().await?;
+        social::jam_join(&session, &link).await.map_err(jam_error)
+    }
+
+    /// Leaves the Jam, or ends it for everyone when this account started it.
+    pub async fn jam_leave(&self) -> Result<(), CoreError> {
+        let session = self.inner.live_session().await?;
+        social::jam_leave(&session).await.map_err(jam_error)
+    }
+
+    /// Adds a song to the Jam's queue, wherever the Jam plays.
+    pub async fn jam_queue(&self, track_uri: String) -> Result<(), CoreError> {
+        let session = self.inner.live_session().await?;
+        match social::jam_target(&session) {
+            Some(social::JamQueue::Here) => self.add_to_queue(track_uri).await,
+            Some(social::JamQueue::Device(id)) => {
+                social::jam_queue_on(&session, &id, &track_uri).await.map_err(jam_error)
+            }
+            None => Err(CoreError::Web("não deu para achar onde a Jam toca".into())),
+        }
+    }
+
     // ------------------------------------------------- other devices --
 
     /// The account's devices: those online in the Connect cluster the

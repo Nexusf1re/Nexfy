@@ -111,6 +111,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val topArtists = rememberLoaded("home-top-artists") { core.topArtists(it) }
     val releases = rememberLoaded("home-releases") { core.newReleases(it) }
     val shows = rememberLoaded("home-sh", reloadOn = version) { core.savedShows(it) }
+    val friends = rememberLoaded("home-friends") { core.friendActivity(it) }
 
     val name = profile.state.value?.displayName?.substringBefore(' ')
     val scores = playScores(plays, recent.state.value.orEmpty())
@@ -133,6 +134,16 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 Spacer(Modifier.height(8.dp))
             }
             item(key = "liked") { LikedTile { actions.open(Route.Liked) } }
+            // Only for people whose friends share what they play, and only
+            // where Spotify gives this client the list: no skeleton, no error.
+            friends.state.value?.takeIf { it.isNotEmpty() }?.let { list ->
+                item(key = "friends") {
+                    FriendsShortcut(
+                        list, actions,
+                        Modifier.padding(top = 10.dp).animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null),
+                    )
+                }
+            }
             if (playlists.state.error != null && playlists.state.value == null) {
                 item(key = "connect") { ConnectOrError(playlists.state.error, actions, playlists.refresh) }
             }
