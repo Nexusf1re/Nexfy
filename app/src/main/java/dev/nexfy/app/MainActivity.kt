@@ -2,6 +2,7 @@ package dev.nexfy.app
 
 import android.Manifest
 import android.content.ComponentName
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,6 +19,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dev.nexfy.app.playback.PlaybackService
 import dev.nexfy.app.ui.NexfyRoot
+import dev.nexfy.app.ui.player.OpenPlayer
 import dev.nexfy.app.ui.trackJank
 import androidx.metrics.performance.JankStats
 import dev.nexfy.app.ui.theme.NexfyTheme
@@ -39,6 +41,8 @@ class MainActivity : ComponentActivity() {
         val app = application as NexfyApp
         // Reconnect playback with the saved credential, if any.
         lifecycleScope.launch { runCatching { app.core.restoreSession() } }
+        // A widget tap opens the full player; not again on recreation.
+        if (savedInstanceState == null) OpenPlayer.from(intent)
 
         enableEdgeToEdge()
         jank = trackJank(window)
@@ -58,6 +62,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        OpenPlayer.from(intent)
     }
 
     override fun onStart() {

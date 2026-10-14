@@ -213,6 +213,19 @@ interface PlayerControls {
 
 private val settle = Motion.settle<Float>(247f)
 
+/** Requests from outside the composition (a widget tap) to open the full player. */
+object OpenPlayer {
+    /** The intent extra that asks for it. */
+    const val EXTRA = "dev.nexfy.app.OPEN_PLAYER"
+
+    /** When it was asked ([android.os.SystemClock.elapsedRealtime]); 0 when nothing is pending. */
+    internal val requested = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    fun from(intent: android.content.Intent?) {
+        if (intent?.getBooleanExtra(EXTRA, false) == true) requested.value = android.os.SystemClock.elapsedRealtime()
+    }
+}
+
 /** Song change: the new title rises in as the old one fades up and out. */
 private fun AnimatedContentTransitionScope<TrackInfo>.songChange(): ContentTransform =
     if (initialState.uri == targetState.uri) {
@@ -285,6 +298,14 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     LaunchedEffect(expanded) {
         playerOpen = expanded
         if (!expanded) flipped = false
+    }
+    LaunchedEffect(Unit) {
+        OpenPlayer.requested.collect { at ->
+            if (at == 0L) return@collect
+            OpenPlayer.requested.value = 0L
+            // A stale request (no song came for a while) would open the player out of nowhere.
+            if (android.os.SystemClock.elapsedRealtime() - at < 10_000) f.animateTo(1f, settle)
+        }
     }
     dev.nexfy.app.ui.MetricsState("sheet", if (f.isRunning) "moving" else null)
     val collapsed by remember { derivedStateOf { f.value < .05f } }

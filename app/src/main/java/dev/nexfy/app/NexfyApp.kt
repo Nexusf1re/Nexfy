@@ -17,8 +17,7 @@ import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
 import dev.nexfy.app.playback.PlaybackService
 import dev.nexfy.app.playback.SleepTimer
-import dev.nexfy.app.widget.NexfyWidget
-import androidx.glance.appwidget.updateAll
+import dev.nexfy.app.widget.NexfyWidgets
 import dev.nexfy.core.NativeInit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -136,16 +135,8 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
-        // Keep the home-screen widget in step with what plays (here or elsewhere).
-        scope.launch {
-            bridge.state
-                .map { s -> listOf(s.track?.uri, s.track?.coverUrl, s.playing, s.remote?.name) }
-                .distinctUntilChanged()
-                .collectLatest {
-                    delay(250)
-                    runCatching { NexfyWidget().updateAll(this@NexfyApp) }
-                }
-        }
+        // Keep the home-screen widgets in step with what plays (here or elsewhere).
+        NexfyWidgets.follow(this, scope)
         // Fetch the songs either side of the current one ahead, so a skip
         // can show the new song at once.
         scope.launch {
