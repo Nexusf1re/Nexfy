@@ -2029,7 +2029,7 @@ impl SpircTask {
             .await
             .map(|bytes| {
                 if let Ok(cluster) = <Cluster as protobuf::Message>::parse_from_bytes(&bytes) {
-                    crate::cluster_cache::store(&cluster);
+                    crate::cluster_cache::update_from_reply(&cluster);
                 }
             })
     }

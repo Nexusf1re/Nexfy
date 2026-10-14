@@ -1264,6 +1264,7 @@ impl NexfyCore {
     pub async fn devices(&self) -> Result<Vec<Device>, CoreError> {
         let session = self.inner.live_session().await?;
         if let Some(devices) = remote::session_devices(&session) {
+            log::info!("devices from the cluster: {:?}", devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>());
             return Ok(devices);
         }
         remote::devices(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
