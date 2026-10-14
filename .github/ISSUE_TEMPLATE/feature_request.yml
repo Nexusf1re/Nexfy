@@ -1,0 +1,22 @@
+name: Feature request
+description: An idea to make Nexfy better
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do
+      description: The problem or the situation, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+      description: How you imagine it in the app. Screens or sketches help.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to build this myself

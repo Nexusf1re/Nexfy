@@ -1,0 +1,56 @@
+name: Bug report
+description: Something does not work as it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Search the existing issues first. Never paste tokens, passwords or your Client ID.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Tap ...
+        3. See ...
+  - type: input
+    id: version
+    attributes:
+      label: Nexfy version
+      description: Settings, at the bottom, or the release you installed.
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Phone and Android version
+      placeholder: Samsung S23+, Android 16
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Playback on the phone
+        - Spotify Connect (controlling or being controlled)
+        - Library, search, playlists
+        - Lyrics
+        - Offline cache
+        - Widget, notification, media controls
+        - Login and setup
+        - Other
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Optional. `adb logcat -s NexfyCore:I` around the moment it happened. Remove anything personal.
+      render: text

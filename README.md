@@ -50,6 +50,14 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
+## Contribuir
+
+Contribuições são bem-vindas, em português ou inglês. Leia o [CONTRIBUTING](CONTRIBUTING.md) e abra uma issue antes de começar algo grande. Problemas de segurança vão pelo canal privado descrito em [SECURITY](SECURITY.md).
+
+## Licença
+
+[GPL-3.0](LICENSE). O librespot em `core/third_party/librespot/` mantém a licença MIT dele.
+
 ## Créditos
 
 - [librespot](https://github.com/librespot-org/librespot) (MIT), a base de reprodução e do Spotify Connect.
