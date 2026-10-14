@@ -38,6 +38,30 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
         app.refreshRemoteSoon()
     }
 
+    /**
+     * Play the radio of a song or artist ([seedUri]): here, or on the device
+     * playing elsewhere. The core finds it over the session; both places
+     * then play it as a context (or, failing that, a list of songs).
+     */
+    fun startRadio(seedUri: String) {
+        android.widget.Toast.makeText(app, "Iniciando rádio", android.widget.Toast.LENGTH_SHORT).show()
+        if (remote == null) {
+            run { core.startRadio(seedUri) }
+            return
+        }
+        run {
+            val radio = core.radio(seedUri)
+            core.remoteCommand(RemoteCommand.Shuffle(false))
+            val context = radio.contextUri
+            if (context != null) {
+                core.remoteCommand(RemoteCommand.PlayContext(context, null))
+            } else {
+                core.remoteCommand(RemoteCommand.PlayTracks(radio.trackUris, 0u))
+            }
+        }
+        app.refreshRemoteSoon()
+    }
+
     fun playPause() {
         val playing = bridge.state.value.playing
         if (remote != null) {

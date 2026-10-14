@@ -55,6 +55,9 @@ class CoreBridge(core: NexfyCore) : CoreListener {
     /** Remote reports are ignored until then: playback was just moved here. */
     private var holdUntil = 0L
 
+    /** How long each song plays here, for the listening stats. */
+    val listening = ListenTracker()
+
     init {
         core.setListener(this)
     }
@@ -135,6 +138,7 @@ class CoreBridge(core: NexfyCore) : CoreListener {
                 is CoreEvent.Error -> s.copy(error = event.message)
             }
         }
+        listening.update(_local.value)
         publish()
     }
 

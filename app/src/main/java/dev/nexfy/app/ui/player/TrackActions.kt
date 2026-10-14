@@ -19,6 +19,7 @@ import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.LibraryAdd
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,9 +50,9 @@ import uniffi.nexfy_core.TrackInfo
 private fun webLink(uri: String) = "https://open.spotify.com/track/" + uri.substringAfterLast(':')
 
 /**
- * What can be done with the song playing: go to its artists or album, copy
- * or share its link, set a sleep timer. [onNavigate] runs before opening a page (the player
- * collapses to show it).
+ * What can be done with the song playing: start its radio, go to its
+ * artists or album, copy or share its link, set a sleep timer.
+ * [onNavigate] runs before opening a page (the player collapses to show it).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,6 +99,11 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
             }
             dev.nexfy.app.ui.screens.LikeAction(track.uri, onDismiss)
             Action(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
+            Action(Icons.Rounded.Radio, "Iniciar rádio") {
+                haptics.tick()
+                (context.applicationContext as dev.nexfy.app.NexfyApp).commands.startRadio(track.uri)
+                onDismiss()
+            }
             val d = details
             // One row per artist (names and ids come in the same order).
             val names = (d?.artists ?: track.artists).split(", ")
