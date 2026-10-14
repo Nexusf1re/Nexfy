@@ -1,5 +1,6 @@
 package dev.nexfy.app.playback
 
+import kotlin.math.abs
 import android.os.SystemClock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -82,6 +83,14 @@ class CoreBridge(core: NexfyCore) : CoreListener {
     fun setRemote(r: RemoteState?) {
         val now = SystemClock.elapsedRealtime()
         if (now < holdUntil) return
+        val old = remote
+        if (r != null && !r.device.isSelf && old != null) {
+            // A poll that only confirms the extrapolated position changes
+            // nothing: publishing it would recompose every screen for naught.
+            val (o, at) = old
+            val expected = if (o.playing) o.progressMs.toLong() + (now - at) else o.progressMs.toLong()
+            if (o.copy(progressMs = 0u) == r.copy(progressMs = 0u) && abs(r.progressMs.toLong() - expected) < 1500) return
+        }
         remote = if (r == null || r.device.isSelf) null else r to now
         publish()
     }

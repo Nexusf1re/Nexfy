@@ -318,6 +318,8 @@ fun NexfyRoot(
     val target = nav.screen
     val screens = remember { SeekableTransitionState(target) }
     LaunchedEffect(target) { screens.animateTo(target) }
+    MetricsState("screen", target.route?.key?.substringBefore(':') ?: "tab-${target.tab.name.lowercase()}")
+    MetricsState("nav", if (screens.currentState != screens.targetState) "moving" else null)
     PredictiveBackHandler(enabled = nav.stack().isNotEmpty()) { events ->
         val parent = nav.parentScreen()
         try {

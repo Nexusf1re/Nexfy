@@ -123,6 +123,7 @@ dependencies {
     implementation(libs.haze)
     implementation(libs.androidx.palette)
     implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.metrics.performance)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
     // UniFFI's Kotlin bindings call the core through JNA.

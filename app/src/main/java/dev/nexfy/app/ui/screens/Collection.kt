@@ -1,5 +1,6 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.runtime.derivedStateOf
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.material.icons.rounded.DownloadForOffline
@@ -159,7 +160,9 @@ fun CollectionScreen(
     }
     val loading = tracks == null
     val all = tracks.orEmpty()
-    val nowPlaying by actions.app.bridge.state.collectAsState()
+    // Only the playing song's URIs: rows recompose when the song changes, not on every playback update.
+    val playbackState = actions.app.bridge.state.collectAsState()
+    val playingUris by remember { derivedStateOf { playbackState.value.queue.current?.uri to playbackState.value.track?.uri } }
     // Kept on the phone: downloaded on Wi-Fi; count what is there already.
     val keptAll by actions.app.library.kept.collectAsState()
     val keepKey = source?.takeIf { it.startsWith("pl:") || it.startsWith("al:") }
@@ -320,7 +323,7 @@ fun CollectionScreen(
                                 { actions.play(shownTracks, i, source = source, contextUri = rowContext) },
                                 number = if (numbered) entry.index + 1 else null,
                                 // The queue keeps the URI as listed; the playing one may be relinked.
-                                playing = nowPlaying.queue.current?.uri == track.uri || nowPlaying.track?.uri == track.uri,
+                                playing = playingUris.first == track.uri || playingUris.second == track.uri,
                                 onLongClick = { menuFor = track },
                                 onSwipe = { actions.addToQueue(track) },
                             )

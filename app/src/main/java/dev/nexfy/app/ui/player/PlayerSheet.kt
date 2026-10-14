@@ -238,6 +238,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     s.track?.let { lastTrack[0] = it }
     var showLyrics by rememberSaveable { mutableStateOf(false) }
     var lyricsFull by rememberSaveable { mutableStateOf(false) }
+    var playerOpen by remember { mutableStateOf(false) }
+    dev.nexfy.app.ui.MetricsState("player", if (!playerOpen) null else if (lyricsFull) "lyrics-full" else if (showLyrics) "lyrics" else "open")
     val track = s.track ?: lastTrack[0] ?: return
     val c = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -259,6 +261,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
 
     val pf = { f.value.coerceIn(0f, 1f) }
     val expanded by remember { derivedStateOf { f.value > 0.5f } }
+    LaunchedEffect(expanded) { playerOpen = expanded }
+    dev.nexfy.app.ui.MetricsState("sheet", if (f.isRunning) "moving" else null)
     val collapsed by remember { derivedStateOf { f.value < .05f } }
     val showMini by remember { derivedStateOf { f.value < .6f } }
     val showGlass by remember { derivedStateOf { f.value < .99f } }
