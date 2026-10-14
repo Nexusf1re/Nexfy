@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import dev.nexfy.app.LyricsSize
 import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.ui.AppActions
+import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.PillSelector
@@ -77,7 +78,7 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
         message?.let { Text(it, color = accentColor()) }
 
         AccountSection(actions) { message = it }
-        SoundSection(actions)
+        SoundSection(actions) { actions.open(Route.Equalizer) }
         AppearanceSection(actions)
         BehaviourSection(actions)
         StorageSection(actions)
@@ -168,15 +169,16 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
 }
 
 /**
- * Stream quality and volume normalisation, for what plays on this phone.
- * [onEqualizer] opens the equalizer once it exists (a future
- * Route.Equalizer); until then its row shows as coming soon.
+ * Stream quality, volume normalisation and the way into the equalizer
+ * ([onEqualizer]), for what plays on this phone.
  */
 @Composable
 private fun SoundSection(actions: AppActions, onEqualizer: (() -> Unit)? = null) {
     val c = MaterialTheme.colorScheme
     val core = actions.core
     var sound by remember { mutableStateOf(core.soundSettings()) }
+    // Read again on each visit: the equalizer screen replaces this one.
+    val equalizer = remember { core.equalizer() }
     Section("Som", "Como as músicas tocam neste celular.") {
         Choice("Qualidade de áudio", listOf(AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
             if (it == AudioQuality.NORMAL) "Normal · 160 kbps" else "Alta · 320 kbps"
@@ -191,13 +193,13 @@ private fun SoundSection(actions: AppActions, onEqualizer: (() -> Unit)? = null)
             core.setNormalize(it)
             sound = core.soundSettings()
         })
-        EqualizerRow(onEqualizer)
+        EqualizerRow(if (!equalizer.enabled) "Desligado" else equalizer.preset ?: "Personalizado", onEqualizer)
     }
 }
 
-/** The way into the equalizer; without [onClick] it is shown disabled, "Em breve". */
+/** The way into the equalizer, [status] under its name; without [onClick] it is shown disabled, "Em breve". */
 @Composable
-private fun EqualizerRow(onClick: (() -> Unit)?) {
+private fun EqualizerRow(status: String, onClick: (() -> Unit)?) {
     val c = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().alpha(if (onClick != null) 1f else .45f).clip(RoundedCornerShape(12.dp))
@@ -207,7 +209,7 @@ private fun EqualizerRow(onClick: (() -> Unit)?) {
     ) {
         Column(Modifier.weight(1f)) {
             Text("Equalizador", fontSize = 14.sp)
-            Text(if (onClick != null) "Graves, médios e agudos." else "Em breve", color = c.onSurfaceVariant, fontSize = 13.sp)
+            Text(if (onClick != null) status else "Em breve", color = c.onSurfaceVariant, fontSize = 13.sp)
         }
         Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
     }
