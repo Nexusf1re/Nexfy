@@ -87,6 +87,20 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
+        // Another device playing gets the notification too. Android lets the
+        // service start only while a screen is open; once up, it follows that
+        // device by itself in the background.
+        scope.launch {
+            combine(bridge.state.map { it.remote != null && it.playing }, visible) { there, shown -> there && shown }
+                .distinctUntilChanged()
+                .collect { start ->
+                    if (start && !PlaybackService.running) {
+                        runCatching {
+                            ContextCompat.startForegroundService(this@NexfyApp, Intent(this@NexfyApp, PlaybackService::class.java))
+                        }
+                    }
+                }
+        }
         // While a screen is open, follow what the account plays on other
         // devices: faster while one of them is playing.
         scope.launch {

@@ -10,8 +10,11 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.wifi.WifiManager
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -21,6 +24,8 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.nexfy.app.MainActivity
 import dev.nexfy.app.NexfyApp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Keeps playback alive in the background and publishes it to the system:
@@ -43,9 +48,12 @@ class PlaybackService : MediaSessionService() {
     private var hasFocus = false
     private var resumeOnFocusGain = false
 
+    /** The session mirrors another device: no sound here, so no focus, locks or noisy pause. */
+    private val remote get() = player.deviceInfo.playbackType == DeviceInfo.PLAYBACK_TYPE_REMOTE
+
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) player.pause()
+            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && !remote) player.pause()
         }
     }
 
@@ -53,7 +61,7 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         running = true
         val app = application as NexfyApp
-        player = NexfyPlayer(app.core, app.bridge)
+        player = NexfyPlayer(app.core, app.bridge, app.commands)
 
         audioManager = getSystemService(AudioManager::class.java)
         focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -76,11 +84,27 @@ class PlaybackService : MediaSessionService() {
 
         player.addListener(object : Player.Listener {
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                if (remote) return
                 if (playWhenReady) requestFocus() else if (!resumeOnFocusGain) abandonFocus()
             }
 
-            override fun onIsPlayingChanged(isPlaying: Boolean) = holdLocks(isPlaying)
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (!remote) holdLocks(isPlaying)
+            }
+
+            /** Playback moved to another device or back here. */
+            override fun onDeviceInfoChanged(deviceInfo: DeviceInfo) {
+                if (remote) {
+                    resumeOnFocusGain = false
+                    abandonFocus()
+                    holdLocks(false)
+                } else {
+                    if (player.playWhenReady) requestFocus()
+                    holdLocks(player.isPlaying)
+                }
+            }
         })
+        followRemote(app)
 
         ContextCompat.registerReceiver(
             this,
@@ -124,6 +148,40 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = session
+
+    /**
+     * With no screen open nothing polls the other device, so follow it from
+     * here for the session to mirror it. The state comes from the Connect
+     * cluster the session keeps (no network), so polling it is cheap. Once
+     * that device has been paused a while, or stopped, end the service:
+     * Android would not let it come back to the foreground from the
+     * background anyway.
+     */
+    private fun followRemote(app: NexfyApp) = lifecycleScope.launch {
+        var pausedSince = 0L
+        var followed = false
+        while (true) {
+            val s = app.bridge.state.value
+            val now = SystemClock.elapsedRealtime()
+            if (s.remote == null || s.playing) pausedSince = 0L else if (pausedSince == 0L) pausedSince = now
+            if (!app.visible.value && !app.bridge.local.value.playing) {
+                val lingered = pausedSince != 0L && now - pausedSince > REMOTE_PAUSED_LINGER_MS
+                when {
+                    lingered || (followed && s.remote == null && player.mediaItemCount == 0) -> {
+                        // A controller still bound keeps the service up: start over then.
+                        pausedSince = 0L
+                        followed = false
+                        stopSelf()
+                    }
+                    s.remote != null -> {
+                        followed = true
+                        app.refreshRemote()
+                    }
+                }
+            }
+            delay(if (s.remote != null && s.playing) 2_000 else 10_000)
+        }
+    }
 
     /** Swiping the app away while paused ends the service; while playing it keeps going. */
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -186,6 +244,9 @@ class PlaybackService : MediaSessionService() {
         @Volatile
         var running = false
             private set
+
+        /** As long as Media3 keeps a paused session in the foreground. */
+        private const val REMOTE_PAUSED_LINGER_MS = 10 * 60_000L
     }
 
     private fun holdLocks(hold: Boolean) {
