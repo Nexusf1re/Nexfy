@@ -1008,7 +1008,7 @@ impl SpircTask {
             .notify_new_device_appeared(&self.session)
             .await
         {
-            Ok(res) => Cluster::parse_from_bytes(&res).ok(),
+            Ok(res) => Cluster::parse_from_bytes(&res).ok().inspect(crate::cluster_cache::store),
             Err(why) => {
                 error!("{why:?}");
                 None
@@ -1110,6 +1110,7 @@ impl SpircTask {
         );
 
         if let Some(cluster) = cluster_update.cluster.take() {
+            crate::cluster_cache::store(&cluster);
             let became_inactive = self.connect_state.is_active()
                 && cluster.active_device_id != self.session.device_id();
             if became_inactive {

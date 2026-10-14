@@ -949,6 +949,48 @@ impl SpClient {
         self.request(&Method::GET, &endpoint, None, None).await
     }
 
+    /// Sends a player command (pause, resume, skip_next, seek_to, play...)
+    /// to another Connect device, as Spotify's own clients do: no Web API
+    /// quota involved. `command` is the JSON of the `command` field.
+    pub async fn connect_command(
+        &self,
+        from_device_id: &str,
+        to_device_id: &str,
+        command: &serde_json::Value,
+    ) -> SpClientResult {
+        let body = serde_json::to_string(&serde_json::json!({ "command": command }))?;
+        let endpoint =
+            format!("/connect-state/v1/player/command/from/{from_device_id}/to/{to_device_id}");
+        self.request_with_options(
+            &Method::POST,
+            &endpoint,
+            None,
+            Some(body.as_bytes()),
+            &NO_METRICS_AND_SALT,
+        )
+        .await
+    }
+
+    /// Sets another Connect device's volume, 0 to 65535.
+    pub async fn connect_volume(
+        &self,
+        from_device_id: &str,
+        to_device_id: &str,
+        volume: u16,
+    ) -> SpClientResult {
+        let body = serde_json::to_string(&serde_json::json!({ "volume": volume }))?;
+        let endpoint =
+            format!("/connect-state/v1/connect/volume/from/{from_device_id}/to/{to_device_id}");
+        self.request_with_options(
+            &Method::PUT,
+            &endpoint,
+            None,
+            Some(body.as_bytes()),
+            &NO_METRICS_AND_SALT,
+        )
+        .await
+    }
+
     /// Triggers the transfers of the playback from one device to another
     ///
     /// Using the same `device_id` for `from_device_id` and `to_device_id`, initiates the transfer

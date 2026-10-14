@@ -857,30 +857,51 @@ impl NexfyCore {
     }
     // ------------------------------------------------- other devices --
 
-    /// The account's Spotify Connect devices, this phone included.
+    /// The account's devices: from the Connect cluster the session keeps,
+    /// the Web API only before the first cluster arrives.
     pub async fn devices(&self) -> Result<Vec<Device>, CoreError> {
         let session = self.inner.live_session().await?;
+        if let Some(devices) = remote::session_devices(&session) {
+            return Ok(devices);
+        }
         remote::devices(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
     }
 
-    /// What is playing on any device; None when nothing is.
+    /// What is playing on any device; None when nothing is. Read from the
+    /// cluster, so polling it costs no Web API quota.
     pub async fn remote_state(&self) -> Result<Option<RemoteState>, CoreError> {
         let session = self.inner.live_session().await?;
+        if let Some(state) = remote::session_state(&session).await {
+            return Ok(state);
+        }
         remote::state(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
     }
 
     /// Move playback to another device (or back to this phone).
     pub async fn transfer(&self, device_id: String, play: bool) -> Result<(), CoreError> {
+        let session = self.inner.live_session().await?;
+        if let Some(Ok(())) = remote::session_transfer(&session, &device_id).await {
+            return Ok(());
+        }
         remote::transfer(&self.inner.web.player_tokens().await, &device_id, play).await.map_err(web_error)
     }
 
     /// What plays next on the device playing elsewhere.
     pub async fn remote_queue(&self) -> Result<Vec<Track>, CoreError> {
+        let session = self.inner.live_session().await?;
+        if let Some(uris) = remote::session_queue_uris() {
+            return Ok(session_reads::tracks(&session, &uris).await);
+        }
         remote::queue(&self.inner.web.player_tokens().await).await.map_err(web_error)
     }
 
-    /// Control the device that is playing.
+    /// Control the device that is playing: through spclient like Spotify's
+    /// apps, the Web API when that is not possible.
     pub async fn remote_command(&self, command: RemoteCommand) -> Result<(), CoreError> {
+        let session = self.inner.live_session().await?;
+        if let Some(Ok(())) = remote::session_command(&session, &command).await {
+            return Ok(());
+        }
         remote::command(&self.inner.web.player_tokens().await, command).await.map_err(web_error)
     }
 }

@@ -8,6 +8,7 @@ use librespot_core as core;
 use librespot_playback as playback;
 use librespot_protocol as protocol;
 
+pub mod cluster_cache;
 mod context_resolver;
 mod model;
 mod shuffle_vec;

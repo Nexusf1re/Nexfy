@@ -261,3 +261,215 @@ pub async fn queue(tokens: &[String]) -> Result<Vec<Track>> {
     let queue: Queue = serde_json::from_value(json)?;
     Ok(queue.queue.into_iter().filter_map(webapi::parse_track).collect())
 }
+
+// ------------------------------------------------- over the session --
+//
+// The dealer keeps this phone up to date with what every device of the
+// account plays (the Connect cluster), and Spotify's own clients command
+// other devices through spclient. Neither spends the Web API's daily
+// quota, so these come first; the Web API above is the fallback.
+
+/// "SMARTPHONE", "CAST_AUDIO"... as the Web API names kinds ("castaudio").
+fn kind_name(kind: librespot_protocol::devices::DeviceType) -> String {
+    format!("{kind:?}").replace('_', "").to_lowercase()
+}
+
+fn cluster_devices(own: &str, cluster: &librespot_protocol::connect::Cluster) -> Vec<Device> {
+    let mut devices: Vec<Device> = cluster
+        .device
+        .iter()
+        .filter(|(_, info)| !info.is_offline)
+        .map(|(id, info)| Device {
+            id: id.clone(),
+            name: info.name.clone(),
+            kind: kind_name(info.device_type.enum_value_or_default()),
+            active: *id == cluster.active_device_id,
+            is_self: id == own,
+            volume: info
+                .capabilities
+                .as_ref()
+                .filter(|caps| !caps.disable_volume)
+                .map(|_| (info.volume as u64 * 100 / 65_535) as u32),
+            restricted: !info.can_play,
+        })
+        .collect();
+    devices.sort_by(|a, b| b.is_self.cmp(&a.is_self).then(a.name.cmp(&b.name)));
+    devices
+}
+
+/// The account's devices from the cluster, None before the dealer sent one.
+pub fn session_devices(session: &Session) -> Option<Vec<Device>> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    Some(cluster_devices(&session.device_id(), &cluster))
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default()
+}
+
+/// Song metadata for the cluster's track, kept so a poll costs nothing.
+static TRACKS: std::sync::Mutex<Option<(String, Track)>> = std::sync::Mutex::new(None);
+
+async fn track_of(session: &Session, uri: &str) -> Option<Track> {
+    if let Some((known, track)) = TRACKS.lock().unwrap().as_ref() {
+        if known == uri {
+            return Some(track.clone());
+        }
+    }
+    let track = crate::session_reads::tracks(session, &[uri.to_owned()]).await.into_iter().next()?;
+    *TRACKS.lock().unwrap() = Some((uri.to_owned(), track.clone()));
+    Some(track)
+}
+
+/// What another device plays, from the cluster: Some(None) when nothing
+/// plays anywhere, None before the dealer sent a cluster.
+pub async fn session_state(session: &Session) -> Option<Option<RemoteState>> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    let own = session.device_id().to_owned();
+    if cluster.active_device_id.is_empty() {
+        return Some(None);
+    }
+    let device = cluster_devices(&own, &cluster).into_iter().find(|d| d.active)?;
+    let player = cluster.player_state.as_ref()?;
+    let playing = player.is_playing && !player.is_paused;
+    let mut progress = player.position_as_of_timestamp;
+    if playing && player.timestamp > 0 {
+        let speed = if player.playback_speed > 0.0 { player.playback_speed.min(4.0) } else { 1.0 };
+        progress += ((now_ms() - player.timestamp).max(0) as f64 * speed) as i64;
+    }
+    if player.duration > 0 {
+        progress = progress.min(player.duration);
+    }
+    let uri = player.track.as_ref().map(|t| t.uri.clone()).filter(|uri| !uri.is_empty());
+    let track = match &uri {
+        Some(uri) => track_of(session, uri).await,
+        None => None,
+    };
+    let options = player.options.as_ref();
+    Some(Some(RemoteState {
+        device,
+        playing,
+        progress_ms: progress.max(0) as u32,
+        track,
+        shuffle: options.is_some_and(|o| o.shuffling_context),
+        repeat: match options {
+            Some(o) if o.repeating_track => RepeatMode::One,
+            Some(o) if o.repeating_context => RepeatMode::All,
+            _ => RepeatMode::Off,
+        },
+        context_uri: Some(player.context_uri.clone()).filter(|uri| !uri.is_empty()),
+    }))
+}
+
+/// What plays next on the active device, as the cluster lists it.
+pub fn session_queue_uris() -> Option<Vec<String>> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    let player = cluster.player_state.as_ref()?;
+    Some(
+        player
+            .next_tracks
+            .iter()
+            .map(|t| t.uri.clone())
+            .filter(|uri| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:"))
+            .take(50)
+            .collect(),
+    )
+}
+
+/// A fresh id per command, as Spotify's clients send.
+fn command_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut a = std::collections::hash_map::RandomState::new().build_hasher();
+    a.write_i64(now_ms());
+    let b = std::collections::hash_map::RandomState::new().build_hasher();
+    format!("{:016x}{:016x}", a.finish(), b.finish())
+}
+
+/// Sends `cmd` to the device playing now. None when there is no cluster or
+/// no active device (the caller then tries the Web API).
+pub async fn session_command(session: &Session, cmd: &RemoteCommand) -> Option<Result<()>> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    let target = cluster.active_device_id.clone();
+    if target.is_empty() {
+        return None;
+    }
+    let own = session.device_id().to_owned();
+    let spclient = session.spclient();
+    let logging = serde_json::json!({ "command_id": command_id() });
+    let command = match cmd {
+        RemoteCommand::Volume { percent } => {
+            let volume = ((*percent).min(100) as u64 * 65_535 / 100) as u16;
+            return Some(spclient.connect_volume(&own, &target, volume).await.map(|_| ()).map_err(|e| {
+                log::warn!("connect volume to {target}: {e}");
+                anyhow!("o outro dispositivo não aceitou o volume")
+            }));
+        }
+        RemoteCommand::Play => serde_json::json!({ "endpoint": "resume", "logging_params": logging }),
+        RemoteCommand::Pause => serde_json::json!({ "endpoint": "pause", "logging_params": logging }),
+        RemoteCommand::Next => serde_json::json!({ "endpoint": "skip_next", "logging_params": logging }),
+        RemoteCommand::Previous => serde_json::json!({ "endpoint": "skip_prev", "logging_params": logging }),
+        RemoteCommand::Seek { position_ms } => {
+            serde_json::json!({ "endpoint": "seek_to", "value": position_ms, "logging_params": logging })
+        }
+        RemoteCommand::Shuffle { on } => {
+            serde_json::json!({ "endpoint": "set_shuffling_context", "value": on, "logging_params": logging })
+        }
+        RemoteCommand::Repeat { mode } => serde_json::json!({
+            "endpoint": "set_options",
+            "repeating_context": !matches!(mode, RepeatMode::Off),
+            "repeating_track": matches!(mode, RepeatMode::One),
+            "logging_params": logging,
+        }),
+        RemoteCommand::Queue { uri } => serde_json::json!({
+            "endpoint": "add_to_queue",
+            "track": { "uri": uri, "metadata": { "is_queued": "true" }, "provider": "queue" },
+            "logging_params": logging,
+        }),
+        RemoteCommand::PlayContext { context_uri, track_uri } => {
+            let mut options = serde_json::json!({ "license": "on-demand", "player_options_override": {} });
+            if let Some(uri) = track_uri {
+                options["skip_to"] = serde_json::json!({ "track_uri": uri });
+            }
+            serde_json::json!({
+                "endpoint": "play",
+                "context": { "uri": context_uri, "url": format!("context://{context_uri}"), "metadata": {} },
+                "options": options,
+                "logging_params": logging,
+            })
+        }
+        RemoteCommand::PlayTracks { uris, index } => {
+            let index = (*index as usize).min(uris.len().saturating_sub(1));
+            let start = index.saturating_sub(MAX_URIS / 2).min(uris.len().saturating_sub(MAX_URIS));
+            let tracks: Vec<serde_json::Value> =
+                uris.iter().skip(start).take(MAX_URIS).map(|uri| serde_json::json!({ "uri": uri, "uid": "" })).collect();
+            let first = uris.get(index).cloned().unwrap_or_default();
+            serde_json::json!({
+                "endpoint": "play",
+                "context": { "uri": first, "url": "", "metadata": {}, "pages": [{ "tracks": tracks }] },
+                "options": {
+                    "license": "on-demand",
+                    "skip_to": { "track_index": index - start },
+                    "player_options_override": {},
+                },
+                "logging_params": logging,
+            })
+        }
+    };
+    Some(spclient.connect_command(&own, &target, &command).await.map(|_| ()).map_err(|e| {
+        log::warn!("connect command to {target}: {e}");
+        anyhow!("o outro dispositivo não respondeu ao comando")
+    }))
+}
+
+/// Moves playback to `device_id` through spclient, like Spotify's apps.
+pub async fn session_transfer(session: &Session, device_id: &str) -> Option<Result<()>> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    let from = if cluster.active_device_id.is_empty() { device_id.to_owned() } else { cluster.active_device_id.clone() };
+    Some(session.spclient().transfer(&from, device_id, None).await.map(|_| ()).map_err(|e| {
+        log::warn!("connect transfer to {device_id}: {e}");
+        anyhow!("não deu para passar a música para esse dispositivo")
+    }))
+}
