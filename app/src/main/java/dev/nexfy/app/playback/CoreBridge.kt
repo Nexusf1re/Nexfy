@@ -83,9 +83,12 @@ class CoreBridge(core: NexfyCore) : CoreListener {
 
     /** What the account is playing, from a poll: another device, this phone or nothing. */
     @Synchronized
-    fun setRemote(r: RemoteState?) {
+    fun setRemote(report: RemoteState?) {
         val now = SystemClock.elapsedRealtime()
         if (now < holdUntil) return
+        // This phone playing means it is the active device, whatever a late
+        // report about another device says.
+        val r = report.takeUnless { _local.value.playing }
         val old = remote
         if (r != null && !r.device.isSelf && old != null) {
             // A poll that only confirms the extrapolated position changes

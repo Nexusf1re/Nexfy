@@ -2021,10 +2021,17 @@ impl SpircTask {
 
         self.connect_state.set_now(self.now_ms() as u64);
 
+        // The reply is the cluster as the server now sees it: when this device
+        // takes over, no cluster update says so, and the cached one would
+        // still name the device that played before.
         self.connect_state
             .send_state(&self.session)
             .await
-            .map(|_| ())
+            .map(|bytes| {
+                if let Ok(cluster) = <Cluster as protobuf::Message>::parse_from_bytes(&bytes) {
+                    crate::cluster_cache::store(&cluster);
+                }
+            })
     }
 
     fn set_volume(&mut self, volume: u16) {
