@@ -64,6 +64,12 @@ val generateUniffiBindings by tasks.registering(Exec::class) {
 
 tasks.named("preBuild") { dependsOn(generateUniffiBindings) }
 
+// Release signing: a keystore kept outside the repo, given as Gradle properties
+// (~/.gradle/gradle.properties) or environment variables (CI). Without one,
+// release builds are signed with the debug key.
+fun secret(name: String): String? = (findProperty(name) as String?) ?: System.getenv(name)
+val releaseKeystore: String? = secret("NEXFY_KEYSTORE")
+
 android {
     namespace = "dev.nexfy.app"
     compileSdk {
@@ -77,8 +83,9 @@ android {
         applicationId = "dev.nexfy.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // Releases pass these from the tag (v0.2.0) and the CI run number.
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("versionName") as String?) ?: "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -86,12 +93,22 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseKeystore != null) {
+                storeFile = file(releaseKeystore)
+                storePassword = secret("NEXFY_KEYSTORE_PASSWORD")
+                keyAlias = secret("NEXFY_KEY_ALIAS")
+                keyPassword = secret("NEXFY_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
-            // Sideloaded only: signed with the debug key, optimised and shrunk by R8.
+            // Optimised and shrunk by R8; signed with the release key when one is configured.
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
