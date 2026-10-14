@@ -543,13 +543,14 @@ fun collapseOf(list: LazyListState): State<Float> {
 fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier = Modifier) {
     val bg = MaterialTheme.colorScheme.background
     Box(modifier) {
-        LivingArtwork(art, Modifier.fillMaxSize(), dim = .25f)
+        // Hidden once the list covers it: no layer is drawn at alpha 0.
+        LivingArtwork(art, Modifier.fillMaxSize().graphicsLayer { alpha = (1f - collapse.value).coerceIn(0f, 1f) }, dim = .25f)
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(0f to Color.Transparent, .30f to Color.Transparent, .55f to bg.copy(alpha = .85f), .75f to bg),
             ),
         )
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = (collapse.value * .9f).coerceIn(0f, 1f) }.background(bg))
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = collapse.value.coerceIn(0f, 1f) }.background(bg))
     }
 }
 

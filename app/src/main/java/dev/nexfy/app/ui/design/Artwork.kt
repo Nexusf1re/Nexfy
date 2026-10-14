@@ -1,5 +1,8 @@
 package dev.nexfy.app.ui.design
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.CompositingStrategy
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.PowerManager
@@ -156,7 +159,17 @@ fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f
     } else {
         null
     }
-    Canvas(modifier.fillMaxSize()) {
+    // Drawn into a quarter-size layer and scaled up: the soft gradients look
+    // the same and each frame fills a sixteenth of the pixels.
+    Box(modifier.fillMaxSize()) {
+    Canvas(
+        Modifier.fillMaxSize(.25f).graphicsLayer {
+            compositingStrategy = CompositingStrategy.Offscreen
+            transformOrigin = TransformOrigin(0f, 0f)
+            scaleX = 4f
+            scaleY = 4f
+        },
+    ) {
         val phase = t?.value ?: .3f
         drawRect(animated[3].value)
         val w = size.width
@@ -173,6 +186,7 @@ fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f
             )
         }
         drawRect(Color.Black.copy(alpha = dim.coerceIn(0f, 1f)))
+    }
     }
 }
 

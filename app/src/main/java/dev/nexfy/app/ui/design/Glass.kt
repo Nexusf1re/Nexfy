@@ -1,5 +1,6 @@
 package dev.nexfy.app.ui.design
 
+import dev.chrisbanes.haze.HazeInputScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -49,10 +50,14 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
                 backgroundColor = if (dark) Color.Black else Color.White,
                 tints = listOf(HazeTint(tint)),
                 blurRadius = 26.dp,
-                noiseFactor = .09f,
+                // No grain: a full extra pass every frame for a barely visible texture.
+                noiseFactor = 0f,
                 fallbackTint = HazeTint((if (dark) Color(0xFF1C1C20) else Color.White).copy(alpha = .9f)),
             ),
-        )
+        ) {
+            // Blur at a third of the resolution: the same frosted look for a ninth of the GPU work.
+            inputScale = HazeInputScale.Fixed(.35f)
+        }
     } else {
         base.drawWithContent {
             drawRect(if (dark) Color(0xFF1C1C20).copy(alpha = .9f) else Color.White.copy(alpha = .9f))

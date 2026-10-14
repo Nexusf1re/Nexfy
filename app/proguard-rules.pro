@@ -19,3 +19,14 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# The Rust core is reached through JNA: UniFFI's generated classes, their
+# callback interfaces and JNA itself are looked up by name at runtime.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class uniffi.** { *; }
+-keep class dev.nexfy.core.** { *; }
+-dontwarn java.awt.**
+
+# WorkManager (pulled in by Glance) builds its Room database from the
+# generated *_Impl class found by name; R8 strips it otherwise.
+-keep class * extends androidx.room.RoomDatabase { <init>(); }

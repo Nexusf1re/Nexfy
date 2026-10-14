@@ -88,7 +88,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Sideloaded only: signed with the debug key, optimised and shrunk by R8.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
