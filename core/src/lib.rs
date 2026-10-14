@@ -111,6 +111,8 @@ pub enum RepeatMode {
 pub struct QueueEntry {
     pub uri: String,
     pub queued: bool,
+    /// Who queued it, when Spotify says (a Jam guest).
+    pub added_by: Option<String>,
 }
 
 /// Spotify's queue for this device, as Spirc last reported it.
@@ -1623,6 +1625,7 @@ fn entry(track: QueueTrack) -> QueueEntry {
         // Spotify's own queue ("Na fila") reports this provider.
         queued: track.provider == "queue",
         uri: track.uri,
+        added_by: track.added_by,
     }
 }
 

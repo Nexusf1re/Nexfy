@@ -161,6 +161,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.drawText
 import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.QueueEntry
+import uniffi.nexfy_core.UserFace
+import androidx.compose.runtime.produceState
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
 import uniffi.nexfy_core.TrackInfo
@@ -887,6 +889,26 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
     val queued = next.withIndex().filter { it.value.queued }
     val upcoming = next.withIndex().filter { !it.value.queued }
 
+    // Who added each song: a Jam guest as Spotify reports, else who added it
+    // to the playlist playing (the playlist page knows). Faces show only when
+    // more than one person added, or someone other than this account.
+    val core = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).core
+    val playlistId = s.queue.contextUri?.takeIf { it.startsWith("spotify:playlist:") }?.substringAfterLast(':')
+    val fromPlaylist by produceState<Map<String, String>>(emptyMap(), playlistId) {
+        value = playlistId?.let { id ->
+            runCatching { core.playlist(id, false) }.getOrNull()?.tracks
+                ?.mapNotNull { t -> t.addedBy?.let { t.uri to it } }?.toMap()
+        }.orEmpty()
+    }
+    val adders = remember(next, fromPlaylist) { next.associate { it.uri to (it.addedBy ?: fromPlaylist[it.uri]) } }
+    val me = remember { core.username() }
+    val distinct = remember(adders) { adders.values.filterNotNull().toSet() }
+    val showFaces = distinct.size > 1 || distinct.any { it != me }
+    val faces by produceState<Map<String, UserFace>>(emptyMap(), distinct, showFaces) {
+        if (showFaces) value = runCatching { core.users(distinct.toList()) }.getOrDefault(emptyList()).associateBy { it.id }
+    }
+    fun faceOf(entry: QueueEntry) = if (showFaces) adders[entry.uri]?.let(faces::get) else null
+
     ModalBottomSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
             s.track?.let { track ->
@@ -897,14 +919,14 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
             }
             if (queued.isNotEmpty()) item(key = "h-queued") { QueueHeading("Na fila") }
             items(queued, key = { "q${it.index}:${it.value.uri}" }) { (i, entry) ->
-                QueueEntryRow(info[entry.uri], i) {
+                QueueEntryRow(info[entry.uri], i, faceOf(entry)) {
                     controls.skipTo(entry, i)
                     onDismiss()
                 }
             }
             if (upcoming.isNotEmpty()) item(key = "h-next") { QueueHeading(if (queued.isEmpty()) "A seguir" else "Depois, da lista") }
             items(upcoming, key = { "n${it.index}:${it.value.uri}" }) { (i, entry) ->
-                QueueEntryRow(info[entry.uri], i) {
+                QueueEntryRow(info[entry.uri], i, faceOf(entry)) {
                     controls.skipTo(entry, i)
                     onDismiss()
                 }
@@ -912,7 +934,7 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
             if (next.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        "Nada na fila. Ao terminar, o Spotify continua com músicas parecidas.",
+                        "Nada na fila depois desta música.",
                         color = c.onSurfaceVariant,
                         fontSize = 14.sp,
                         modifier = Modifier.padding(vertical = 16.dp),
@@ -958,7 +980,7 @@ private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDi
                 list == null -> items(5, key = { "sk$it" }) { QueueEntryRow(null, it) {} }
                 list.isEmpty() -> item(key = "empty") {
                     Text(
-                        "Nada na fila. Ao terminar, o Spotify continua com músicas parecidas.",
+                        "Nada na fila depois desta música.",
                         color = c.onSurfaceVariant,
                         fontSize = 14.sp,
                         modifier = Modifier.padding(vertical = 16.dp),
@@ -982,7 +1004,7 @@ private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDi
 
 /** A queue row, or its skeleton until the track's details arrive; one fades into the other. */
 @Composable
-private fun QueueEntryRow(track: Track?, seed: Int, onClick: () -> Unit) {
+private fun QueueEntryRow(track: Track?, seed: Int, face: UserFace? = null, onClick: () -> Unit) {
     Crossfade(track, animationSpec = tween(Motion.Short), label = "queue-row") { t ->
         if (t == null) {
             Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -994,7 +1016,7 @@ private fun QueueEntryRow(track: Track?, seed: Int, onClick: () -> Unit) {
                 }
             }
         } else {
-            QueueRow(t.imageUrl, t.title, t.artists, onClick = onClick)
+            QueueRow(t.imageUrl, t.title, t.artists, face = face, onClick = onClick)
         }
     }
 }
@@ -1004,7 +1026,15 @@ private fun QueueHeading(text: String) =
     Text(text, Modifier.padding(top = 16.dp, bottom = 8.dp), style = MaterialTheme.typography.titleMedium)
 
 @Composable
-private fun QueueRow(imageUrl: String?, title: String, subtitle: String, highlight: Boolean = false, onClick: () -> Unit) {
+private fun QueueRow(
+    imageUrl: String?,
+    title: String,
+    subtitle: String,
+    highlight: Boolean = false,
+    /** Who added it, when that is worth showing (a shared playlist, a Jam). */
+    face: UserFace? = null,
+    onClick: () -> Unit,
+) {
     val c = MaterialTheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
@@ -1018,6 +1048,10 @@ private fun QueueRow(imageUrl: String?, title: String, subtitle: String, highlig
                 color = if (highlight) accentColor() else c.onSurface,
             )
             Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, color = c.onSurfaceVariant)
+        }
+        if (face != null) {
+            Spacer(Modifier.width(10.dp))
+            dev.nexfy.app.ui.design.UserAvatar(face, Modifier.padding(end = 4.dp).size(26.dp))
         }
     }
 }

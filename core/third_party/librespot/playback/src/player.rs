@@ -151,6 +151,8 @@ enum PlayerCommand {
 pub struct QueueTrack {
     pub uri: String,
     pub provider: String,
+    /// Who queued it, when Spotify says (a Jam guest).
+    pub added_by: Option<String>,
 }
 
 #[derive(Debug, Clone)]

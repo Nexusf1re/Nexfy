@@ -754,6 +754,7 @@ impl SpircTask {
         let current_track = state_player.track.as_ref().map(|t| QueueTrack {
             uri: t.uri.clone(),
             provider: t.provider.clone(),
+            added_by: queued_by(t),
         });
 
         let next_tracks: Vec<_> = state_player
@@ -762,6 +763,7 @@ impl SpircTask {
             .map(|t| QueueTrack {
                 uri: t.uri.clone(),
                 provider: t.provider.clone(),
+                added_by: queued_by(t),
             })
             .collect();
 
@@ -771,6 +773,7 @@ impl SpircTask {
             .map(|t| QueueTrack {
                 uri: t.uri.clone(),
                 provider: t.provider.clone(),
+                added_by: queued_by(t),
             })
             .collect();
 
@@ -2088,4 +2091,13 @@ mod recovery_tests {
         assert!(state.repeat_context());
         assert_eq!(resolver.pending(), [pending]);
     }
+}
+
+/// Who queued a track (a Jam guest), when Spotify says so in its metadata.
+fn queued_by(track: &librespot_protocol::player::ProvidedTrack) -> Option<String> {
+    ["added_by_username", "queued_by", "added_by", "added_by_user_id"]
+        .iter()
+        .find_map(|key| track.metadata.get(*key))
+        .filter(|user| !user.is_empty())
+        .cloned()
 }
