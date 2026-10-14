@@ -54,6 +54,7 @@ fn to_track(track: SessionTrack, large: bool) -> Track {
         explicit: track.is_explicit,
         playable: true,
         added_at_ms: None,
+        added_by: None,
     }
 }
 
@@ -71,23 +72,24 @@ pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
 pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData> {
     let uri = SpotifyUri::from_uri(&format!("spotify:playlist:{id}")).map_err(|e| anyhow!("{e}"))?;
     let playlist = SessionPlaylist::get(session, &uri).await?;
-    // Each track with when it was added to the playlist.
-    let items: Vec<(SpotifyUri, i64)> = playlist
+    // Each track with when and by whom it was added to the playlist.
+    let items: Vec<(SpotifyUri, i64, String)> = playlist
         .contents
         .items
         .iter()
         .filter(|item| matches!(item.id, SpotifyUri::Track { .. }))
         .take(MAX_TRACKS)
-        .map(|item| (item.id.clone(), item.attributes.timestamp.as_timestamp_ms()))
+        .map(|item| (item.id.clone(), item.attributes.timestamp.as_timestamp_ms(), item.attributes.added_by.clone()))
         .collect();
 
     // Keep playlist order; a track that fails to load is left out.
     let tracks = stream::iter(items)
-        .map(|(uri, added)| async move { (SessionTrack::get(session, &uri).await, added) })
+        .map(|(uri, added, by)| async move { (SessionTrack::get(session, &uri).await, added, by) })
         .buffered(CONCURRENCY)
-        .filter_map(|(result, added)| async move {
+        .filter_map(|(result, added, by)| async move {
             result.ok().map(|track| Track {
                 added_at_ms: Some(added).filter(|ms| *ms > 0),
+                added_by: Some(by).filter(|by| !by.is_empty()),
                 ..to_track(track, false)
             })
         })
@@ -146,5 +148,26 @@ pub async fn artist(session: &Session, id: &str) -> Result<ArtistDetail> {
         },
         top_tracks,
         albums,
+    })
+}
+
+/// A playlist contributor as track rows show them.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, uniffi::Record)]
+pub struct UserFace {
+    pub id: String,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+/// Name and photo of a Spotify user, from the profile service the
+/// official clients use (the Web API refuses development-mode apps).
+pub async fn user(session: &Session, id: &str) -> Result<UserFace> {
+    let bytes = session.spclient().get_user_profile(id, Some(0), Some(0)).await?;
+    let profile: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let text = |key: &str| profile.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned);
+    Ok(UserFace {
+        id: id.to_owned(),
+        name: text("name").unwrap_or_else(|| id.to_owned()),
+        image_url: text("image_url"),
     })
 }

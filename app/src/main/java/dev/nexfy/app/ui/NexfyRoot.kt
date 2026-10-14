@@ -94,6 +94,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import uniffi.nexfy_core.Lyrics
+import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.QueueEntry
 import uniffi.nexfy_core.RemoteCommand
@@ -295,6 +296,12 @@ class AppActions(
         core.lyrics(track.uri, track.title, track.artists, track.album, track.durationMs)
 
     override suspend fun tracksInfo(uris: List<String>): List<Track> = core.tracksInfo(uris)
+
+    override suspend fun albumOf(trackUri: String): AlbumDetail? =
+        core.tracksInfo(listOf(trackUri)).firstOrNull()?.albumId?.let { core.album(it, false) }
+
+    override fun playAlbum(album: AlbumDetail, index: Int) =
+        play(album.tracks, index, source = "al:${album.album.id}", contextUri = album.album.uri)
 }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
@@ -333,7 +340,7 @@ fun NexfyRoot(
     BackHandler(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
 
     val bottomSpace = if (snapshot.track != null) 176.dp else 104.dp
-    CompositionLocalProvider(LocalHaze provides haze, LocalBottomSpace provides bottomSpace) {
+    CompositionLocalProvider(LocalHaze provides haze, LocalBottomSpace provides bottomSpace, dev.nexfy.app.ui.design.LocalPlaying provides snapshot.playing) {
         Box(Modifier.fillMaxSize().background(c.background)) {
             // Everything behind the dock and the mini player is what their glass blurs.
             Box(Modifier.fillMaxSize().glassSource(haze)) {

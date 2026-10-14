@@ -67,6 +67,9 @@ pub struct Track {
     pub playable: bool,
     /// When it was added to the playlist or liked songs (Unix ms), if known.
     pub added_at_ms: Option<i64>,
+    /// Spotify user id of who added it to the playlist, if known.
+    #[serde(default)]
+    pub added_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
@@ -208,6 +211,12 @@ struct SavedTrack {
     #[serde(alias = "track")]
     item: Option<RawTrack>,
     added_at: Option<String>,
+    added_by: Option<RawUserRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawUserRef {
+    id: Option<String>,
 }
 
 impl SavedTrack {
@@ -219,6 +228,7 @@ impl SavedTrack {
             .map(|date| date.as_timestamp_ms());
         let mut track = self.item?.into_track(None)?;
         track.added_at_ms = added_at_ms;
+        track.added_by = self.added_by.and_then(|user| user.id).filter(|id| !id.is_empty());
         Some(track)
     }
 }
@@ -350,6 +360,7 @@ impl RawTrack {
             explicit: self.explicit,
             playable: self.is_playable.unwrap_or(true),
             added_at_ms: None,
+            added_by: None,
         })
     }
 }

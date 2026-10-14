@@ -90,6 +90,9 @@ import coil3.compose.AsyncImage
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Track
+import uniffi.nexfy_core.UserFace
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 
 // ------------------------------------------------------------- haptics --
 
@@ -388,6 +391,8 @@ fun TrackRow(
     playing: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onSwipe: (() -> Unit)? = null,
+    /** Who added it, in playlists several people add to. */
+    addedBy: UserFace? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val press = remember { MutableInteractionSource() }
@@ -454,9 +459,21 @@ fun TrackRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (number != null) {
-            Text("$number", Modifier.width(36.dp), color = c.onSurfaceVariant, fontSize = 15.sp, textAlign = TextAlign.Center)
+            Box(Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+                if (playing) {
+                    PlayingBars(accent, Modifier.size(16.dp))
+                } else {
+                    Text("$number", color = c.onSurfaceVariant, fontSize = 15.sp, textAlign = TextAlign.Center)
+                }
+            }
         } else {
-            Cover(track.imageUrl, Modifier.size(56.dp), 12.dp)
+            Box(contentAlignment = Alignment.Center) {
+                Cover(track.imageUrl, Modifier.size(56.dp), 12.dp)
+                if (playing) {
+                    Box(Modifier.size(56.dp).clip(RoundedCornerShape(12.dp)).background(Color.Black.copy(.45f)))
+                    PlayingBars(Color.White, Modifier.size(18.dp))
+                }
+            }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
@@ -471,7 +488,27 @@ fun TrackRow(
             }
             Text(subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        if (addedBy != null) {
+            Spacer(Modifier.width(10.dp))
+            UserAvatar(addedBy, Modifier.padding(end = 6.dp).size(26.dp))
+        }
     }
+    }
+}
+
+/** A user's photo in a circle, or their initial when they have none. */
+@Composable
+fun UserAvatar(user: UserFace, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
+    Box(
+        modifier.clip(CircleShape).background(c.surfaceVariant).semantics { contentDescription = "Adicionada por ${user.name}" },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (user.imageUrl.isNullOrBlank()) {
+            Text(user.name.take(1).uppercase(), color = c.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        } else {
+            AsyncImage(user.imageUrl, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
     }
 }
 

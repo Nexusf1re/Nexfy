@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.material.icons.rounded.DownloadForOffline
 import androidx.compose.material.icons.rounded.OfflinePin
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.automirrored.rounded.Sort
@@ -88,6 +89,10 @@ import dev.nexfy.app.ui.design.collapseOf
 import dev.nexfy.app.ui.design.dragToDismiss
 import dev.nexfy.app.ui.design.rememberHaptics
 import uniffi.nexfy_core.Track
+import uniffi.nexfy_core.UserFace
+
+/** Contributors seen this run, so reopened playlists show them at once. */
+private val knownFaces = java.util.concurrent.ConcurrentHashMap<String, UserFace>()
 
 /**
  * Root tab header: a small wordmark and the settings button; a centred
@@ -189,6 +194,17 @@ fun CollectionScreen(
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
     var menuFor by remember { mutableStateOf<Track?>(null) }
     menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
+    // Who added each song, shown only where more than one person adds.
+    val contributors = remember(all, all.size) { all.mapNotNull { it.addedBy }.distinct() }
+    var faces by remember(contributors) { mutableStateOf(contributors.mapNotNull { knownFaces[it] }.associateBy { it.id }) }
+    LaunchedEffect(contributors) {
+        if (contributors.size > 1 && contributors.any { it !in faces }) {
+            val loaded = actions.core.users(contributors.take(MAX_FACES))
+            loaded.forEach { knownFaces[it.id] = it }
+            faces = loaded.associateBy { it.id }
+        }
+    }
+    val showFaces = contributors.size > 1
 
     Box(modifier) {
         CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
@@ -323,7 +339,7 @@ fun CollectionScreen(
                 }
                 itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
                     val track = entry.value
-                    Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
+                    Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = reorderSpring, fadeOutSpec = null)) {
                         Box(Modifier.padding(horizontal = 16.dp)) {
                             TrackRow(
                                 track,
@@ -333,6 +349,7 @@ fun CollectionScreen(
                                 playing = playingUris.first == track.uri || playingUris.second == track.uri,
                                 onLongClick = { menuFor = track },
                                 onSwipe = { actions.addToQueue(track) },
+                                addedBy = if (showFaces) track.addedBy?.let(faces::get) else null,
                             )
                         }
                         if (i < shown.lastIndex) {
@@ -346,6 +363,9 @@ fun CollectionScreen(
         DetailTopBar(title, collapse, back) { haptics.press(); actions.play(all, source = source, contextUri = contextUri) }
     }
 }
+
+/** Most contributors looked up for one playlist. */
+private const val MAX_FACES = 60
 
 enum class TrackSort(val label: String) {
     Original("Ordem original"),
@@ -470,3 +490,10 @@ private fun TrackToolsSkeleton() {
         Bone(Modifier.size(48.dp), CircleShape)
     }
 }
+
+/** Rows glide to their new place when the order or the filter changes. */
+private val reorderSpring = androidx.compose.animation.core.spring(
+    dampingRatio = .86f,
+    stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow,
+    visibilityThreshold = androidx.compose.ui.unit.IntOffset.VisibilityThreshold,
+)

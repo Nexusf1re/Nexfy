@@ -23,6 +23,9 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.spring
+import androidx.compose.material.icons.rounded.Close
+import dev.nexfy.app.ui.design.PlayingBars
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -55,6 +58,7 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.runtime.key
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -149,6 +153,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.Lyrics
+import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.QueueEntry
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
@@ -192,6 +197,12 @@ interface PlayerControls {
 
     /** Metadata for queue entries, in order. */
     suspend fun tracksInfo(uris: List<String>): List<Track>
+
+    /** The album [trackUri] is on, for the back of the cover. */
+    suspend fun albumOf(trackUri: String): AlbumDetail?
+
+    /** Play [album] from its track at [index]. */
+    fun playAlbum(album: AlbumDetail, index: Int)
 }
 
 private val settle = Motion.settle<Float>(247f)
@@ -240,6 +251,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     val library = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).library
     var showLyrics by rememberSaveable { mutableStateOf(library.lyricsOpen) }
     var lyricsFull by rememberSaveable { mutableStateOf(false) }
+    // Tapping the cover turns it over to the album it is from.
+    var flipped by rememberSaveable { mutableStateOf(false) }
     var playerOpen by remember { mutableStateOf(false) }
     dev.nexfy.app.ui.MetricsState("player", if (!playerOpen) null else if (lyricsFull) "lyrics-full" else if (showLyrics) "lyrics" else "open")
     val track = s.track ?: lastTrack[0] ?: return
@@ -263,7 +276,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
 
     val pf = { f.value.coerceIn(0f, 1f) }
     val expanded by remember { derivedStateOf { f.value > 0.5f } }
-    LaunchedEffect(expanded) { playerOpen = expanded }
+    LaunchedEffect(expanded) {
+        playerOpen = expanded
+        if (!expanded) flipped = false
+    }
     dev.nexfy.app.ui.MetricsState("sheet", if (f.isRunning) "moving" else null)
     val collapsed by remember { derivedStateOf { f.value < .05f } }
     val showMini by remember { derivedStateOf { f.value < .6f } }
@@ -379,6 +395,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val lyricsIn = animateFloatAsState(if (showLyrics && settled) 1f else 0f, Motion.settle(169f), label = "lyrics")
             // 0 to 1 into full-screen lyrics.
             val fullIn = animateFloatAsState(if (showLyrics && lyricsFull && settled) 1f else 0f, Motion.settle(169f), label = "full")
+            // 0 to 180 degrees as the cover turns over; past 90 the back shows.
+            val turned = flipped && settled && !showLyrics
+            val flip = animateFloatAsState(if (turned) 180f else 0f, spring(dampingRatio = .74f, stiffness = 150f), label = "flip")
+            val backSide by remember { derivedStateOf { flip.value > 90f } }
+            if (turned) BackHandler { flipped = false }
 
             fun GraphicsLayerScope.artMove(extra: Float) {
                 val p = pf()
@@ -396,19 +417,28 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 Modifier.offset(fullX, fullY).size(artFull)
                     .graphicsLayer {
                         val p = pf()
-                        val k = lerp(miniArt / artFullPx, 1f, p)
                         artMove(lerp(1f, breath.value, p) * (1f - kotlin.math.abs(throwX.value) / fullW * .15f))
                         rotationZ = throwX.value / fullW * 14f
                         alpha = 1f - fullIn.value
+                    }
+                    // Its own layer so the turn pivots on the centre, not the corner the move scales from.
+                    .graphicsLayer {
+                        val p = pf()
+                        val k = lerp(miniArt / artFullPx, 1f, p)
+                        rotationY = flip.value
+                        cameraDistance = 14f * density.density
                         // Corners and shadow compensate the scale: 12 dp mini, 28 dp full.
                         shape = RoundedCornerShape((lerp(12f, 28f, p) * density.density / k.coerceAtLeast(.05f)).coerceAtLeast(0f))
                         clip = true
                         shadowElevation = lerp(0f, 24f, p) * density.density
                     }
                     .then(
-                        if (settled && !showLyrics) {
+                        if (settled && !showLyrics && !flipped) {
                             Modifier.pointerInput(track.uri) {
-                                detectTapGestures(onDoubleTap = { o ->
+                                detectTapGestures(onTap = {
+                                    haptics.tick()
+                                    flipped = true
+                                }, onDoubleTap = { o ->
                                     val dir = if (o.x < size.width / 2) -1 else 1
                                     controls.seek((position + dir * 10_000).coerceIn(0, duration))
                                     tapHint = System.nanoTime() to dir
@@ -419,7 +449,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         },
                     )
                     .then(
-                        if (settled && !showLyrics) {
+                        if (settled && !showLyrics && !flipped) {
                             Modifier.draggable(
                                 rememberDraggableState { d -> scope.snapNow(throwX, throwX.value + d) },
                                 Orientation.Horizontal,
@@ -451,7 +481,13 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     .background(c.outline),
                 contentAlignment = Alignment.Center,
             ) {
-                if (!track.coverUrl.isNullOrBlank()) {
+                if (backSide) {
+                    // Counter-turned so the back reads the right way round.
+                    AlbumBack(track, controls, Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }) {
+                        haptics.tick()
+                        flipped = false
+                    }
+                } else if (!track.coverUrl.isNullOrBlank()) {
                     // Cross-fade covers: the old one stays until the new one is in.
                     AnimatedContent(
                         track.coverUrl,
@@ -638,6 +674,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
                                 showLyrics = !showLyrics
                                 library.lyricsOpen = showLyrics
+                                if (showLyrics) flipped = false
                                 if (!showLyrics) lyricsFull = false
                             }
                         }
@@ -1060,4 +1097,95 @@ private data class SheetShape(val inset: Float, val height: Float, val radius: F
                 CornerRadius(radius.coerceAtLeast(0f)),
             ),
         )
+}
+
+/**
+ * The back of the player's cover: the album the song is from, the song
+ * marked. Tapping a song plays the album from it; the header turns back.
+ */
+@Composable
+private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modifier, onClose: () -> Unit) {
+    var album by remember { mutableStateOf<AlbumDetail?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    val isCurrent = { t: Track -> t.uri == track.uri || t.title == track.title }
+    LaunchedEffect(track.uri) {
+        // Next song of the same album: keep the list, just move the mark.
+        if (album?.tracks?.any(isCurrent) == true) return@LaunchedEffect
+        failed = false
+        album = try {
+            controls.albumOf(track.uri)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        failed = album == null
+    }
+    val accent = accentColor()
+    Box(modifier.background(Color(0xFF0B0B0E))) {
+        AsyncImage(
+            track.coverUrl, null,
+            Modifier.fillMaxSize().graphicsLayer {
+                alpha = .6f
+                if (Build.VERSION.SDK_INT >= 31) renderEffect = BlurEffect(90f, 90f, TileMode.Clamp)
+            },
+            contentScale = ContentScale.Crop,
+        )
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(.52f)))
+        Column(Modifier.fillMaxSize().padding(14.dp)) {
+            val a = album
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClose).padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Cover(a?.album?.imageUrl ?: track.coverUrl, Modifier.size(46.dp), 8.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(a?.album?.name ?: track.album, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val details = listOfNotNull(a?.album?.artists ?: track.artists, a?.album?.year, a?.let { "${it.tracks.size} faixas" })
+                    Text(details.joinToString(" · "), color = Color.White.copy(.62f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Icon(Icons.Rounded.Close, "Virar a capa", tint = Color.White.copy(.7f), modifier = Modifier.padding(horizontal = 6.dp).size(20.dp))
+            }
+            Spacer(Modifier.height(8.dp))
+            when {
+                a != null -> key(a.album.id) {
+                    val here = a.tracks.indexOfFirst(isCurrent)
+                    val list = rememberLazyListState((here - 2).coerceAtLeast(0))
+                    LaunchedEffect(here) { if (here >= 0) list.animateScrollToItem((here - 2).coerceAtLeast(0)) }
+                    LazyColumn(Modifier.weight(1f), state = list) {
+                        itemsIndexed(a.tracks, key = { _, t -> t.uri }) { i, t ->
+                            val current = i == here
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                    .background(if (current) Color.White.copy(.1f) else Color.Transparent)
+                                    .clickable { controls.playAlbum(a, i) }
+                                    .padding(horizontal = 8.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(Modifier.width(24.dp), contentAlignment = Alignment.Center) {
+                                    if (current) {
+                                        PlayingBars(accent, Modifier.size(12.dp))
+                                    } else {
+                                        Text("${i + 1}", color = Color.White.copy(.5f), fontSize = 13.sp)
+                                    }
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    t.title, Modifier.weight(1f), color = if (current) accent else Color.White, fontSize = 14.sp,
+                                    fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(fmt(t.durationMs.toLong()), color = Color.White.copy(.5f), fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+                failed -> Text("Não deu para carregar o álbum.", Modifier.padding(8.dp), color = Color.White.copy(.6f), fontSize = 13.sp)
+                else -> Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    repeat(6) { i -> Bone(Modifier.fillMaxWidth(.5f + (i * 37 % 40) / 100f).height(12.dp), light = true) }
+                }
+            }
+        }
+    }
 }

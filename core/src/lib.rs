@@ -322,7 +322,7 @@ impl NexfyCore {
             Ok(tracks) => tracks,
             Err(error) => {
                 log::info!("playlist {id} via session: {error:#}");
-                let key = format!("session:playlist:{id}");
+                let key = format!("session:playlist2:{id}");
                 let ttl = std::time::Duration::from_secs(6 * 3600);
                 match web.load_local::<Vec<Track>>(&key, ttl).filter(|_| !refresh) {
                     Some(tracks) => tracks,
@@ -392,6 +392,46 @@ impl NexfyCore {
                 Ok(detail)
             }
         }
+    }
+
+    /// Names and photos of playlist contributors, cached a week; users
+    /// that fail to load are left out.
+    pub async fn users(&self, ids: Vec<String>) -> Vec<session_reads::UserFace> {
+        use futures_util::{StreamExt, stream};
+        let web = &self.inner.web;
+        let ttl = std::time::Duration::from_secs(7 * 86_400);
+        let mut faces = Vec::new();
+        let mut missing = Vec::new();
+        for id in ids {
+            match web.load_local::<session_reads::UserFace>(&format!("user:{id}"), ttl) {
+                Some(face) => faces.push(face),
+                None => missing.push(id),
+            }
+        }
+        if missing.is_empty() {
+            return faces;
+        }
+        let Ok(session) = self.inner.live_session().await else {
+            return faces;
+        };
+        let fetched: Vec<_> = stream::iter(missing)
+            .map(|id| {
+                let session = session.clone();
+                async move { session_reads::user(&session, &id).await }
+            })
+            .buffer_unordered(4)
+            .collect()
+            .await;
+        for result in fetched {
+            match result {
+                Ok(face) => {
+                    web.save_local(&format!("user:{}", face.id), &face);
+                    faces.push(face);
+                }
+                Err(error) => log::info!("user profile: {error:#}"),
+            }
+        }
+        faces
     }
 
     pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>, CoreError> {
