@@ -103,16 +103,19 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
         // Songs on the phone: on Wi-Fi, download the next songs of the queue
         // and every kept playlist and album into the audio cache.
         scope.launch {
-            combine(bridge.local.map { s -> s.queue.next.take(5).map { it.uri } }.distinctUntilChanged(), library.prefetchQueue, unmetered) { next, on, wifi ->
+            combine(bridge.local.map { s -> s.queue.next.take(3).map { it.uri } }.distinctUntilChanged(), library.prefetchQueue, unmetered) { next, on, wifi ->
                 if (on && wifi) next else emptyList()
             }.collectLatest { next ->
                 if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
             }
         }
         scope.launch {
-            combine(library.kept, unmetered) { kept, wifi -> if (wifi) kept else emptySet() }.collectLatest { kept ->
+            // Whole collections only while nothing plays here: downloading them
+            // alongside a song starved its stream (the player gave up mid song).
+            val playing = bridge.local.map { it.playing }.distinctUntilChanged()
+            combine(library.kept, unmetered, playing) { kept, wifi, busy -> if (wifi && !busy) kept else emptySet() }.collectLatest { kept ->
                 if (kept.isEmpty() || !awaitConnected()) return@collectLatest
-                delay(3_000)
+                delay(10_000)
                 for (key in kept) {
                     runCatching { core.cacheTracks(keptTracks(key)) }
                         .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
