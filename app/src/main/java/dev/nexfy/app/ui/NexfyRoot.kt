@@ -239,6 +239,10 @@ class AppActions(
 
     /** Add a song to Spotify's queue; it plays after the current one. */
     fun addToQueue(track: Track) {
+        // In a Jam the queue that counts is the Jam's, wherever it plays.
+        if (dev.nexfy.app.ui.player.JamState.current.value != null) {
+            return dev.nexfy.app.ui.player.JamState.queue(app, track.uri, track.title)
+        }
         if (remote != null) remoteCommand(RemoteCommand.Queue(track.uri)) else command { core.addToQueue(track.uri) }
         android.widget.Toast.makeText(app, "Adicionada à fila: ${track.title}", android.widget.Toast.LENGTH_SHORT).show()
     }
@@ -339,6 +343,11 @@ fun NexfyRoot(
     val haze = remember { HazeState() }
 
     ShimmerDriver()
+    // Whether this account is in a Jam, so the song menus and "Adicionar à
+    // fila" go to it without the Jam sheet having been opened first.
+    LaunchedEffect(Unit) {
+        dev.nexfy.app.ui.player.JamState.current.value = runCatching { app.core.jamCurrent() }.getOrNull()
+    }
     // Screens move through a seekable transition: navigation animates it,
     // the back gesture drags it (the page shrinks into a card over the one
     // underneath) and letting go finishes or cancels it.
@@ -545,6 +554,7 @@ private fun LinkOpener(actions: AppActions) {
             }
             is LinkTarget.Jam -> {
                 runCatching { actions.core.jamJoin(target.link) }
+                    .onSuccess { dev.nexfy.app.ui.player.JamState.current.value = it }
                     .onFailure { android.widget.Toast.makeText(actions.app, "Não deu para entrar nessa Jam", android.widget.Toast.LENGTH_SHORT).show() }
                 jamOpen = true
             }
