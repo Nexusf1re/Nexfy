@@ -128,8 +128,14 @@ fun JamSheet(onDismiss: () -> Unit) {
                 when {
                     loading -> Column(Modifier.padding(top = 16.dp)) { repeat(2) { MemberSkeleton(it) } }
                     current != null -> Column(Modifier.padding(top = 4.dp)) {
+                        // Where the Jam plays, by the host device's name.
+                        val where by androidx.compose.runtime.produceState<String?>(null, current.hostDeviceId) {
+                            value = runCatching { withContext(Dispatchers.IO) { core.devices() } }.getOrNull()
+                                ?.firstOrNull { it.id == current.hostDeviceId }
+                                ?.let { if (it.isSelf) "neste celular" else "em ${it.name}" }
+                        }
                         Text(
-                            if (current.isHost) "Tocando neste celular. Quem entrar pode pôr músicas na fila."
+                            if (current.isHost) "Tocando ${where ?: "na tua conta"}. Quem entrar pode pôr músicas na fila."
                             else "Tu estás na Jam. As músicas que tu puseres na fila tocam para todo mundo.",
                             color = c.onSurfaceVariant, fontSize = 14.sp,
                         )
@@ -148,7 +154,7 @@ fun JamSheet(onDismiss: () -> Unit) {
                             }
                         }
                         Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PillButton("Compartilhar", {
+                            PillButton("Convidar", {
                                 haptics.tick()
                                 val send = Intent(Intent.ACTION_SEND).apply {
                                     type = "text/plain"
