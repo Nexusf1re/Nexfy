@@ -1,6 +1,6 @@
 use std::process::exit;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait};
 use thiserror::Error;
@@ -74,7 +74,15 @@ impl From<cpal::SupportedStreamConfigsError> for RodioError {
 pub struct RodioSink {
     rodio_sink: rodio::Sink,
     _stream: rodio::OutputStream,
+    // Kept to open the output again: Android closes it when the route
+    // changes (headphones, Bluetooth) and it then never drains.
+    host: cpal::Host,
+    device: Option<String>,
+    format: AudioFormat,
 }
+
+/// No drain for this long while playing means the output is gone.
+const STALL: Duration = Duration::from_millis(800);
 
 fn list_formats(device: &cpal::Device) {
     match device.default_output_config() {
@@ -219,12 +227,15 @@ pub fn open(host: cpal::Host, device: Option<String>, format: AudioFormat) -> Ro
         host.id().name()
     );
 
-    let (sink, stream) = create_sink(&host, device, format).unwrap();
+    let (sink, stream) = create_sink(&host, device.clone(), format).unwrap();
 
     debug!("Rodio sink was created");
     RodioSink {
         rodio_sink: sink,
         _stream: stream,
+        host,
+        device,
+        format,
     }
 }
 
@@ -235,7 +246,17 @@ impl Sink for RodioSink {
     }
 
     fn stop(&mut self) -> SinkResult<()> {
-        self.rodio_sink.sleep_until_end();
+        // Not sleep_until_end: on a closed output it would wait forever.
+        let mut left = self.rodio_sink.len();
+        let mut since = Instant::now();
+        while left > 0 && since.elapsed() < STALL {
+            thread::sleep(Duration::from_millis(10));
+            let now = self.rodio_sink.len();
+            if now < left {
+                left = now;
+                since = Instant::now();
+            }
+        }
         self.rodio_sink.pause();
         Ok(())
     }
@@ -255,10 +276,33 @@ impl Sink for RodioSink {
         // Chunk sizes seem to be about 256 to 3000 ish items long.
         // Assuming they're on average 1628 then a half second buffer is:
         // 44100 elements --> about 27 chunks
-        while self.rodio_sink.len() > 26 {
+        let mut left = self.rodio_sink.len();
+        let mut since = Instant::now();
+        while left > 26 {
             // sleep and wait for rodio to drain a bit
             thread::sleep(Duration::from_millis(10));
+            let now = self.rodio_sink.len();
+            if now < left {
+                left = now;
+                since = Instant::now();
+            } else if since.elapsed() > STALL && !self.rodio_sink.is_paused() {
+                warn!("audio output stopped draining, opening it again");
+                self.reopen()?;
+                break;
+            }
         }
+        Ok(())
+    }
+}
+
+impl RodioSink {
+    /// A new output on the current default device; what was queued on the
+    /// dead one (about half a second) is dropped.
+    fn reopen(&mut self) -> Result<(), RodioError> {
+        let (sink, stream) = create_sink(&self.host, self.device.clone(), self.format)?;
+        sink.play();
+        self.rodio_sink = sink;
+        self._stream = stream;
         Ok(())
     }
 }
