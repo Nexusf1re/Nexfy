@@ -473,3 +473,14 @@ pub async fn session_transfer(session: &Session, device_id: &str) -> Option<Resu
         anyhow!("não deu para passar a música para esse dispositivo")
     }))
 }
+
+/// The songs either side of the one playing on the active device, as the
+/// cluster lists them: what a skip there shows before the device confirms.
+pub fn session_neighbours() -> Option<(Option<String>, Option<String>)> {
+    let cluster = librespot_connect::cluster_cache::latest()?;
+    let player = cluster.player_state.as_ref()?;
+    let song = |uri: &&String| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:");
+    let previous = player.prev_tracks.iter().map(|t| &t.uri).filter(song).last().cloned();
+    let next = player.next_tracks.iter().map(|t| &t.uri).find(song).cloned();
+    Some((previous, next))
+}

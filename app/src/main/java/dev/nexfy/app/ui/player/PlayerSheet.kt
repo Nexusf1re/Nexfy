@@ -532,8 +532,9 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                         thrown[0] = true
                                         if (go == 1) controls.next() else controls.previous()
                                         throwX.animateTo(-go * fullW * 1.2f, Motion.exit(170))
-                                        // Come back in with the new song's cover, not the old one.
-                                        withTimeoutOrNull(700) { snapshotFlow { currentUri }.first { it != before } }
+                                        // Come back in with the new song's cover, not the old one
+                                        // (another device confirms a skip in a second or more).
+                                        withTimeoutOrNull(if (s.remote != null) 2500L else 700L) { snapshotFlow { currentUri }.first { it != before } }
                                             ?: run { thrown[0] = false }
                                         throwX.snapTo(go * fullW * .8f)
                                     }

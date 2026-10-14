@@ -1369,6 +1369,21 @@ impl NexfyCore {
     }
 
     /// What plays next on the device playing elsewhere.
+    /// The songs before and after the one playing on the other device, so a
+    /// skip there can show its cover at once. Empty before the first cluster.
+    pub async fn remote_neighbours(&self) -> Result<Vec<Option<Track>>, CoreError> {
+        let Some((previous, next)) = remote::session_neighbours() else {
+            return Ok(vec![None, None]);
+        };
+        let uris: Vec<String> = previous.iter().chain(next.iter()).cloned().collect();
+        let known: HashMap<String, Track> =
+            self.tracks_info(uris).await?.into_iter().map(|t| (t.uri.clone(), t)).collect();
+        Ok(vec![
+            previous.and_then(|uri| known.get(&uri).cloned()),
+            next.and_then(|uri| known.get(&uri).cloned()),
+        ])
+    }
+
     pub async fn remote_queue(&self) -> Result<Vec<Track>, CoreError> {
         let session = self.inner.live_session().await?;
         if let Some(uris) = remote::session_queue_uris() {

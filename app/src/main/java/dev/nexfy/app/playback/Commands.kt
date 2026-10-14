@@ -86,14 +86,14 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     }
 
     fun next() {
-        if (remote != null) return remote(RemoteCommand.Next)
         bridge.preview(forward = true)
+        if (remote != null) return remote(RemoteCommand.Next)
         run { core.next() }
     }
 
     fun previous() {
-        if (remote != null) return remote(RemoteCommand.Previous)
         bridge.preview(forward = false)
+        if (remote != null) return remote(RemoteCommand.Previous)
         run { core.previous() }
     }
 }

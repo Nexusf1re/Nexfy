@@ -15,6 +15,9 @@ import uniffi.nexfy_core.NexfyCore
 import uniffi.nexfy_core.Track
 import uniffi.nexfy_core.TrackInfo
 
+/** How long a remote skip shown ahead outlasts polls still naming the old song. */
+private const val REMOTE_SKIP_HOLD_MS = 4000L
+
 val EmptyQueue = QueueState(null, emptyList(), null, emptyList(), false, RepeatMode.OFF)
 
 /** What the core last reported. Positions are extrapolated while playing. */
@@ -89,6 +92,12 @@ class CoreBridge(core: NexfyCore) : CoreListener {
         // This phone playing means it is the active device, whatever a late
         // report about another device says.
         val r = report.takeUnless { _local.value.playing }
+        // After a skip shown ahead, a late poll may still name the old song:
+        // keep the new one until the device confirms or the hold runs out.
+        skipShown?.let { (oldUri, until) ->
+            if (now < until && r?.track?.uri == oldUri) return
+            if (now >= until || (r?.track != null && r.track?.uri != oldUri)) skipShown = null
+        }
         val old = remote
         if (r != null && !r.device.isSelf && old != null) {
             // A poll that only confirms the extrapolated position changes
@@ -151,6 +160,27 @@ class CoreBridge(core: NexfyCore) : CoreListener {
         publish()
     }
 
+    /** The other device's songs either side of its current one, fetched ahead. */
+    @Volatile
+    private var remoteNeighbours: Pair<Track?, Track?> = null to null
+
+    /** The song a remote skip replaced, and until when late polls naming it are ignored. */
+    private var skipShown: Pair<String, Long>? = null
+
+    fun setRemoteNeighbours(previous: Track?, next: Track?) {
+        remoteNeighbours = previous to next
+    }
+
+    /** A skip on the other device, shown at once: its confirmation takes a second or more. */
+    @Synchronized
+    private fun previewRemote(forward: Boolean) {
+        val target = (if (forward) remoteNeighbours.second else remoteNeighbours.first) ?: return
+        val oldUri = remote?.first?.track?.uri ?: return
+        skipShown = oldUri to SystemClock.elapsedRealtime() + REMOTE_SKIP_HOLD_MS
+        remoteNeighbours = null to null
+        updateRemote { it.copy(track = target, progressMs = 0u) }
+    }
+
     /** Metadata of the songs either side of the current one, fetched ahead. */
     @Volatile
     private var neighbours: Pair<Track?, Track?> = null to null
@@ -164,10 +194,7 @@ class CoreBridge(core: NexfyCore) : CoreListener {
      * the skip; the real TrackChanged event then replaces it.
      */
     fun preview(forward: Boolean) {
-        if (remote != null) return
-        val s = _local.value
-        // Going back past 3 s only restarts the current song.
-        if (!forward && s.currentPositionMs() > 3000) return
+        if (remote != null) return previewRemote(forward)
         val target = (if (forward) neighbours.first else neighbours.second) ?: return
         val now = SystemClock.elapsedRealtime()
         _local.update {

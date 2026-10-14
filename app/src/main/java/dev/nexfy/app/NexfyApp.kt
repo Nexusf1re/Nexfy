@@ -156,6 +156,29 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                     }
                 }
         }
+        // The same for another device playing: its songs either side, from the cluster.
+        scope.launch {
+            bridge.state
+                .map { s -> s.track?.uri.takeIf { s.remote != null } }
+                .distinctUntilChanged()
+                .collectLatest { uri ->
+                    bridge.setRemoteNeighbours(null, null)
+                    if (uri == null) return@collectLatest
+                    // The cluster can still be on the song before (a skip shown
+                    // ahead): read again until it names this one in the middle.
+                    repeat(4) {
+                        delay(1500)
+                        val (previous, next) = runCatching { core.remoteNeighbours() }.getOrNull() ?: return@repeat
+                        if (previous?.uri == uri || next?.uri == uri) return@repeat
+                        bridge.setRemoteNeighbours(previous, next)
+                        val images = SingletonImageLoader.get(this@NexfyApp)
+                        listOfNotNull(previous, next).mapNotNull { it.imageUrl }.forEach { url ->
+                            images.enqueue(ImageRequest.Builder(this@NexfyApp).data(url).build())
+                        }
+                        return@collectLatest
+                    }
+                }
+        }
     }
 
     /** Whether the network is unmetered (Wi-Fi), where songs are downloaded ahead. */
