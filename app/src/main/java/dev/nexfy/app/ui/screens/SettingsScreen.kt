@@ -1,6 +1,8 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -40,6 +43,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -49,6 +54,8 @@ import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.Motion
+import dev.nexfy.app.ui.design.springPress
 import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.RoundIconButton
@@ -77,8 +84,9 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
         Text("Ajustes", fontSize = 34.sp, style = MaterialTheme.typography.headlineLarge)
         message?.let { Text(it, color = accentColor()) }
 
+        EqualizerCard(actions)
         AccountSection(actions) { message = it }
-        SoundSection(actions) { actions.open(Route.Equalizer) }
+        SoundSection(actions)
         AppearanceSection(actions)
         BehaviourSection(actions)
         StorageSection(actions)
@@ -169,16 +177,58 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
 }
 
 /**
- * Stream quality, volume normalisation and the way into the equalizer
- * ([onEqualizer]), for what plays on this phone.
+ * The equalizer, up top where it is seen: its live curve, what it is set
+ * to and a switch. Tapping the card opens the full screen.
  */
 @Composable
-private fun SoundSection(actions: AppActions, onEqualizer: (() -> Unit)? = null) {
+private fun EqualizerCard(actions: AppActions) {
+    val c = MaterialTheme.colorScheme
+    val core = actions.core
+    val accent = accentColor()
+    val haptics = rememberHaptics()
+    // Read again on each visit: the equalizer screen replaces this one.
+    var eq by remember { mutableStateOf(core.equalizer()) }
+    val playback by actions.app.bridge.local.collectAsState()
+    val glow by animateFloatAsState(if (eq.enabled) 1f else 0f, Motion.standard(), label = "glow")
+    val source = remember { MutableInteractionSource() }
+    Column(
+        Modifier.fillMaxWidth().springPress(source).clip(RoundedCornerShape(28.dp))
+            .background(Brush.linearGradient(listOf(lerp(c.surfaceVariant, accent, .3f * glow), c.surfaceVariant)))
+            .clickable(source, null) { actions.open(Route.Equalizer) }
+            .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 14.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Equalizador", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    if (!eq.enabled) "Desligado" else eq.preset ?: "Personalizado",
+                    color = lerp(c.onSurfaceVariant, accent, glow), fontSize = 14.sp,
+                )
+            }
+            Switch(
+                eq.enabled,
+                onCheckedChange = { on ->
+                    haptics.tick()
+                    core.setEqualizer(on, eq.preampDb, eq.gainsDb)
+                    eq = core.equalizer()
+                },
+                colors = SwitchDefaults.colors(checkedTrackColor = accent, checkedThumbColor = c.background),
+            )
+        }
+        EqualizerPreview(eq.gainsDb, eq.enabled, playback.playing, Modifier.fillMaxWidth().height(104.dp).padding(vertical = 8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("10 faixas, presets e os seus ajustes", color = c.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
+        }
+    }
+}
+
+/** Stream quality and volume normalisation, for what plays on this phone. */
+@Composable
+private fun SoundSection(actions: AppActions) {
     val c = MaterialTheme.colorScheme
     val core = actions.core
     var sound by remember { mutableStateOf(core.soundSettings()) }
-    // Read again on each visit: the equalizer screen replaces this one.
-    val equalizer = remember { core.equalizer() }
     Section("Som", "Como as músicas tocam neste celular.") {
         Choice("Qualidade de áudio", listOf(AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
             if (it == AudioQuality.NORMAL) "Normal · 160 kbps" else "Alta · 320 kbps"
@@ -193,25 +243,6 @@ private fun SoundSection(actions: AppActions, onEqualizer: (() -> Unit)? = null)
             core.setNormalize(it)
             sound = core.soundSettings()
         })
-        EqualizerRow(if (!equalizer.enabled) "Desligado" else equalizer.preset ?: "Personalizado", onEqualizer)
-    }
-}
-
-/** The way into the equalizer, [status] under its name; without [onClick] it is shown disabled, "Em breve". */
-@Composable
-private fun EqualizerRow(status: String, onClick: (() -> Unit)?) {
-    val c = MaterialTheme.colorScheme
-    Row(
-        Modifier.fillMaxWidth().alpha(if (onClick != null) 1f else .45f).clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = onClick != null) { onClick?.invoke() }
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("Equalizador", fontSize = 14.sp)
-            Text(if (onClick != null) status else "Em breve", color = c.onSurfaceVariant, fontSize = 13.sp)
-        }
-        Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
     }
 }
 

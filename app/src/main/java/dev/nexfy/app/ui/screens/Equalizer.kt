@@ -4,7 +4,9 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -36,6 +38,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -61,7 +64,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
@@ -90,7 +95,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.nexfy_core.EqualizerPreset
 import java.util.Locale
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.sin
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -118,7 +125,11 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
     var preamp by remember { mutableFloatStateOf(initial.preampDb) }
     // What the sound uses; the curve's animatables chase these.
     val gains = remember { initial.gainsDb.padded().toMutableStateList() }
-    val shown = remember { gains.map { Animatable(it) } }
+    // Flat at first: the curve rises into place as the screen opens.
+    val shown = remember { gains.map { Animatable(if (Motion.reduced) it else 0f) } }
+    // A flash through the curve when a preset lands.
+    val pulse = remember { Animatable(0f) }
+    val playback by actions.app.bridge.local.collectAsState()
     val moves = remember { arrayOfNulls<Job>(Bands) }
     var presets by remember { mutableStateOf(core.equalizerPresets()) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -138,7 +149,7 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
     // Leaving mid-interval would drop the last change.
     DisposableEffect(Unit) { onDispose { core.setEqualizer(enabled, preamp, gains.toList()) } }
 
-    /** Glide the curve to [target], a band at a time, like a wave. */
+    /** Throw the curve to [target], a band at a time, like a wave that wobbles as it lands. */
     fun applyGains(target: List<Float>) {
         target.padded().forEachIndexed { i, db ->
             gains[i] = db
@@ -147,11 +158,21 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
                 if (Motion.reduced) {
                     shown[i].animateTo(db, Motion.standard(Motion.Short))
                 } else {
-                    delay(i * 18L)
-                    shown[i].animateTo(db, spring(dampingRatio = .62f, stiffness = 240f))
+                    delay(i * 38L)
+                    shown[i].animateTo(db, spring(dampingRatio = .36f, stiffness = 170f))
                 }
             }
         }
+        if (!Motion.reduced) scope.launch {
+            pulse.snapTo(1f)
+            pulse.animateTo(0f, tween(1100))
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (Motion.reduced) return@LaunchedEffect
+        delay(140)
+        applyGains(gains.toList())
     }
 
     Column(
@@ -191,6 +212,14 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
                 gains = gains,
                 shown = shown,
                 enabled = enabled,
+                playing = playback.playing,
+                pulse = { pulse.value },
+                onWake = {
+                    if (!enabled) {
+                        haptics.press()
+                        enabled = true
+                    }
+                },
                 onChange = { band, db ->
                     moves[band]?.cancel()
                     gains[band] = db
@@ -200,7 +229,7 @@ fun EqualizerScreen(actions: AppActions, modifier: Modifier = Modifier) {
                     haptics.tick()
                     applyGains(gains.mapIndexed { i, db -> if (i == band) 0f else db })
                 },
-                modifier = Modifier.fillMaxWidth().height(260.dp),
+                modifier = Modifier.fillMaxWidth().height(280.dp),
             )
         }
 
@@ -316,6 +345,9 @@ private fun EqualizerCurve(
     gains: SnapshotStateList<Float>,
     shown: List<Animatable<Float, AnimationVector1D>>,
     enabled: Boolean,
+    playing: Boolean,
+    pulse: () -> Float,
+    onWake: () -> Unit,
     onChange: (band: Int, db: Float) -> Unit,
     onReset: (band: Int) -> Unit,
     modifier: Modifier,
@@ -327,10 +359,22 @@ private fun EqualizerCurve(
     val measurer = rememberTextMeasurer()
     val change by rememberUpdatedState(onChange)
     val reset by rememberUpdatedState(onReset)
+    val wake by rememberUpdatedState(onWake)
     var active by remember { mutableIntStateOf(-1) }
     var lastActive by remember { mutableIntStateOf(0) }
     val lit by animateFloatAsState(if (enabled) 1f else 0f, Motion.standard(), label = "lit")
     val grow by animateFloatAsState(if (active >= 0) 1f else 0f, Motion.press(), label = "grow")
+    // Off, the curve collapses flat; on, it springs back up past its place.
+    val power = remember { Animatable(if (enabled) 1f else 0f) }
+    LaunchedEffect(enabled) {
+        val spec = when {
+            Motion.reduced -> Motion.standard<Float>()
+            enabled -> spring(dampingRatio = .32f, stiffness = 190f)
+            else -> spring(dampingRatio = .55f, stiffness = 260f)
+        }
+        power.animateTo(if (enabled) 1f else 0f, spec)
+    }
+    val wave = rememberWave(playing && enabled)
 
     val label = TextStyle(color = c.onSurfaceVariant, fontSize = 11.sp)
     val freqs = remember(measurer, c.onSurfaceVariant) { BandLabels.map { measurer.measure(it, label) } }
@@ -340,13 +384,18 @@ private fun EqualizerCurve(
     Canvas(
         modifier
             .pointerInput(Unit) {
-                detectTapGestures(onDoubleTap = { o -> reset(ChartFrame(size.toSize(), this).nearest(o.x)) })
+                detectTapGestures(onDoubleTap = { o ->
+                    wake()
+                    reset(ChartFrame(size.toSize(), this).nearest(o.x))
+                })
             }
             .pointerInput(Unit) {
                 // Relative to where the finger lands, so a touch never makes the band jump.
                 var raw = 0f
                 detectVerticalDragGestures(
                     onDragStart = { o ->
+                        // Touching the curve while off turns the equalizer on.
+                        wake()
                         active = ChartFrame(size.toSize(), this).nearest(o.x)
                         lastActive = active
                         raw = gains[active]
@@ -383,7 +432,13 @@ private fun EqualizerCurve(
             drawText(text, topLeft = Offset(x - text.size.width / 2f, f.bottom + 8.dp.toPx()))
         }
 
-        val points = List(Bands) { Offset(f.x(it), f.y(shown[it].value)) }
+        val flash = pulse()
+        val (sway, phase) = wave()
+        val points = List(Bands) { band ->
+            // While music plays, the curve breathes a little (the band in hand holds still).
+            val breath = if (band == active) 0f else sway * .7f * sin(phase + band * .8f)
+            Offset(f.x(band), f.y(shown[band].value * power.value + breath))
+        }
         val curve = spline(points, f.left, f.right)
         val fill = Path().apply {
             addPath(curve)
@@ -392,15 +447,41 @@ private fun EqualizerCurve(
             close()
         }
         clipRect(f.left, 0f, f.right, f.bottom) {
-            drawPath(fill, Brush.verticalGradient(listOf(ink.copy(alpha = .34f), ink.copy(alpha = 0f)), startY = f.top, endY = f.bottom))
+            drawPath(fill, Brush.verticalGradient(listOf(ink.copy(alpha = .34f + .3f * flash), ink.copy(alpha = 0f)), startY = f.top, endY = f.bottom))
+            // A light sweeping through the fill in time with the music.
+            if (sway > .01f) clipPath(fill) {
+                val span = f.right - f.left
+                val x = f.left - span * .3f + (phase / (2 * PI.toFloat())) * span * 1.6f
+                drawRect(
+                    Brush.horizontalGradient(
+                        listOf(ink.copy(alpha = 0f), ink.copy(alpha = .22f * sway), ink.copy(alpha = 0f)),
+                        startX = x - span * .18f, endX = x + span * .18f,
+                    ),
+                )
+            }
         }
-        drawPath(curve, ink.copy(alpha = .16f), style = Stroke(9.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        drawPath(curve, ink, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        val glow = 9.dp.toPx() + 12.dp.toPx() * flash + 4.dp.toPx() * grow
+        drawPath(curve, ink.copy(alpha = .16f + .22f * flash), style = Stroke(glow, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(curve, ink, style = Stroke(2.5.dp.toPx() + 1.dp.toPx() * grow, cap = StrokeCap.Round, join = StrokeJoin.Round))
 
+        // The band in hand: a beam down to the axis and a halo around its handle.
+        if (grow > .01f) {
+            val p = points[lastActive]
+            drawLine(
+                Brush.verticalGradient(listOf(ink.copy(alpha = .55f * grow), ink.copy(alpha = 0f)), startY = p.y, endY = f.bottom),
+                p, Offset(p.x, f.bottom), 3.dp.toPx(),
+            )
+            drawCircle(ink.copy(alpha = .18f * grow), 7.dp.toPx() * (1.4f + 1.2f * grow), p)
+        }
         points.forEachIndexed { band, p ->
-            val g = if (band == lastActive) grow else 0f
-            val r = (7.dp.toPx()) * (1f + .45f * g)
-            drawCircle(lerp(c.surfaceVariant, ink, g), r, p)
+            val near = abs(band - lastActive)
+            val g = when (near) {
+                0 -> grow
+                1 -> grow * .35f
+                else -> 0f
+            }
+            val r = 7.dp.toPx() * (1f + .55f * g + .25f * flash)
+            drawCircle(lerp(c.surfaceVariant, ink, if (near == 0) g else 0f), r, p)
             drawCircle(ink, r, p, style = Stroke(2.5.dp.toPx()))
         }
 
@@ -416,6 +497,82 @@ private fun EqualizerCurve(
             val x = (p.x - w / 2f).coerceIn(f.left, f.right - w)
             drawRoundRect(c.primary.copy(alpha = grow), Offset(x, y), Size(w, h), CornerRadius(h / 2f))
             drawText(text, topLeft = Offset(x + pad, y + pad / 2f), alpha = grow)
+        }
+    }
+}
+
+/**
+ * The curve's breathing while music plays here: how much (fading in and
+ * out) and where in its cycle, read at draw time so only the canvas redraws.
+ */
+@Composable
+private fun rememberWave(on: Boolean): () -> Pair<Float, Float> {
+    val live = on && !Motion.reduced
+    val amount = animateFloatAsState(if (live) 1f else 0f, tween(900), label = "sway")
+    val phase = remember { Animatable(0f) }
+    LaunchedEffect(live) {
+        if (!live) return@LaunchedEffect
+        val turn = 2 * PI.toFloat()
+        while (true) {
+            phase.animateTo(phase.value + turn, tween(4200, easing = LinearEasing))
+            phase.snapTo(phase.value % turn)
+        }
+    }
+    return { amount.value to phase.value }
+}
+
+/**
+ * The equalizer at a glance, for the settings card: the current curve,
+ * rising into place on arrival and breathing while music plays. Off, it
+ * lies flat and grey.
+ */
+@Composable
+fun EqualizerPreview(gainsDb: List<Float>, enabled: Boolean, playing: Boolean, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
+    val accent = accentColor()
+    val target = gainsDb.padded()
+    val shown = remember { List(Bands) { Animatable(0f) } }
+    val power = remember { Animatable(0f) }
+    LaunchedEffect(target, enabled) {
+        target.forEachIndexed { i, db ->
+            launch {
+                if (Motion.reduced) {
+                    shown[i].snapTo(db)
+                } else {
+                    delay(120 + i * 45L)
+                    shown[i].animateTo(db, spring(dampingRatio = .34f, stiffness = 150f))
+                }
+            }
+        }
+        val spec = if (Motion.reduced) Motion.standard<Float>() else spring(dampingRatio = .4f, stiffness = 160f)
+        power.animateTo(if (enabled) 1f else 0f, spec)
+    }
+    val lit by animateFloatAsState(if (enabled) 1f else 0f, Motion.standard(), label = "lit")
+    val wave = rememberWave(playing && enabled)
+    Canvas(modifier) {
+        val ink = lerp(c.onSurfaceVariant, accent, lit)
+        val (sway, phase) = wave()
+        val pad = 8.dp.toPx()
+        val mid = size.height / 2f
+        val half = size.height / 2f - pad
+        val points = List(Bands) { band ->
+            val x = pad + band * (size.width - 2 * pad) / (Bands - 1)
+            val db = shown[band].value * power.value + sway * .9f * sin(phase + band * .8f)
+            Offset(x, mid - db / MaxDb * half)
+        }
+        val curve = spline(points, 0f, size.width)
+        val fill = Path().apply {
+            addPath(curve)
+            lineTo(size.width, size.height)
+            lineTo(0f, size.height)
+            close()
+        }
+        drawLine(c.onSurfaceVariant.copy(alpha = .18f), Offset(0f, mid), Offset(size.width, mid), 1.dp.toPx())
+        drawPath(fill, Brush.verticalGradient(listOf(ink.copy(alpha = .3f), ink.copy(alpha = 0f))))
+        drawPath(curve, ink.copy(alpha = .18f), style = Stroke(8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(curve, ink, style = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        points.forEach { p ->
+            drawCircle(ink, 3.5.dp.toPx(), p)
         }
     }
 }
@@ -451,12 +608,22 @@ private fun PresetChip(name: String, selected: Boolean, onClick: () -> Unit, onL
     val bg by animateColorAsState(if (selected) accent.copy(alpha = .18f) else c.surfaceVariant, Motion.standard(), label = "bg")
     val edge by animateColorAsState(if (selected) accent else c.surfaceVariant, Motion.standard(), label = "edge")
     val fg by animateColorAsState(if (selected) accent else c.onSurface, Motion.standard(), label = "fg")
+    // Chosen, the chip pops and wobbles back.
+    val pop = remember { Animatable(1f) }
+    LaunchedEffect(selected) {
+        if (!selected || Motion.reduced) return@LaunchedEffect
+        pop.animateTo(1.14f, tween(90))
+        pop.animateTo(1f, spring(dampingRatio = .28f, stiffness = 520f))
+    }
     Text(
         name,
         color = fg,
         style = MaterialTheme.typography.labelLarge,
         maxLines = 1,
-        modifier = Modifier.springPress(source).clip(CircleShape).background(bg).border(1.dp, edge, CircleShape)
+        modifier = Modifier.graphicsLayer {
+            scaleX = pop.value
+            scaleY = pop.value
+        }.springPress(source).clip(CircleShape).background(bg).border(1.dp, edge, CircleShape)
             .combinedClickable(source, null, onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
