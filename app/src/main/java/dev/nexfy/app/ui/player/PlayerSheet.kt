@@ -1142,7 +1142,7 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(a?.album?.name ?: track.album, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val details = listOfNotNull(a?.album?.artists ?: track.artists, a?.album?.year, a?.let { "${it.tracks.size} faixas" })
+                    val details = listOfNotNull(a?.album?.artists ?: track.artists, a?.album?.year, a?.let { if (it.tracks.size == 1) "1 faixa" else "${it.tracks.size} faixas" })
                     Text(details.joinToString(" · "), color = Color.White.copy(.62f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Icon(Icons.Rounded.Close, "Virar a capa", tint = Color.White.copy(.7f), modifier = Modifier.padding(horizontal = 6.dp).size(20.dp))

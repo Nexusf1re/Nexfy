@@ -546,13 +546,25 @@ impl NexfyCore {
         self.inner.with_spirc(|spirc| spirc.set_position_ms(position_ms))
     }
 
-    pub fn pause(&self) -> Result<(), CoreError> {
+    pub async fn pause(&self) -> Result<(), CoreError> {
+        self.inner.ensure_session().await?;
+        log::info!("pause");
         self.inner.with_spirc(|spirc| spirc.pause())
     }
 
+    /// Activates this device first: Spirc drops commands while another
+    /// device holds the session, and the song here would not resume.
     pub async fn resume(&self) -> Result<(), CoreError> {
         self.inner.ensure_session().await?;
-        self.inner.with_spirc(|spirc| spirc.play())
+        log::info!("resume");
+        self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play()))
+    }
+
+    /// Toggles from what Spirc is doing, not what the screen last showed.
+    pub async fn play_pause(&self) -> Result<(), CoreError> {
+        self.inner.ensure_session().await?;
+        log::info!("play/pause");
+        self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play_pause()))
     }
 
     pub async fn next(&self) -> Result<(), CoreError> {

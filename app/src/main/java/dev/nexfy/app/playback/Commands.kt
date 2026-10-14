@@ -44,7 +44,7 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
             remote(if (playing) RemoteCommand.Pause else RemoteCommand.Play) { it.copy(playing = !playing) }
             return
         }
-        run { if (playing) core.pause() else core.resume() }
+        run { core.playPause() }
     }
 
     fun next() {
