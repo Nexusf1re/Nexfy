@@ -211,15 +211,17 @@ class AppActions(
         val start = index.coerceIn(0, tracks.lastIndex)
         if (remote != null) {
             command {
-                if (shuffle) core.remoteCommand(RemoteCommand.Shuffle(true))
-                if (contextUri != null) {
+                if (shuffle) {
+                    // Another device keeps the shuffled order it drew for a playlist;
+                    // a list shuffled here, starting on the chosen song, is new each time.
+                    val order = listOf(tracks[start]) + (tracks - tracks[start]).shuffled()
+                    core.remoteCommand(RemoteCommand.Shuffle(false))
+                    core.remoteCommand(RemoteCommand.PlayTracks(order.map { it.uri }, 0u))
+                } else if (contextUri != null) {
                     core.remoteCommand(RemoteCommand.PlayContext(contextUri, tracks[start].uri))
                 } else {
                     core.remoteCommand(RemoteCommand.PlayTracks(tracks.map { it.uri }, start.toUInt()))
                 }
-                // Shuffling again after the start makes the device draw a new
-                // order, instead of the one it kept for this playlist.
-                if (shuffle) core.remoteCommand(RemoteCommand.Shuffle(true))
             }
             app.refreshRemoteSoon()
             return
