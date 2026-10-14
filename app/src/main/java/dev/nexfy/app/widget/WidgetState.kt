@@ -49,6 +49,8 @@ internal data class Shown(
     val thumb: Bitmap?,
     /** The cover's colour (ARGB), or null for the neutral look. */
     val accent: Int?,
+    /** The cover's colours as soft light, for the widget's background. */
+    val glow: Bitmap? = null,
 ) {
     fun progress(now: Long = SystemClock.elapsedRealtime()): Float {
         if (durationMs <= 0) return 0f
@@ -58,7 +60,7 @@ internal data class Shown(
 }
 
 /** A loaded cover, kept so redraws of the same song reuse it instead of decoding again. */
-private class Art(val url: String, val art: Bitmap?, val thumb: Bitmap?, val accent: Int?)
+private class Art(val url: String, val art: Bitmap?, val thumb: Bitmap?, val accent: Int?, val glow: Bitmap?)
 
 /**
  * The state every Nexfy widget draws from. Widgets collect [shown] in their
@@ -124,7 +126,7 @@ internal object NexfyWidgets {
         }
         val art = base?.coverUrl?.let { art(context, it) }
         val accent = art?.accent?.takeIf { app.library.coverAccent.value }
-        _shown.value = base?.copy(art = art?.art, thumb = art?.thumb, accent = accent)
+        _shown.value = base?.copy(art = art?.art, thumb = art?.thumb, accent = accent, glow = art?.glow?.takeIf { app.library.coverAccent.value })
         loaded = true
     }
 
@@ -140,7 +142,8 @@ internal object NexfyWidgets {
         }
         val thumb = art?.let { withContext(Dispatchers.Default) { it.scale(THUMB_PX, THUMB_PX * it.height / it.width.coerceAtLeast(1)) } }
         val accent = art?.let { coverAccent(context, url)?.toArgb() }
-        return Art(url, art, thumb, accent).also { lastArt = it }
+        val glow = art?.let { withContext(Dispatchers.Default) { ambient(it) } }
+        return Art(url, art, thumb, accent, glow).also { lastArt = it }
     }
 
     private suspend fun placed(context: Context, widget: Class<out GlanceAppWidget>? = null): Boolean {
@@ -188,4 +191,48 @@ internal object NexfyWidgets {
             }
         }
     }
+}
+
+/**
+ * The cover reduced to a few soft patches of its colours, like a lamp behind
+ * it: a tiny copy is blurred and scaled back up, since Glance cannot blur.
+ */
+private fun ambient(art: Bitmap): Bitmap {
+    val small = art.scale(GLOW_SMALL_W, GLOW_SMALL_H, filter = true)
+    val pixels = IntArray(GLOW_SMALL_W * GLOW_SMALL_H)
+    small.getPixels(pixels, 0, GLOW_SMALL_W, 0, 0, GLOW_SMALL_W, GLOW_SMALL_H)
+    repeat(3) { boxBlur(pixels, GLOW_SMALL_W, GLOW_SMALL_H, radius = 3) }
+    val soft = Bitmap.createBitmap(pixels, GLOW_SMALL_W, GLOW_SMALL_H, Bitmap.Config.ARGB_8888)
+    return soft.scale(GLOW_W, GLOW_H, filter = true)
+}
+
+private const val GLOW_SMALL_W = 48
+private const val GLOW_SMALL_H = 24
+private const val GLOW_W = 320
+private const val GLOW_H = 160
+
+/** One horizontal and one vertical pass of a box blur, in place. */
+private fun boxBlur(pixels: IntArray, w: Int, h: Int, radius: Int) {
+    val out = IntArray(pixels.size)
+    fun pass(lines: Int, length: Int, at: (line: Int, i: Int) -> Int) {
+        for (line in 0 until lines) {
+            for (i in 0 until length) {
+                var r = 0
+                var g = 0
+                var b = 0
+                var n = 0
+                for (k in (i - radius).coerceAtLeast(0)..(i + radius).coerceAtMost(length - 1)) {
+                    val p = pixels[at(line, k)]
+                    r += p shr 16 and 0xFF
+                    g += p shr 8 and 0xFF
+                    b += p and 0xFF
+                    n++
+                }
+                out[at(line, i)] = (0xFF shl 24) or (r / n shl 16) or (g / n shl 8) or (b / n)
+            }
+        }
+        out.copyInto(pixels)
+    }
+    pass(h, w) { y, x -> y * w + x }
+    pass(w, h) { x, y -> y * w + x }
 }

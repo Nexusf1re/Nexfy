@@ -61,6 +61,7 @@ private fun Pill(now: Shown?) {
                 .background(tones.surface).clickable(openApp(now)),
             contentAlignment = Alignment.CenterStart,
         ) {
+            Ambient(now?.glow, tones)
             Sheen()
             Row(GlanceModifier.fillMaxSize().padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (now == null) {

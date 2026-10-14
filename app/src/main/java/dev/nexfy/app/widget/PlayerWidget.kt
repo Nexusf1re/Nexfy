@@ -69,6 +69,7 @@ private fun Player(now: Shown?, tick: Long) {
             .clickable(openApp(now)),
         contentAlignment = Alignment.CenterStart,
     ) {
+        Ambient(now?.glow, tones)
         Sheen()
         if (now == null) {
             Idle(tones, mark = 56.dp)

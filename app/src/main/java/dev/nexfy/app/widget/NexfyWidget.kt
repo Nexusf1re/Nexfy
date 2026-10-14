@@ -63,6 +63,7 @@ private fun Bar(now: Shown?) {
             .clickable(openApp(now)),
         contentAlignment = Alignment.CenterStart,
     ) {
+        Ambient(now?.glow, tones)
         Sheen()
         if (now == null) {
             Idle(tones)

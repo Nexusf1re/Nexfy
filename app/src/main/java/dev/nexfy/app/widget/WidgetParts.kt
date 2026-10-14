@@ -68,6 +68,12 @@ internal class Tones(accent: Int?) {
     val button: ColorProvider = ColorProvider(day = Color(0xFF151515), night = Color.White)
     val onButton: ColorProvider = ColorProvider(day = Color.White, night = Color(0xFF121212))
 
+    /** Over the ambient light: tinted like [surface], see-through so the light shows. */
+    val veil: ColorProvider = ColorProvider(
+        day = accent?.let { Color(ColorUtils.blendARGB(it, 0xFFFFFFFF.toInt(), .84f)).copy(alpha = .62f) } ?: Color(0x9EF1F1F4),
+        night = accent?.let { Color(ColorUtils.blendARGB(it, 0xFF000000.toInt(), .7f)).copy(alpha = .58f) } ?: Color(0x9418181B),
+    )
+
     /** Behind a missing cover. */
     val placeholder: ColorProvider = ColorProvider(day = Color(0x14000000), night = Color(0x1FFFFFFF))
 }
@@ -161,6 +167,17 @@ internal fun Previous(tint: ColorProvider, size: Dp = 40.dp) =
 @Composable
 internal fun Next(tint: ColorProvider, size: Dp = 40.dp) =
     Control(R.drawable.ic_widget_next, "Próxima", actionRunCallback<NextAction>(), tint, size)
+
+/**
+ * The cover's colours as soft light filling the widget, as if it glowed
+ * behind the glass, under a veil that keeps the text legible.
+ */
+@Composable
+internal fun Ambient(glow: android.graphics.Bitmap?, tones: Tones) {
+    if (glow == null) return
+    Image(ImageProvider(glow), null, GlanceModifier.fillMaxSize(), contentScale = ContentScale.Crop)
+    Box(GlanceModifier.fillMaxSize().background(tones.veil)) {}
+}
 
 /** A soft light along the top edge, the glass look on the tinted surface. */
 @Composable
