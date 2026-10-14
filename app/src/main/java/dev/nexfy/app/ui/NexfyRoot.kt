@@ -81,6 +81,7 @@ import dev.nexfy.app.ui.player.PlayerControls
 import dev.nexfy.app.ui.player.DevicesSheet
 import dev.nexfy.app.ui.player.PlayerSheet
 import dev.nexfy.app.ui.screens.AlbumScreen
+import dev.nexfy.app.ui.screens.EqualizerScreen
 import dev.nexfy.app.ui.screens.FriendsScreen
 import dev.nexfy.app.ui.screens.ArtistScreen
 import dev.nexfy.app.ui.screens.HomeScreen
@@ -122,6 +123,7 @@ sealed interface Route {
     data class Show(val id: String) : Route { override val key get() = "sh:$id" }
     data object Liked : Route { override val key get() = "liked" }
     data object Settings : Route { override val key get() = "settings" }
+    data object Equalizer : Route { override val key get() = "equalizer" }
     data object Stats : Route { override val key get() = "stats" }
     data object Friends : Route { override val key get() = "friends" }
 }
@@ -445,6 +447,7 @@ private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifie
         is Route.Show -> ShowScreen(actions, route.id, nav.list(route.key), modifier)
         Route.Liked -> LikedScreen(actions, nav.list(route.key), modifier)
         Route.Settings -> SettingsScreen(actions, modifier.safeDrawingPadding())
+        Route.Equalizer -> EqualizerScreen(actions, modifier.safeDrawingPadding())
         Route.Stats -> StatsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         Route.Friends -> FriendsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         null -> {

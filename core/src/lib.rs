@@ -9,6 +9,7 @@ mod auth;
 #[cfg(target_os = "android")]
 mod android;
 mod collection;
+mod equalizer;
 mod lyrics;
 mod offline;
 mod playlist_edit;
@@ -47,6 +48,7 @@ pub use webapi::{
 use webapi::WebApi;
 pub use offline::CacheInfo;
 pub use remote::{Device, RemoteCommand, RemoteState};
+pub use equalizer::{EqualizerPreset, EqualizerState};
 pub use sound::{AudioQuality, SoundSettings};
 
 uniffi::setup_scaffolding!();
@@ -237,6 +239,8 @@ struct Inner {
     listener: Mutex<Option<Arc<dyn CoreListener>>>,
     playing: AtomicBool,
     levels: Arc<sound::Levels>,
+    /// Runs on the player's output; the app changes it live.
+    equalizer: Arc<equalizer::Equalizer>,
     /// Read at start: the player is built with it.
     quality: AudioQuality,
 }
@@ -261,6 +265,7 @@ impl NexfyCore {
                 web: Arc::new(WebApi::new(&cache_dir)),
                 offline: offline::Offline::new(&cache_dir, quality),
                 levels: Arc::new(sound::Levels::new(sound::load_normalize(&cache_dir))),
+                equalizer: Arc::new(equalizer::Equalizer::load(&cache_dir)),
                 quality,
                 cache_dir,
                 device_name,
@@ -1193,6 +1198,29 @@ impl NexfyCore {
         sound::save_normalize(&self.inner.cache_dir, on);
     }
 
+    pub fn equalizer(&self) -> EqualizerState {
+        self.inner.equalizer.state()
+    }
+
+    /// Heard within a few ms and kept for the next start. Only this phone's
+    /// output: other Connect devices play their own sound.
+    pub fn set_equalizer(&self, enabled: bool, preamp_db: f32, gains_db: Vec<f32>) {
+        self.inner.equalizer.set(enabled, preamp_db, &gains_db)
+    }
+
+    /// Built-in presets first, then the user's.
+    pub fn equalizer_presets(&self) -> Vec<EqualizerPreset> {
+        self.inner.equalizer.presets()
+    }
+
+    pub fn save_equalizer_preset(&self, name: String, gains_db: Vec<f32>) -> Result<(), CoreError> {
+        self.inner.equalizer.save_preset(&name, &gains_db).map_err(CoreError::Web)
+    }
+
+    pub fn delete_equalizer_preset(&self, name: String) {
+        self.inner.equalizer.delete_preset(&name)
+    }
+
     /// Extra gain from 0 to 1 over everything else, for the sleep timer's
     /// fade out; the caller sets it back to 1.
     pub fn set_fade(&self, gain: f64) {
@@ -1530,11 +1558,12 @@ impl Inner {
         let backend = audio_backend::find(None)
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
         let mixer = NexfyMixer::new(self.levels.clone());
+        let equalizer = self.equalizer.clone();
         let player = Player::new(
             sound::player_config(self.quality, &self.levels),
             session.clone(),
             mixer.get_soft_volume(),
-            move || backend(None, AudioFormat::default()),
+            move || Box::new(equalizer::EqSink::new(backend(None, AudioFormat::default()), equalizer)),
         );
         tokio::spawn(run_events(
             Arc::downgrade(self),
