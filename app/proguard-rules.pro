@@ -36,3 +36,5 @@
 # ever leaves its loading layout.
 -keep class * extends androidx.work.InputMerger { <init>(); }
 -keep class * extends androidx.work.ListenableWorker { <init>(android.content.Context, androidx.work.WorkerParameters); }
+# Glance builds widget button actions from their class names when tapped.
+-keep class * implements androidx.glance.appwidget.action.ActionCallback { <init>(); }
