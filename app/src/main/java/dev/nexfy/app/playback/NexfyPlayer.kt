@@ -56,9 +56,14 @@ class NexfyPlayer(
 
     init {
         scope.launch {
+            var wasPlaying = false
             bridge.local.collect { snapshot ->
                 if (snapshot.playing) playWhenReady = true
                 if (snapshot.stopped) playWhenReady = false
+                // A pause the core confirmed (from the app, the widget, another
+                // device): the notification must stop showing "playing".
+                if (wasPlaying && !snapshot.playing && !snapshot.loading) playWhenReady = false
+                wasPlaying = snapshot.playing
                 invalidateState()
             }
         }
