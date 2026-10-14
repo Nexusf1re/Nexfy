@@ -30,3 +30,9 @@
 # WorkManager (pulled in by Glance) builds its Room database from the
 # generated *_Impl class found by name; R8 strips it otherwise.
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
+
+# WorkManager builds its input mergers and workers by reflection (Glance
+# widgets render through a worker): without their constructors no widget
+# ever leaves its loading layout.
+-keep class * extends androidx.work.InputMerger { <init>(); }
+-keep class * extends androidx.work.ListenableWorker { <init>(android.content.Context, androidx.work.WorkerParameters); }
