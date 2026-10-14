@@ -204,6 +204,14 @@ fun CollectionScreen(
     val shownTracks = remember(shown) { shown.map { it.value } }
     // A filtered or re-sorted view plays as an explicit list, not as the context.
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
+    val shuffleOn by library.shuffle.collectAsState()
+    val playingHere by remember(contextUri) {
+        derivedStateOf { contextUri != null && playbackState.value.queue.contextUri == contextUri }
+    }
+    // Shuffled, a new random first song each time; the player shuffles the rest.
+    val playAll = {
+        actions.play(all, if (shuffleOn) all.indices.random() else 0, shuffle = shuffleOn, source = source, contextUri = contextUri)
+    }
     var menuFor by remember { mutableStateOf<Track?>(null) }
     menuFor?.let { t -> TrackMenu(t, actions, ownPlaylist, all.indexOf(t).takeIf { it >= 0 }) { menuFor = null } }
     // Who added each song, shown only where more than one person adds (and
@@ -288,15 +296,18 @@ fun CollectionScreen(
                         }
                         Spacer(Modifier.height(16.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            GlassIcon(Icons.Rounded.Shuffle, "Aleatório", {
-                                haptics.press()
-                                actions.play(all, all.indices.random(), shuffle = true, source = source, contextUri = contextUri)
-                            }, enabled = all.isNotEmpty(), light = !dark)
+                            // A toggle, as in Spotify: on, "Tocar" plays shuffled; flipped while
+                            // this list plays, the player follows.
+                            GlassIcon(Icons.Rounded.Shuffle, if (shuffleOn) "Aleatório ligado" else "Aleatório desligado", {
+                                haptics.tick()
+                                val on = !shuffleOn
+                                if (playingHere) actions.setShuffle(on) else library.setShuffle(on)
+                            }, enabled = all.isNotEmpty(), light = !dark, selected = shuffleOn)
                             GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape, dark = dark) {
                                 Row(
                                     Modifier.matchParentSize().clickable(enabled = all.isNotEmpty()) {
                                         haptics.press()
-                                        actions.play(all, source = source, contextUri = contextUri)
+                                        playAll()
                                     },
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center,
@@ -368,7 +379,7 @@ fun CollectionScreen(
                         Box(Modifier.padding(horizontal = 16.dp)) {
                             TrackRow(
                                 track,
-                                { actions.play(shownTracks, i, source = source, contextUri = rowContext) },
+                                { actions.play(shownTracks, i, shuffle = shuffleOn, source = source, contextUri = rowContext) },
                                 number = if (numbered) entry.index + 1 else null,
                                 // The queue keeps the URI as listed; the playing one may be relinked.
                                 playing = playingUris.first == track.uri || playingUris.second == track.uri,
@@ -385,7 +396,7 @@ fun CollectionScreen(
                 footer()
             }
         }
-        DetailTopBar(title, collapse, back) { haptics.press(); actions.play(all, source = source, contextUri = contextUri) }
+        DetailTopBar(title, collapse, back) { haptics.press(); playAll() }
     }
 }
 

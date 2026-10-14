@@ -213,17 +213,22 @@ class AppActions(
             command {
                 if (shuffle) core.remoteCommand(RemoteCommand.Shuffle(true))
                 if (contextUri != null) {
-                    core.remoteCommand(RemoteCommand.PlayContext(contextUri, tracks[start].uri.takeUnless { shuffle }))
+                    core.remoteCommand(RemoteCommand.PlayContext(contextUri, tracks[start].uri))
                 } else {
                     core.remoteCommand(RemoteCommand.PlayTracks(tracks.map { it.uri }, start.toUInt()))
                 }
+                // Shuffling again after the start makes the device draw a new
+                // order, instead of the one it kept for this playlist.
+                if (shuffle) core.remoteCommand(RemoteCommand.Shuffle(true))
             }
             app.refreshRemoteSoon()
             return
         }
+        // Shuffled, the start is the random song the caller picked (a new one
+        // each time) and librespot shuffles the rest with a fresh seed.
         command {
             if (contextUri != null) {
-                core.playContext(contextUri, tracks[start].uri.takeUnless { shuffle }, shuffle)
+                core.playContext(contextUri, tracks[start].uri, shuffle)
             } else {
                 core.playTracks(tracks.map { it.uri }, start.toUInt(), shuffle)
             }
@@ -260,6 +265,8 @@ class AppActions(
     }
 
     override fun setShuffle(on: Boolean) {
+        // One shuffle mode: the player's toggle and the pages' shuffle buttons agree.
+        app.library.setShuffle(on)
         if (remote != null) return remoteCommand(RemoteCommand.Shuffle(on)) { it.copy(shuffle = on) }
         command { core.setShuffle(on) }
     }

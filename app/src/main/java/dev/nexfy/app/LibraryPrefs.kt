@@ -129,6 +129,16 @@ class LibraryPrefs(context: Context) {
     /** Download the next songs of the queue ahead, on Wi-Fi. */
     val prefetchQueue: StateFlow<Boolean> = _prefetchQueue
 
+    private val _shuffle = MutableStateFlow(prefs.getBoolean(SHUFFLE, false))
+
+    /** Shuffle mode, as the shuffle buttons show it: "Tocar" plays shuffled while it is on. */
+    val shuffle: StateFlow<Boolean> = _shuffle
+
+    fun setShuffle(on: Boolean) {
+        _shuffle.value = on
+        prefs.edit { putBoolean(SHUFFLE, on) }
+    }
+
     private val _coverAccent = MutableStateFlow(prefs.getBoolean(COVER_ACCENT, true))
 
     /** The accent takes the colour of the playing song's cover ("Cor da música"). */
@@ -279,6 +289,7 @@ class LibraryPrefs(context: Context) {
         const val KEPT = "kept"
         const val PREFETCH_QUEUE = "prefetch_queue"
         const val COVER_ACCENT = "cover_accent"
+        const val SHUFFLE = "shuffle"
         const val SHELF = "shelf"
         const val LYRICS_OPEN = "lyrics_open"
         const val LIBRARY_GRID = "library_grid"

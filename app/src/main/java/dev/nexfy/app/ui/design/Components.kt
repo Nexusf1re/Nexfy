@@ -237,8 +237,20 @@ fun RoundIconButton(
 
 /** Round glass button for use over artwork. */
 @Composable
-fun GlassIcon(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true, light: Boolean = false) {
-    val tint = if (light) MaterialTheme.colorScheme.onBackground else Color.White
+fun GlassIcon(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    light: Boolean = false,
+    /** A toggle that is on: the icon takes the accent. */
+    selected: Boolean = false,
+) {
+    val tint = when {
+        selected -> dev.nexfy.app.ui.theme.accentColor()
+        light -> MaterialTheme.colorScheme.onBackground
+        else -> Color.White
+    }
     GlassBox(Modifier.size(48.dp), CircleShape, dark = !light || MaterialTheme.colorScheme.isDark) {
         Box(
             Modifier.matchParentSize().clickable(enabled = enabled, onClick = onClick),
