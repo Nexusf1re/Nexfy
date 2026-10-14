@@ -4,7 +4,7 @@
     <!-- Dark from the first frame: the splash and the window match the app, no white flash. -->
     <style name="Theme.Nexfy" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/nexfy_black</item>
-        <item name="android:windowSplashScreenBackground">@color/nexfy_black</item>
+        <item name="android:windowSplashScreenBackground">@color/nexfy_splash</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
     </style>
 </resources>
