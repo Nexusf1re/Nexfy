@@ -1,4 +1,15 @@
 <resources>
     <string name="app_name">Nexfy</string>
-    <string name="widget_description">Capa e controles da música que está tocando</string>
+    <!-- Widget picker: one name and description per widget. -->
+    <string name="widget_bar_label">Nexfy · Barra</string>
+    <string name="widget_description">Capa, música e controles numa barra compacta</string>
+    <string name="widget_cover_label">Nexfy · Capa</string>
+    <string name="widget_cover_description">A capa da música tocando em destaque, com o botão de tocar e pausar</string>
+    <string name="widget_player_label">Nexfy · Player</string>
+    <string name="widget_player_description">Capa grande, progresso e controles, com o aparelho onde a música está tocando</string>
+    <string name="widget_pill_label">Nexfy · Pílula</string>
+    <string name="widget_pill_description">Uma pílula discreta com a capa, a música e o botão de tocar</string>
+    <!-- The sample song in the picker previews. -->
+    <string name="widget_preview_title">Sua música</string>
+    <string name="widget_preview_artist">Artista</string>
 </resources>
