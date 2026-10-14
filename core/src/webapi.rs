@@ -1349,6 +1349,36 @@ impl WebApi {
     }
 }
 
+
+impl WebApi {
+    /// The cached copy of a read, however old, without asking Spotify.
+    fn peek<T: DeserializeOwned>(&self, path: &str) -> Option<T> {
+        let (_, value): (u64, serde_json::Value) =
+            serde_json::from_slice(&std::fs::read(self.cache_file(path)).ok()?).ok()?;
+        serde_json::from_value(value).ok()
+    }
+
+    /// A playlist's details as last read from the Web API, if ever (for
+    /// what only it knows, like how many people saved it).
+    pub fn cached_playlist_meta(&self, id: &str) -> Option<Playlist> {
+        self.peek::<RawPlaylist>(&playlist_meta_path(id)).map(RawPlaylist::into_playlist)
+    }
+
+    /// Where the user stopped in each episode, as the Web API last said
+    /// (the session's metadata does not carry it).
+    pub fn cached_show_progress(&self, id: &str) -> std::collections::HashMap<String, (u32, bool)> {
+        self.peek::<Paging<RawEpisode>>(&format!("/shows/{id}/episodes?limit=50&market=from_token"))
+            .map(|page| {
+                page.items
+                    .into_iter()
+                    .flatten()
+                    .map(|raw| raw.into_episode(None))
+                    .map(|e| (e.uri, (e.resume_position_ms, e.fully_played)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

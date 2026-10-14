@@ -309,30 +309,81 @@ impl NexfyCore {
         self.inner.web.sign_out(app).await
     }
 
-    /// `refresh` skips the cache; otherwise recent results come from disk.
+    /// The session's profile service first (no Web API quota), the Web API
+    /// as the fallback. `refresh` skips the cache.
     pub async fn profile(&self, refresh: bool) -> Result<Profile, CoreError> {
-        self.inner.web.profile(refresh).await.map_err(web_error)
+        const KEY: &str = "session:profile";
+        let web = &self.inner.web;
+        if !refresh {
+            if let Some(profile) = web.load_local::<Profile>(KEY, std::time::Duration::from_secs(86_400)) {
+                return Ok(profile);
+            }
+        }
+        let read = async {
+            let session = self.inner.live_session().await?;
+            let me = session.username();
+            let face = session_reads::user(&session, &me).await.map_err(web_error)?;
+            let product = session.get_user_attribute("type").unwrap_or_default();
+            Ok::<_, CoreError>(Profile { id: me, display_name: face.name, image_url: face.image_url, product })
+        };
+        match read.await {
+            Ok(profile) => {
+                web.save_local(KEY, &profile);
+                Ok(profile)
+            }
+            Err(error) => {
+                log::info!("profile via Web API: {error}");
+                web.profile(refresh).await.map_err(web_error)
+            }
+        }
     }
 
-    /// Web API first; when it cannot answer (its daily quota, no app signed
-    /// in) the session's rootlist, which has the same playlists.
+    /// The session's rootlist first (no Web API quota), with the owners'
+    /// names from the profile service; the Web API as the fallback.
     pub async fn my_playlists(&self, refresh: bool) -> Result<Vec<Playlist>, CoreError> {
         const KEY: &str = "session:rootlist";
         let web = &self.inner.web;
-        match web.my_playlists(refresh).await {
-            Ok(playlists) => Ok(playlists),
-            Err(error) => {
-                log::info!("playlists via session: {error:#}");
-                let read = async {
-                    let session = self.inner.live_session().await?;
-                    session_reads::rootlist(&session).await.map_err(web_error)
-                };
-                match read.await {
-                    Ok(playlists) if !playlists.is_empty() => {
-                        web.save_local(KEY, &playlists);
-                        Ok(playlists)
+        if !refresh {
+            if let Some(fresh) = web.load_local::<Vec<Playlist>>(KEY, std::time::Duration::from_secs(600)) {
+                return Ok(fresh);
+            }
+        }
+        let read = async {
+            let session = self.inner.live_session().await?;
+            session_reads::rootlist(&session).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(mut playlists) if !playlists.is_empty() => {
+                let me = self.inner.with_session(|s| s.username()).unwrap_or_default();
+                let owners: Vec<String> = playlists
+                    .iter()
+                    .map(|p| p.owner_id.clone())
+                    .filter(|owner| !owner.is_empty() && *owner != me)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let names: HashMap<String, String> =
+                    self.users(owners).await.into_iter().map(|face| (face.id, face.name)).collect();
+                let my_name = self.profile(false).await.map(|p| p.display_name).ok();
+                for playlist in &mut playlists {
+                    if playlist.owner_id == me {
+                        if let Some(name) = &my_name {
+                            playlist.owner = name.clone();
+                        }
+                    } else if let Some(name) = names.get(&playlist.owner_id) {
+                        playlist.owner = name.clone();
                     }
-                    _ => match web.load_local::<Vec<Playlist>>(KEY, std::time::Duration::from_secs(30 * 86_400)) {
+                }
+                web.save_local(KEY, &playlists);
+                Ok(playlists)
+            }
+            other => {
+                if let Err(error) = &other {
+                    log::info!("playlists via Web API: {error}");
+                }
+                match web.my_playlists(refresh).await {
+                    Ok(playlists) => Ok(playlists),
+                    Err(error) => match web.load_local::<Vec<Playlist>>(KEY, std::time::Duration::from_secs(30 * 86_400)) {
                         Some(saved) => Ok(saved),
                         None => match error.downcast::<webapi::Cut<Playlist>>() {
                             Ok(cut) => Ok(cut.0),
@@ -344,66 +395,124 @@ impl NexfyCore {
         }
     }
 
-    /// Web API first; playlists it refuses (other people's, for
-    /// development-mode apps) are read over the playback session.
+    /// The playlist service first (no Web API quota): its rows in one
+    /// request, the songs from the track cache. The Web API is the fallback.
     pub async fn playlist(&self, id: String, refresh: bool) -> Result<PlaylistDetail, CoreError> {
         let web = &self.inner.web;
-        let meta = web.playlist_meta(&id, refresh).await;
-        let tracks = match web.playlist_items(&id, refresh).await {
-            Ok(tracks) => tracks,
-            Err(error) => {
-                log::info!("playlist {id} via session: {error:#}");
-                let key = format!("session:playlist2:{id}");
-                let ttl = std::time::Duration::from_secs(6 * 3600);
-                match web.load_local::<Vec<Track>>(&key, ttl).filter(|_| !refresh) {
-                    Some(tracks) => tracks,
-                    None => {
-                        self.inner.ensure_session().await?;
-                        let session = self
-                            .inner
-                            .with_session(Session::clone)
-                            .ok_or_else(|| CoreError::Session("não conectado".into()))?;
-                        let data = match session_reads::playlist(&session, &id).await {
-                            Ok(data) => {
-                                web.save_local(&key, &data.tracks);
-                                data
-                            }
-                            // Neither read whole: the part the Web API gave.
-                            Err(read_error) => match error.downcast::<webapi::Cut<Track>>() {
-                                Ok(cut) => session_reads::SessionPlaylistData {
-                                    name: String::new(),
-                                    description: String::new(),
-                                    tracks: cut.0,
-                                },
-                                Err(_) => return Err(web_error(read_error)),
-                            },
-                        };
-                        if meta.is_err() {
-                            return Ok(PlaylistDetail {
-                                playlist: Playlist {
-                                    id: id.clone(),
-                                    uri: format!("spotify:playlist:{id}"),
-                                    name: data.name,
-                                    description: data.description,
-                                    owner: String::new(),
-                                    owner_id: String::new(),
-                                    image_url: data.tracks.first().and_then(|t| t.image_url.clone()),
-                                    track_count: data.tracks.len() as u32,
-                                    followers: 0,
-                                },
-                                tracks: data.tracks,
-                            });
-                        }
-                        data.tracks
-                    }
-                }
+        let key = format!("session:playlist3:{id}");
+        if !refresh {
+            if let Some(fresh) = web.load_local::<PlaylistDetail>(&key, std::time::Duration::from_secs(20 * 60)) {
+                return Ok(fresh);
             }
+        }
+        match self.session_playlist(&id).await {
+            Ok(detail) => {
+                web.save_local(&key, &detail);
+                Ok(detail)
+            }
+            Err(error) => {
+                log::info!("playlist {id} via Web API: {error}");
+                if let Some(saved) = web.load_local::<PlaylistDetail>(&key, std::time::Duration::from_secs(30 * 86_400)) {
+                    return Ok(saved);
+                }
+                self.web_playlist(&id, refresh).await
+            }
+        }
+    }
+
+    async fn session_playlist(&self, id: &str) -> Result<PlaylistDetail, CoreError> {
+        let session = self.inner.live_session().await?;
+        let list = session_reads::playlist_entries(&session, id).await.map_err(web_error)?;
+        let uris: Vec<String> = list
+            .entries
+            .iter()
+            .map(|entry| entry.uri.clone())
+            .filter(|uri| uri.starts_with("spotify:track:"))
+            .collect();
+        let known: HashMap<String, Track> =
+            self.tracks_info(uris).await?.into_iter().map(|track| (track.uri.clone(), track)).collect();
+        let tracks: Vec<Track> = list
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                known.get(&entry.uri).map(|track| Track {
+                    added_at_ms: entry.added_at_ms,
+                    added_by: entry.added_by.clone(),
+                    ..track.clone()
+                })
+            })
+            .collect();
+        let me = session.username();
+        let owner = if list.owner_username.is_empty() {
+            String::new()
+        } else if list.owner_username == me {
+            self.profile(false).await.map(|p| p.display_name).unwrap_or_else(|_| me.clone())
+        } else {
+            self.users(vec![list.owner_username.clone()])
+                .await
+                .into_iter()
+                .next()
+                .map(|face| face.name)
+                .unwrap_or_else(|| list.owner_username.clone())
         };
-        let mut playlist = meta.map_err(web_error)?;
+        let followers = self.inner.web.cached_playlist_meta(id).map(|p| p.followers).unwrap_or_default();
+        let image_url = list.image_url.or_else(|| tracks.first().and_then(|t| t.image_url.clone()));
+        Ok(PlaylistDetail {
+            playlist: Playlist {
+                id: id.to_owned(),
+                uri: format!("spotify:playlist:{id}"),
+                name: list.name,
+                description: list.description,
+                owner,
+                owner_id: list.owner_username,
+                image_url,
+                track_count: tracks.len() as u32,
+                followers,
+            },
+            tracks,
+        })
+    }
+
+    /// The Web API read of a playlist, for when the session cannot answer.
+    async fn web_playlist(&self, id: &str, refresh: bool) -> Result<PlaylistDetail, CoreError> {
+        let web = &self.inner.web;
+        let meta = web.playlist_meta(id, refresh).await;
+        let tracks = match web.playlist_items(id, refresh).await {
+            Ok(tracks) => tracks,
+            Err(error) => match error.downcast::<webapi::Cut<Track>>() {
+                Ok(cut) => cut.0,
+                Err(error) => return Err(web_error(error)),
+            },
+        };
+        let mut playlist = match meta {
+            Ok(playlist) => playlist,
+            Err(error) => match self.known_playlist(id).await {
+                Some(known) => known,
+                None => return Err(web_error(error)),
+            },
+        };
         if playlist.image_url.is_none() {
             playlist.image_url = tracks.first().and_then(|t| t.image_url.clone());
         }
+        if playlist.track_count == 0 {
+            playlist.track_count = tracks.len() as u32;
+        }
         Ok(PlaylistDetail { playlist, tracks })
+    }
+
+    /// A playlist's details without the Web API: the library's rootlist
+    /// copy, else its attributes over the session.
+    async fn known_playlist(&self, id: &str) -> Option<Playlist> {
+        let saved = self
+            .inner
+            .web
+            .load_local::<Vec<Playlist>>("session:rootlist", std::time::Duration::from_secs(30 * 86_400))
+            .and_then(|all| all.into_iter().find(|p| p.id == id));
+        if saved.is_some() {
+            return saved;
+        }
+        let session = self.inner.live_session().await.ok()?;
+        session_reads::playlist_info(&session, id).await.ok()
     }
 
     pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage, CoreError> {
@@ -414,8 +523,30 @@ impl NexfyCore {
         self.inner.web.saved_albums(refresh).await.map_err(web_error)
     }
 
+    /// Over the session first (no Web API quota; kept a week, an album does
+    /// not change); the Web API as the fallback.
     pub async fn album(&self, id: String, refresh: bool) -> Result<AlbumDetail, CoreError> {
-        self.inner.web.album(&id, refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let key = format!("session:album:{id}");
+        if !refresh {
+            if let Some(detail) = web.load_local::<AlbumDetail>(&key, std::time::Duration::from_secs(7 * 86_400)) {
+                return Ok(detail);
+            }
+        }
+        let read = async {
+            let session = self.inner.live_session().await?;
+            session_reads::album(&session, &id).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(detail) => {
+                web.save_local(&key, &detail);
+                Ok(detail)
+            }
+            Err(error) => {
+                log::info!("album {id} via Web API: {error}");
+                web.album(&id, refresh).await.map_err(web_error)
+            }
+        }
     }
 
     pub async fn saved_shows(&self, refresh: bool) -> Result<Vec<Show>, CoreError> {
@@ -423,27 +554,66 @@ impl NexfyCore {
     }
 
     /// A podcast and its latest 50 episodes, newest first.
+    /// Over the session first (no Web API quota; kept an hour), with the
+    /// resume points the Web API last gave; the Web API as the fallback.
     pub async fn show(&self, id: String, refresh: bool) -> Result<ShowDetail, CoreError> {
-        self.inner.web.show(&id, refresh).await.map_err(web_error)
+        let web = &self.inner.web;
+        let key = format!("session:show:{id}");
+        let fresh = if refresh {
+            None
+        } else {
+            web.load_local::<ShowDetail>(&key, std::time::Duration::from_secs(3600))
+        };
+        let read = async {
+            if let Some(detail) = fresh {
+                return Ok(detail);
+            }
+            let session = self.inner.live_session().await?;
+            let detail = session_reads::show(&session, &id).await.map_err(web_error)?;
+            web.save_local(&key, &detail);
+            Ok::<_, CoreError>(detail)
+        };
+        match read.await {
+            Ok(mut detail) => {
+                let progress = web.cached_show_progress(&id);
+                for episode in &mut detail.episodes {
+                    if let Some((at, done)) = progress.get(&episode.uri) {
+                        episode.resume_position_ms = *at;
+                        episode.fully_played = *done;
+                    }
+                }
+                Ok(detail)
+            }
+            Err(error) => {
+                log::info!("show {id} via Web API: {error}");
+                web.show(&id, refresh).await.map_err(web_error)
+            }
+        }
     }
 
-    /// Web API first; Spotify refuses development-mode apps an artist's top
-    /// tracks, so the page then comes from the session (cached a day).
+    /// Over the session first (no Web API quota, and Spotify refuses
+    /// development-mode apps an artist's top tracks; cached a day); the
+    /// Web API as the fallback.
     pub async fn artist(&self, id: String, refresh: bool) -> Result<ArtistDetail, CoreError> {
         let web = &self.inner.web;
-        match web.artist(&id, refresh).await {
-            Ok(detail) => Ok(detail),
-            Err(error) => {
-                log::info!("artist {id} via session: {error:#}");
-                let key = format!("session:artist:{id}");
-                let ttl = std::time::Duration::from_secs(86_400);
-                if let Some(detail) = web.load_local::<ArtistDetail>(&key, ttl).filter(|_| !refresh) {
-                    return Ok(detail);
-                }
-                let session = self.inner.live_session().await?;
-                let detail = session_reads::artist(&session, &id).await.map_err(web_error)?;
+        let key = format!("session:artist:{id}");
+        if !refresh {
+            if let Some(detail) = web.load_local::<ArtistDetail>(&key, std::time::Duration::from_secs(86_400)) {
+                return Ok(detail);
+            }
+        }
+        let read = async {
+            let session = self.inner.live_session().await?;
+            session_reads::artist(&session, &id).await.map_err(web_error)
+        };
+        match read.await {
+            Ok(detail) => {
                 web.save_local(&key, &detail);
                 Ok(detail)
+            }
+            Err(error) => {
+                log::info!("artist {id} via Web API: {error}");
+                web.artist(&id, refresh).await.map_err(web_error)
             }
         }
     }
@@ -1254,7 +1424,7 @@ fn parse_track(input: &str) -> Result<SpotifyUri, CoreError> {
 }
 
 /// Most songs whose metadata is kept for the queue; past it the cache starts over.
-const TRACK_CACHE_MAX: usize = 3000;
+const TRACK_CACHE_MAX: usize = 20_000;
 
 /// Queue metadata kept on disk, so the queue shows complete right after a restart.
 fn load_track_cache(dir: &std::path::Path) -> HashMap<String, Track> {

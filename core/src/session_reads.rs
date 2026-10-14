@@ -20,12 +20,6 @@ const MAX_TRACKS: usize = 2000;
 /// Track metadata requests in flight at once.
 const CONCURRENCY: usize = 16;
 
-pub struct SessionPlaylistData {
-    pub name: String,
-    pub description: String,
-    pub tracks: Vec<Track>,
-}
-
 fn cover_url(file_id: &librespot_core::FileId) -> String {
     format!("https://i.scdn.co/image/{}", file_id.to_base16())
 }
@@ -94,40 +88,6 @@ pub async fn tracks(session: &Session, uris: &[String]) -> Vec<Track> {
         .filter_map(|result| async move { result.ok() })
         .collect()
         .await
-}
-
-pub async fn playlist(session: &Session, id: &str) -> Result<SessionPlaylistData> {
-    let uri = SpotifyUri::from_uri(&format!("spotify:playlist:{id}")).map_err(|e| anyhow!("{e}"))?;
-    let playlist = SessionPlaylist::get(session, &uri).await?;
-    // Each track with when and by whom it was added to the playlist.
-    let items: Vec<(SpotifyUri, i64, String)> = playlist
-        .contents
-        .items
-        .iter()
-        .filter(|item| matches!(item.id, SpotifyUri::Track { .. }))
-        .take(MAX_TRACKS)
-        .map(|item| (item.id.clone(), item.attributes.timestamp.as_timestamp_ms(), item.attributes.added_by.clone()))
-        .collect();
-
-    // Keep playlist order; a track that fails to load is left out.
-    let tracks = stream::iter(items)
-        .map(|(uri, added, by)| async move { (SessionTrack::get(session, &uri).await, added, by) })
-        .buffered(CONCURRENCY)
-        .filter_map(|(result, added, by)| async move {
-            result.ok().map(|track| Track {
-                added_at_ms: Some(added).filter(|ms| *ms > 0),
-                added_by: Some(by).filter(|by| !by.is_empty()),
-                ..to_track(track, false)
-            })
-        })
-        .collect::<Vec<_>>()
-        .await;
-
-    Ok(SessionPlaylistData {
-        name: playlist.attributes.name.clone(),
-        description: playlist.attributes.description.clone(),
-        tracks,
-    })
 }
 
 /// Most releases shown on an artist page read through the session.
@@ -359,4 +319,158 @@ pub async fn rootlist(session: &Session) -> Result<Vec<crate::webapi::Playlist>>
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A playlist's name, description, cover and size, without its songs: one
+/// request, for a page header when the Web API cannot answer.
+pub async fn playlist_info(session: &Session, id: &str) -> Result<crate::webapi::Playlist> {
+    let uri = SpotifyUri::from_uri(&format!("spotify:playlist:{id}")).map_err(|e| anyhow!("{e}"))?;
+    let playlist = SessionPlaylist::get(session, &uri).await?;
+    Ok(crate::webapi::Playlist {
+        id: id.to_owned(),
+        uri: format!("spotify:playlist:{id}"),
+        name: playlist.attributes.name.clone(),
+        description: playlist.attributes.description.clone(),
+        // The parsed playlist drops its owner; the header then shows none.
+        owner: String::new(),
+        owner_id: String::new(),
+        image_url: playlist
+            .attributes
+            .picture_sizes
+            .iter()
+            .find(|size| size.target_name == "default")
+            .or_else(|| playlist.attributes.picture_sizes.iter().next())
+            .map(|size| size.url.clone())
+            .filter(|url| !url.is_empty()),
+        track_count: playlist.contents.items.len() as u32,
+        followers: 0,
+    })
+}
+
+/// An album page over the session, for when the Web API cannot answer.
+pub async fn album(session: &Session, id: &str) -> Result<crate::webapi::AlbumDetail> {
+    let uri = SpotifyUri::from_uri(&format!("spotify:album:{id}")).map_err(|e| anyhow!("{e}"))?;
+    let album = SessionAlbum::get(session, &uri).await?;
+    let uris: Vec<String> = album.discs.iter().flat_map(|disc| disc.tracks.iter().map(|t| t.to_uri())).collect();
+    let tracks = tracks(session, &uris).await;
+    Ok(crate::webapi::AlbumDetail { album: session_album(&album), tracks })
+}
+
+/// One row of a playlist as the playlist service lists it.
+pub struct PlaylistEntry {
+    pub uri: String,
+    pub added_at_ms: Option<i64>,
+    pub added_by: Option<String>,
+}
+
+/// A playlist's header and rows from the playlist service, without the
+/// songs' metadata (the caller resolves it from its track cache).
+pub struct PlaylistEntries {
+    pub name: String,
+    pub description: String,
+    pub owner_username: String,
+    pub image_url: Option<String>,
+    pub entries: Vec<PlaylistEntry>,
+}
+
+/// Rows asked for per request; the service pages long playlists.
+const PLAYLIST_PAGE: usize = 500;
+
+pub async fn playlist_entries(session: &Session, id: &str) -> Result<PlaylistEntries> {
+    use protobuf::Message;
+    let spotify_id = librespot_core::SpotifyId::from_base62(id).map_err(|e| anyhow!("{e}"))?;
+    let mut header: Option<PlaylistEntries> = None;
+    let mut entries = Vec::new();
+    loop {
+        let bytes = session.spclient().get_playlist_range(&spotify_id, entries.len(), PLAYLIST_PAGE).await?;
+        let list = librespot_protocol::playlist4_external::SelectedListContent::parse_from_bytes(&bytes)?;
+        let total = list.length().max(0) as usize;
+        if header.is_none() {
+            let attributes = list.attributes.get_or_default();
+            header = Some(PlaylistEntries {
+                name: attributes.name().to_owned(),
+                description: attributes.description().to_owned(),
+                owner_username: list.owner_username().to_owned(),
+                image_url: list_image(attributes),
+                entries: Vec::new(),
+            });
+        }
+        let page = list.contents.get_or_default();
+        let before = entries.len();
+        for item in &page.items {
+            let attributes = item.attributes.get_or_default();
+            entries.push(PlaylistEntry {
+                uri: item.uri().to_owned(),
+                added_at_ms: Some(attributes.timestamp()).filter(|ms| *ms > 0),
+                added_by: Some(attributes.added_by().to_owned()).filter(|by| !by.is_empty()),
+            });
+        }
+        if entries.len() >= total || entries.len() == before || entries.len() >= MAX_TRACKS {
+            break;
+        }
+    }
+    let mut playlist = header.ok_or_else(|| anyhow!("playlist vazia"))?;
+    playlist.entries = entries;
+    Ok(playlist)
+}
+
+/// A list's cover: its picture sizes (custom or mosaic), else the picture id.
+fn list_image(attributes: &librespot_protocol::playlist4_external::ListAttributes) -> Option<String> {
+    attributes
+        .picture_size
+        .iter()
+        .find(|size| size.target_name() == "default")
+        .or_else(|| attributes.picture_size.first())
+        .map(|size| size.url().to_owned())
+        .filter(|url| !url.is_empty())
+        .or_else(|| {
+            (!attributes.picture().is_empty()).then(|| format!("https://i.scdn.co/image/{}", hex(attributes.picture())))
+        })
+}
+
+/// Episodes a show page lists.
+const SHOW_EPISODES: usize = 50;
+
+/// A podcast and its latest episodes over the session. Resume points are
+/// not in the metadata (the caller adds what the Web API last said).
+pub async fn show(session: &Session, id: &str) -> Result<crate::webapi::ShowDetail> {
+    let uri = SpotifyUri::from_uri(&format!("spotify:show:{id}")).map_err(|e| anyhow!("{e}"))?;
+    let show = librespot_metadata::Show::get(session, &uri).await?;
+    let image = show.covers.iter().max_by_key(|image| image.width).map(|image| cover_url(&image.id));
+    let uris: Vec<SpotifyUri> = show.episodes.iter().take(SHOW_EPISODES).cloned().collect();
+    let episodes: Vec<crate::webapi::Episode> = stream::iter(uris)
+        .map(|uri| async move { librespot_metadata::Episode::get(session, &uri).await })
+        .buffered(CONCURRENCY)
+        .filter_map(|result| {
+            let image = image.clone();
+            async move {
+                let episode = result.ok()?;
+                let description: String = episode.description.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
+                Some(crate::webapi::Episode {
+                    uri: episode.id.to_uri(),
+                    id: episode.id.to_id(),
+                    title: episode.name.clone(),
+                    description,
+                    image_url: episode.covers.iter().max_by_key(|image| image.width).map(|image| cover_url(&image.id)).or(image),
+                    duration_ms: episode.duration.max(0) as u32,
+                    release_date: episode.publish_time.as_utc().date().to_string(),
+                    resume_position_ms: 0,
+                    fully_played: false,
+                    playable: !episode.audio.is_empty(),
+                })
+            }
+        })
+        .collect()
+        .await;
+    Ok(crate::webapi::ShowDetail {
+        show: crate::webapi::Show {
+            id: id.to_owned(),
+            uri: format!("spotify:show:{id}"),
+            name: show.name.clone(),
+            publisher: show.publisher.clone(),
+            image_url: image,
+            episode_count: show.episodes.len() as u32,
+        },
+        episodes,
+    })
 }
