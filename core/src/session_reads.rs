@@ -26,7 +26,7 @@ pub struct SessionPlaylistData {
     pub tracks: Vec<Track>,
 }
 
-fn cover_url(file_id: &librespot_core::FileId) -> String {
+pub(crate) fn cover_url(file_id: &librespot_core::FileId) -> String {
     format!("https://i.scdn.co/image/{}", file_id.to_base16())
 }
 
@@ -242,7 +242,7 @@ pub async fn releases(session: &Session, artist_ids: &[String], days: i64, limit
         .collect()
 }
 
-fn session_album(album: &SessionAlbum) -> Album {
+pub(crate) fn session_album(album: &SessionAlbum) -> Album {
     Album {
         id: album.id.to_id(),
         uri: album.id.to_uri(),

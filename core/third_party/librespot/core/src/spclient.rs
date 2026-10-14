@@ -782,6 +782,29 @@ impl SpClient {
             .await
     }
 
+    /// A call to the collection service (liked songs, saved albums and
+    /// shows) as Spotify's own clients make it: no Web API quota involved.
+    /// `content_type` is the media type of the body and of the answer.
+    pub async fn collection_request<M: Message + MessageFull>(
+        &self,
+        endpoint: &str,
+        content_type: &'static str,
+        message: &M,
+    ) -> SpClientResult {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+        headers.insert(ACCEPT, HeaderValue::from_static(content_type));
+        let body = message.write_to_bytes()?;
+        self.request_with_options(
+            &Method::POST,
+            endpoint,
+            Some(headers),
+            Some(&body),
+            &NO_METRICS_AND_SALT,
+        )
+        .await
+    }
+
     // TODO: Seen-in-the-wild but unimplemented endpoints
     // - /presence-view/v1/buddylist
 
