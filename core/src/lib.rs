@@ -1267,6 +1267,14 @@ impl Inner {
 
     /// A connected session, reconnecting first if it dropped.
     async fn live_session(&self) -> Result<Session, CoreError> {
+        // At launch the screens ask before the saved login reconnects:
+        // wait for it briefly rather than fall back to the Web API.
+        for _ in 0..40 {
+            if self.connected.lock().unwrap().is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
         self.ensure_session().await?;
         self.with_session(Session::clone)
             .ok_or_else(|| CoreError::Session("não conectado".into()))
