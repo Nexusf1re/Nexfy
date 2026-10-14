@@ -411,8 +411,8 @@ impl NexfyCore {
         self.inner.web.create_playlist(&name, &description).await.map_err(web_error)
     }
 
-    pub async fn add_to_playlist(&self, id: String, uris: Vec<String>) -> Result<(), CoreError> {
-        self.inner.web.add_to_playlist(&id, &uris).await.map_err(web_error)
+    pub async fn add_to_playlist(&self, id: String, uris: Vec<String>, position: Option<u32>) -> Result<(), CoreError> {
+        self.inner.web.add_to_playlist(&id, &uris, position).await.map_err(web_error)
     }
 
     pub async fn remove_from_playlist(&self, id: String, uris: Vec<String>) -> Result<(), CoreError> {

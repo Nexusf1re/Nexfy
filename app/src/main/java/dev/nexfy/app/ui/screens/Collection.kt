@@ -200,7 +200,7 @@ fun CollectionScreen(
     // A filtered or re-sorted view plays as an explicit list, not as the context.
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
     var menuFor by remember { mutableStateOf<Track?>(null) }
-    menuFor?.let { TrackMenu(it, actions, ownPlaylist) { menuFor = null } }
+    menuFor?.let { t -> TrackMenu(t, actions, ownPlaylist, all.indexOf(t).takeIf { it >= 0 }) { menuFor = null } }
     // Who added each song, shown only where more than one person adds.
     val contributors = remember(all, all.size) { all.mapNotNull { it.addedBy }.distinct() }
     var faces by remember(contributors) { mutableStateOf(contributors.mapNotNull { knownFaces[it] }.associateBy { it.id }) }

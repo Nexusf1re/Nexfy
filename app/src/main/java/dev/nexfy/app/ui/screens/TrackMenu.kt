@@ -45,6 +45,8 @@ fun TrackMenu(
     actions: AppActions,
     /** The user's own playlist this menu was opened from: offers removing the song. */
     playlistId: String? = null,
+    /** Where the song is in that playlist, so removing it can be undone in place. */
+    position: Int? = null,
     onDismiss: () -> Unit,
 ) {
     var adding by remember { mutableStateOf(false) }
@@ -70,7 +72,7 @@ fun TrackMenu(
             MenuAction(Icons.Rounded.LibraryAdd, "Adicionar à playlist") { adding = true }
             playlistId?.let { id ->
                 MenuAction(Icons.Rounded.RemoveCircleOutline, "Remover desta playlist") {
-                    actions.app.edits.removeFrom(id, track.uri)
+                    actions.app.edits.removeFrom(id, track.uri, position)
                     onDismiss()
                 }
             }

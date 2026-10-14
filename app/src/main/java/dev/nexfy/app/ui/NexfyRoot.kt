@@ -395,6 +395,11 @@ fun NexfyRoot(
             )
 
             PlayerSheet(snapshot, actions)
+            NoticeBar(
+                app.edits,
+                Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace - 16.dp),
+            )
             if (actions.showDevices.value) DevicesSheet(snapshot, actions) { actions.showDevices.value = false }
         }
     }

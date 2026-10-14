@@ -1086,9 +1086,13 @@ impl WebApi {
         Ok(raw.into_playlist())
     }
 
-    pub async fn add_to_playlist(self: &Arc<Self>, id: &str, uris: &[String]) -> Result<()> {
-        for chunk in uris.chunks(PLAYLIST_CHUNK) {
-            let body = serde_json::json!({ "uris": chunk });
+    /// At the end, or from `position` on (undoing a removal puts a song back).
+    pub async fn add_to_playlist(self: &Arc<Self>, id: &str, uris: &[String], position: Option<u32>) -> Result<()> {
+        for (i, chunk) in uris.chunks(PLAYLIST_CHUNK).enumerate() {
+            let mut body = serde_json::json!({ "uris": chunk });
+            if let Some(at) = position {
+                body["position"] = (at as usize + i * PLAYLIST_CHUNK).into();
+            }
             self.write(reqwest::Method::POST, &format!("/playlists/{id}/items"), Some(body)).await?;
         }
         self.forget_playlist(id);
