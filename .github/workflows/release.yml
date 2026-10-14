@@ -16,6 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.NEXFY_KEYSTORE_BASE64 }}
+          NEXFY_KEYSTORE_PASSWORD: ${{ secrets.NEXFY_KEYSTORE_PASSWORD }}
+          NEXFY_KEY_ALIAS: ${{ secrets.NEXFY_KEY_ALIAS }}
+          NEXFY_KEY_PASSWORD: ${{ secrets.NEXFY_KEY_PASSWORD }}
+        run: |
+          for name in KEYSTORE_BASE64 NEXFY_KEYSTORE_PASSWORD NEXFY_KEY_ALIAS NEXFY_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Secret for $name is not set"; exit 1; fi
+          done
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/nexfy-release.jks"
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -35,11 +47,6 @@ jobs:
           workspaces: |
             core -> target
             core/uniffi-bindgen -> target
-
-      - name: Signing key
-        env:
-          KEYSTORE_BASE64: ${{ secrets.NEXFY_KEYSTORE_BASE64 }}
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/nexfy-release.jks"
 
       - name: Build APK
         env:
