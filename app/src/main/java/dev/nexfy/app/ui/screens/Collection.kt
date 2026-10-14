@@ -175,7 +175,11 @@ fun CollectionScreen(
         }
     }
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf(TrackSort.Original) }
+    // Each list keeps the order last chosen for it, across launches.
+    val library = actions.app.library
+    var sort by remember(source) {
+        mutableStateOf(source?.let(library::trackSort)?.let { saved -> TrackSort.entries.firstOrNull { it.name == saved } } ?: TrackSort.Original)
+    }
     LaunchedEffect(query.isNotBlank()) { onFiltering(query.isNotBlank()) }
     // What the list shows (and what plays from it), with each track's position in the original.
     // tracks.size: liked songs grow the same list instance page by page.
@@ -289,7 +293,10 @@ fun CollectionScreen(
                     item(key = "tools") { TrackToolsSkeleton() }
                 } else if (all.size > 1) {
                     item(key = "tools") {
-                        TrackTools(query, { query = it }, sort, { sort = it }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
+                        TrackTools(query, { query = it }, sort, { new ->
+                            sort = new
+                            source?.let { library.setTrackSort(it, new.name) }
+                        }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
                     }
                 }
                 if (loading) {

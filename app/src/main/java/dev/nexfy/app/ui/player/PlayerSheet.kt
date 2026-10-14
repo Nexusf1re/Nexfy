@@ -236,7 +236,9 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     // songs): keep the last one so the player and its lyrics stay open.
     val lastTrack = remember { arrayOfNulls<TrackInfo>(1) }
     s.track?.let { lastTrack[0] = it }
-    var showLyrics by rememberSaveable { mutableStateOf(false) }
+    // Lyrics open as they were left, across launches.
+    val library = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).library
+    var showLyrics by rememberSaveable { mutableStateOf(library.lyricsOpen) }
     var lyricsFull by rememberSaveable { mutableStateOf(false) }
     var playerOpen by remember { mutableStateOf(false) }
     dev.nexfy.app.ui.MetricsState("player", if (!playerOpen) null else if (lyricsFull) "lyrics-full" else if (showLyrics) "lyrics" else "open")
@@ -635,6 +637,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Spacer(Modifier.weight(1f))
                             ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
                                 showLyrics = !showLyrics
+                                library.lyricsOpen = showLyrics
                                 if (!showLyrics) lyricsFull = false
                             }
                         }

@@ -212,7 +212,7 @@ struct Inner {
     /// How this phone appears in Spotify's device list.
     device_name: String,
     pending_login: Mutex<Option<PendingLogin>>,
-    web: WebApi,
+    web: Arc<WebApi>,
     offline: offline::Offline,
     connected: Mutex<Option<Connected>>,
     queue: Mutex<QueueState>,
@@ -236,16 +236,17 @@ impl NexfyCore {
     #[uniffi::constructor]
     pub fn new(cache_dir: String, device_name: String) -> Arc<Self> {
         let cache_dir = PathBuf::from(cache_dir);
+        let tracks = load_track_cache(&cache_dir);
         Arc::new(Self {
             inner: Arc::new(Inner {
-                web: WebApi::new(&cache_dir),
+                web: Arc::new(WebApi::new(&cache_dir)),
                 offline: offline::Offline::new(&cache_dir),
                 cache_dir,
                 device_name,
                 pending_login: Mutex::new(None),
                 connected: Mutex::new(None),
                 queue: Mutex::new(QueueState::default()),
-                track_cache: Mutex::new(HashMap::new()),
+                track_cache: Mutex::new(tracks),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
                 duck: Arc::new(AtomicU64::new(1.0f64.to_bits())),
@@ -322,7 +323,7 @@ impl NexfyCore {
             Err(error) => {
                 log::info!("playlist {id} via session: {error:#}");
                 let key = format!("session:playlist:{id}");
-                let ttl = std::time::Duration::from_secs(600);
+                let ttl = std::time::Duration::from_secs(6 * 3600);
                 match web.load_local::<Vec<Track>>(&key, ttl).filter(|_| !refresh) {
                     Some(tracks) => tracks,
                     None => {
@@ -560,9 +561,13 @@ impl NexfyCore {
                 .ok_or_else(|| CoreError::Session("não conectado".into()))?;
             let fetched = session_reads::tracks(&session, &missing).await;
             let mut cache = self.inner.track_cache.lock().unwrap();
+            if cache.len() > TRACK_CACHE_MAX {
+                cache.clear();
+            }
             for track in fetched {
                 cache.insert(track.uri.clone(), track);
             }
+            save_track_cache(&self.inner.cache_dir, &cache);
         }
         let cache = self.inner.track_cache.lock().unwrap();
         Ok(uris.iter().filter_map(|uri| cache.get(uri).cloned()).collect())
@@ -960,4 +965,21 @@ fn parse_track(input: &str) -> Result<SpotifyUri, CoreError> {
     let id = SpotifyId::from_base62(id)
         .map_err(|_| CoreError::Playback(format!("faixa inválida: {input}")))?;
     Ok(SpotifyUri::Track { id })
+}
+
+/// Most songs whose metadata is kept for the queue; past it the cache starts over.
+const TRACK_CACHE_MAX: usize = 3000;
+
+/// Queue metadata kept on disk, so the queue shows complete right after a restart.
+fn load_track_cache(dir: &std::path::Path) -> HashMap<String, Track> {
+    std::fs::read(dir.join("tracks.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_track_cache(dir: &std::path::Path, cache: &HashMap<String, Track>) {
+    if let Ok(json) = serde_json::to_vec(cache) {
+        let _ = std::fs::write(dir.join("tracks.json"), json);
+    }
 }

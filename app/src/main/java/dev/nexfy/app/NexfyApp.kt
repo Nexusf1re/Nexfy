@@ -8,6 +8,9 @@ import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import okio.Path.Companion.toOkioPath
 import coil3.request.crossfade
 import androidx.core.content.ContextCompat
 import dev.nexfy.app.playback.Commands
@@ -56,7 +59,12 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
 
     /** Covers fade in as they load instead of popping over their placeholder. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
-        ImageLoader.Builder(context).crossfade(true).build()
+        ImageLoader.Builder(context)
+            .crossfade(true)
+            // Covers are revisited constantly: keep many in memory and on disk.
+            .memoryCache { MemoryCache.Builder().maxSizePercent(context, .25).build() }
+            .diskCache { DiskCache.Builder().directory(cacheDir.resolve("covers").toOkioPath()).maxSizeBytes(512L * 1024 * 1024).build() }
+            .build()
 
     override fun onCreate() {
         super.onCreate()

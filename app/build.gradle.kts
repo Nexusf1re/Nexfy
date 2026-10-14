@@ -66,8 +66,8 @@ tasks.named("preBuild") { dependsOn(generateUniffiBindings) }
 
 // Release signing: a keystore kept outside the repo, given as Gradle properties
 // (~/.gradle/gradle.properties) or environment variables (CI). Without one,
-// release builds are signed with the debug key.
-fun secret(name: String): String? = (findProperty(name) as String?) ?: System.getenv(name)
+// release builds are signed with the debug key (also with -PNEXFY_KEYSTORE=).
+fun secret(name: String): String? = ((findProperty(name) as String?) ?: System.getenv(name))?.takeIf { it.isNotBlank() }
 val releaseKeystore: String? = secret("NEXFY_KEYSTORE")
 
 android {

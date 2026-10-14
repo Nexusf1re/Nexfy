@@ -13,6 +13,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
@@ -420,6 +421,8 @@ enum Route {
 pub struct WebApi {
     dir: PathBuf,
     http: reqwest::Client,
+    /// Paths being fetched again in the background.
+    revalidating: std::sync::Mutex<std::collections::HashSet<String>>,
     shared: Mutex<GrantState>,
     personal: Mutex<GrantState>,
 }
@@ -440,6 +443,7 @@ impl WebApi {
         let personal = load("personal.json");
         Self {
             http: reqwest::Client::new(),
+            revalidating: Default::default(),
             shared: Mutex::new(shared),
             personal: Mutex::new(personal),
             dir,
@@ -463,7 +467,7 @@ impl WebApi {
         }
     }
 
-    pub async fn status(&self) -> WebStatus {
+    pub async fn status(self: &Arc<Self>) -> WebStatus {
         let shared = self.shared.lock().await;
         let personal = self.personal.lock().await;
         WebStatus {
@@ -475,7 +479,7 @@ impl WebApi {
     }
 
     /// Set or clear the personal app. A different id drops its sign-in.
-    pub async fn set_personal_client_id(&self, client_id: Option<String>) {
+    pub async fn set_personal_client_id(self: &Arc<Self>, client_id: Option<String>) {
         let client_id = client_id.map(|id| id.trim().to_owned()).unwrap_or_default();
         let mut personal = self.personal.lock().await;
         if personal.stored.client_id != client_id {
@@ -490,7 +494,7 @@ impl WebApi {
         }
     }
 
-    pub async fn login_grant(&self, app: WebApp) -> Result<auth::Grant> {
+    pub async fn login_grant(self: &Arc<Self>, app: WebApp) -> Result<auth::Grant> {
         let client_id = self.grant(app).lock().await.stored.client_id.clone();
         if client_id.is_empty() {
             bail!("informe o Client ID do app pessoal primeiro");
@@ -498,14 +502,14 @@ impl WebApi {
         Ok(auth::Grant::web(&client_id))
     }
 
-    pub async fn finish_login(&self, app: WebApp, token: auth::TokenResponse) {
+    pub async fn finish_login(self: &Arc<Self>, app: WebApp, token: auth::TokenResponse) {
         let mut grant = self.grant(app).lock().await;
         grant.stored.refresh_token = token.refresh_token;
         grant.access = Some((token.access_token, expiry(token.expires_in)));
         self.save(app, &grant.stored);
     }
 
-    pub async fn sign_out(&self, app: WebApp) {
+    pub async fn sign_out(self: &Arc<Self>, app: WebApp) {
         let mut grant = self.grant(app).lock().await;
         grant.stored.refresh_token = None;
         grant.access = None;
@@ -513,7 +517,7 @@ impl WebApi {
     }
 
     /// A valid access token for `app`, refreshing it when it expires soon.
-    async fn token(&self, app: WebApp, force_refresh: bool) -> Result<String> {
+    async fn token(self: &Arc<Self>, app: WebApp, force_refresh: bool) -> Result<String> {
         let mut grant = self.grant(app).lock().await;
         if !force_refresh {
             if let Some((token, expires)) = &grant.access {
@@ -536,7 +540,7 @@ impl WebApi {
         Ok(response.access_token)
     }
 
-    async fn signed_in(&self, app: WebApp) -> bool {
+    async fn signed_in(self: &Arc<Self>, app: WebApp) -> bool {
         let grant = self.grant(app).lock().await;
         !grant.stored.client_id.is_empty() && grant.stored.refresh_token.is_some()
     }
@@ -544,7 +548,7 @@ impl WebApi {
     // ------------------------------------------------------ requests --
 
     /// GET a path (or a full `next` URL) through the apps `route` allows.
-    async fn get_json(&self, path: &str, route: Route) -> Result<serde_json::Value> {
+    async fn get_json(self: &Arc<Self>, path: &str, route: Route) -> Result<serde_json::Value> {
         let apps: &[WebApp] = match route {
             Route::Personal => &[WebApp::Personal, WebApp::Shared],
             Route::Shared => &[WebApp::Shared],
@@ -565,7 +569,7 @@ impl WebApi {
         Err(last_error)
     }
 
-    async fn get_with(&self, app: WebApp, path: &str) -> Result<serde_json::Value> {
+    async fn get_with(self: &Arc<Self>, app: WebApp, path: &str) -> Result<serde_json::Value> {
         let url = if path.starts_with("https://") {
             path.to_owned()
         } else {
@@ -610,10 +614,11 @@ impl WebApi {
         }
     }
 
-    /// Cached GET: the cached copy when younger than `ttl` (unless
-    /// `refresh`), else the network, else a stale copy if one exists.
+    /// Cached GET, stale-while-revalidate: any cached copy answers at once
+    /// (unless `refresh`); one older than `ttl` is also fetched again in the
+    /// background for next time. Without a copy, the network answers.
     async fn cached<T: DeserializeOwned>(
-        &self,
+        self: &Arc<Self>,
         path: &str,
         route: Route,
         ttl: Duration,
@@ -624,7 +629,10 @@ impl WebApi {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         if let Some((saved, value)) = &cached {
-            if !refresh && now_secs().saturating_sub(*saved) < ttl.as_secs() {
+            if !refresh {
+                if now_secs().saturating_sub(*saved) >= ttl.as_secs() {
+                    self.revalidate(path.to_owned(), route, file.clone());
+                }
                 return Ok(serde_json::from_value(value.clone())?);
             }
         }
@@ -645,9 +653,29 @@ impl WebApi {
         }
     }
 
+    /// Fetch `path` again in the background and refresh its cached copy;
+    /// one fetch per path at a time.
+    fn revalidate(self: &Arc<Self>, path: String, route: Route, file: PathBuf) {
+        if !self.revalidating.lock().unwrap().insert(path.clone()) {
+            return;
+        }
+        let this = Arc::clone(self);
+        tokio::spawn(async move {
+            match this.get_json(&path, route).await {
+                Ok(value) => {
+                    if let Ok(bytes) = serde_json::to_vec(&(now_secs(), &value)) {
+                        let _ = std::fs::write(&file, bytes);
+                    }
+                }
+                Err(error) => log::info!("could not revalidate {path}: {error:#}"),
+            }
+            this.revalidating.lock().unwrap().remove(&path);
+        });
+    }
+
     /// Follow `next` links, appending items, up to [MAX_ITEMS].
     async fn all_pages<T: DeserializeOwned>(
-        &self,
+        self: &Arc<Self>,
         first: Paging<T>,
         route: Route,
     ) -> Result<(Vec<T>, u32)> {
@@ -673,7 +701,7 @@ impl WebApi {
 
     // ------------------------------------------------------- endpoints --
 
-    pub async fn profile(&self, refresh: bool) -> Result<Profile> {
+    pub async fn profile(self: &Arc<Self>, refresh: bool) -> Result<Profile> {
         let raw: RawProfile = self
             .cached("/me", Route::Personal, Duration::from_secs(86_400), refresh)
             .await?;
@@ -685,7 +713,7 @@ impl WebApi {
         })
     }
 
-    pub async fn my_playlists(&self, refresh: bool) -> Result<Vec<Playlist>> {
+    pub async fn my_playlists(self: &Arc<Self>, refresh: bool) -> Result<Vec<Playlist>> {
         let first: Paging<RawPlaylist> = self
             .cached("/me/playlists?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
@@ -694,7 +722,7 @@ impl WebApi {
         Ok(dedupe(playlists, |p: &Playlist| &p.id))
     }
 
-    pub async fn playlist_meta(&self, id: &str, refresh: bool) -> Result<Playlist> {
+    pub async fn playlist_meta(self: &Arc<Self>, id: &str, refresh: bool) -> Result<Playlist> {
         let raw: RawPlaylist = self
             .cached(
                 &format!("/playlists/{id}?fields=id,uri,name,description,images,owner(id,display_name),tracks(total),items(total)"),
@@ -709,7 +737,7 @@ impl WebApi {
     /// Fails with 403 for playlists the user does not own when only a
     /// development-mode app answers; the caller then reads them over the
     /// playback session.
-    pub async fn playlist_items(&self, id: &str, refresh: bool) -> Result<Vec<Track>> {
+    pub async fn playlist_items(self: &Arc<Self>, id: &str, refresh: bool) -> Result<Vec<Track>> {
         let first: Paging<SavedTrack> = self
             .cached(
                 &format!("/playlists/{id}/items?limit=100&market=from_token"),
@@ -741,7 +769,7 @@ impl WebApi {
         }
     }
 
-    pub async fn liked_tracks(&self, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage> {
+    pub async fn liked_tracks(self: &Arc<Self>, offset: u32, limit: u32, refresh: bool) -> Result<TrackPage> {
         let limit = limit.clamp(1, 50);
         let page: Paging<SavedTrack> = self
             .cached(
@@ -764,7 +792,7 @@ impl WebApi {
         })
     }
 
-    pub async fn saved_albums(&self, refresh: bool) -> Result<Vec<Album>> {
+    pub async fn saved_albums(self: &Arc<Self>, refresh: bool) -> Result<Vec<Album>> {
         let first: Paging<SavedAlbum> = self
             .cached("/me/albums?limit=50", Route::Personal, Duration::from_secs(600), refresh)
             .await?;
@@ -773,7 +801,7 @@ impl WebApi {
         Ok(dedupe(albums, |a: &Album| &a.id))
     }
 
-    pub async fn album(&self, id: &str, refresh: bool) -> Result<AlbumDetail> {
+    pub async fn album(self: &Arc<Self>, id: &str, refresh: bool) -> Result<AlbumDetail> {
         let mut raw: RawAlbum = self
             .cached(
                 &format!("/albums/{id}?market=from_token"),
@@ -796,7 +824,7 @@ impl WebApi {
         })
     }
 
-    pub async fn artist(&self, id: &str, refresh: bool) -> Result<ArtistDetail> {
+    pub async fn artist(self: &Arc<Self>, id: &str, refresh: bool) -> Result<ArtistDetail> {
         let ttl = Duration::from_secs(86_400);
         let raw: RawArtist = self
             .cached(&format!("/artists/{id}"), Route::Personal, ttl, refresh)
@@ -830,7 +858,7 @@ impl WebApi {
     /// The last 50 plays, newest first, with the playlist or album each
     /// came from. Spotify gives no per-playlist play counts; these contexts
     /// are the closest signal of what is listened to most.
-    pub async fn recently_played(&self, refresh: bool) -> Result<Vec<RecentPlay>> {
+    pub async fn recently_played(self: &Arc<Self>, refresh: bool) -> Result<Vec<RecentPlay>> {
         let page: Paging<RawRecentPlay> = self
             .cached("/me/player/recently-played?limit=50", Route::Personal, Duration::from_secs(300), refresh)
             .await?;
@@ -849,7 +877,7 @@ impl WebApi {
     }
 
     /// The user's most played tracks of the last weeks.
-    pub async fn top_tracks(&self, refresh: bool) -> Result<Vec<Track>> {
+    pub async fn top_tracks(self: &Arc<Self>, refresh: bool) -> Result<Vec<Track>> {
         let page: Paging<RawTrack> = self
             .cached("/me/top/tracks?time_range=short_term&limit=30", Route::Personal, Duration::from_secs(3600), refresh)
             .await?;
@@ -857,7 +885,7 @@ impl WebApi {
     }
 
     /// The user's most played artists of the last months.
-    pub async fn top_artists(&self, refresh: bool) -> Result<Vec<Artist>> {
+    pub async fn top_artists(self: &Arc<Self>, refresh: bool) -> Result<Vec<Artist>> {
         let page: Paging<RawArtist> = self
             .cached("/me/top/artists?time_range=medium_term&limit=20", Route::Personal, Duration::from_secs(3600), refresh)
             .await?;
@@ -869,7 +897,7 @@ impl WebApi {
 
     /// Songs, albums and artists from the personal app (10 each, its
     /// limit); playlists only from the shared app.
-    pub async fn search(&self, query: &str) -> Result<SearchResults> {
+    pub async fn search(self: &Arc<Self>, query: &str) -> Result<SearchResults> {
         let q = urlencoding::encode(query.trim());
         let catalogue_path = format!("/search?q={q}&type=track,album,artist&limit=10&market=from_token");
         let playlists_path = format!("/search?q={q}&type=playlist&limit=20");
@@ -992,7 +1020,7 @@ pub fn parse_track(value: serde_json::Value) -> Option<Track> {
 
 impl WebApi {
     /// Access tokens for the player endpoints, personal app first.
-    pub async fn player_tokens(&self) -> Vec<String> {
+    pub async fn player_tokens(self: &Arc<Self>) -> Vec<String> {
         let mut tokens = Vec::new();
         for app in [WebApp::Personal, WebApp::Shared] {
             if self.signed_in(app).await {

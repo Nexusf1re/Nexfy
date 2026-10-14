@@ -120,6 +120,40 @@ class LibraryPrefs(context: Context) {
         prefs.edit { putStringSet(KEPT, now) }
     }
 
+    /** The track order last chosen for a playlist, album or liked songs (`pl:<id>`, `al:<id>`, `liked`). */
+    fun trackSort(key: String): String? = prefs.getString("sort:$key", null)
+
+    fun setTrackSort(key: String, sort: String) = prefs.edit { putString("sort:$key", sort) }
+
+    /** The library shelf last shown (Playlists or Albums). */
+    var shelf: String?
+        get() = prefs.getString(SHELF, null)
+        set(value) = prefs.edit { putString(SHELF, value) }
+
+    /** Whether the player showed lyrics when last used. */
+    var lyricsOpen: Boolean
+        get() = prefs.getBoolean(LYRICS_OPEN, false)
+        set(value) = prefs.edit { putBoolean(LYRICS_OPEN, value) }
+
+    private val _recentSearches = MutableStateFlow(prefs.getString(RECENT_SEARCHES, null)?.split("\n")?.filter(String::isNotBlank).orEmpty())
+
+    /** Searches that found something, newest first. */
+    val recentSearches: StateFlow<List<String>> = _recentSearches
+
+    fun addRecentSearch(query: String) {
+        val q = query.trim()
+        if (q.length < 2) return
+        val now = (listOf(q) + _recentSearches.value.filterNot { it.equals(q, ignoreCase = true) }).take(8)
+        _recentSearches.value = now
+        prefs.edit { putString(RECENT_SEARCHES, now.joinToString("\n")) }
+    }
+
+    fun removeRecentSearch(query: String) {
+        val now = _recentSearches.value - query
+        _recentSearches.value = now
+        prefs.edit { putString(RECENT_SEARCHES, now.joinToString("\n")) }
+    }
+
     fun setPrefetchQueue(on: Boolean) {
         _prefetchQueue.value = on
         prefs.edit { putBoolean(PREFETCH_QUEUE, on) }
@@ -154,5 +188,8 @@ class LibraryPrefs(context: Context) {
         const val PLAYS = "plays"
         const val KEPT = "kept"
         const val PREFETCH_QUEUE = "prefetch_queue"
+        const val SHELF = "shelf"
+        const val LYRICS_OPEN = "lyrics_open"
+        const val RECENT_SEARCHES = "recent_searches"
     }
 }

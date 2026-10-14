@@ -91,7 +91,8 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
     val core = actions.core
     val library = actions.app.library
     val collapse = rememberTitleCollapse(list)
-    var shelf by rememberSaveable { mutableStateOf(Shelf.Playlists) }
+    // The shelf last shown, across launches.
+    var shelf by remember { mutableStateOf(Shelf.entries.firstOrNull { it.name == library.shelf } ?: Shelf.Playlists) }
     val pinned by library.pinned.collectAsState()
     val plays by library.plays.collectAsState()
     val playlistSort by library.playlistSort.collectAsState()
@@ -127,7 +128,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
         ) {
             item(key = "title") { LargeTitle("Biblioteca", collapse, Modifier.padding(start = 4.dp)) }
             item(key = "shelf") {
-                PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it }, Modifier.fillMaxWidth().padding(top = 12.dp))
+                PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it; library.shelf = it.name }, Modifier.fillMaxWidth().padding(top = 12.dp))
             }
             item(key = "sort") {
                 when (shelf) {

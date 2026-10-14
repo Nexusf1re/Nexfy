@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -98,6 +100,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
     var error by remember { mutableStateOf<String?>(null) }
     val cascadeClock = rememberCascade(results)
     var menuFor by remember { mutableStateOf<uniffi.nexfy_core.Track?>(null) }
+    val recent by actions.app.library.recentSearches.collectAsState()
     menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
 
     // Search once typing pauses.
@@ -110,7 +113,11 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
         kotlinx.coroutines.delay(450)
         searching = true
         try {
-            results = actions.core.search(q)
+            results = actions.core.search(q).also { found ->
+                if (found.tracks.isNotEmpty() || found.artists.isNotEmpty() || found.albums.isNotEmpty() || found.playlists.isNotEmpty()) {
+                    actions.app.library.addRecentSearch(q)
+                }
+            }
             error = null
         } catch (e: Exception) {
             error = e.message
@@ -163,7 +170,23 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                         TrackRowSkeleton(i, Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = skeletonFade()))
                     }
                 }
-                if (query.isBlank()) {
+                if (query.isBlank() && recent.isNotEmpty()) {
+                    item(key = "recent-title") { SectionTitle("Buscas recentes", Modifier.padding(start = 4.dp)) }
+                    items(recent, key = { "recent:$it" }) { past ->
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { query = past }
+                                .padding(start = 8.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Rounded.History, null, tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(14.dp))
+                            Text(past, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            IconButton({ actions.app.library.removeRecentSearch(past) }) {
+                                Icon(Icons.Rounded.Close, "Remover", tint = c.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    }
+                } else if (query.isBlank()) {
                     item(key = "hint") {
                         Text(
                             "Toque num resultado para ouvir na hora.",
