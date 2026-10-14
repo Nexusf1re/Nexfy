@@ -1259,15 +1259,30 @@ impl NexfyCore {
     }
     // ------------------------------------------------- other devices --
 
-    /// The account's devices: from the Connect cluster the session keeps,
-    /// the Web API only before the first cluster arrives.
+    /// The account's devices: those online in the Connect cluster the
+    /// session keeps, plus the idle ones the Web API lists.
     pub async fn devices(&self) -> Result<Vec<Device>, CoreError> {
         let session = self.inner.live_session().await?;
-        if let Some(devices) = remote::session_devices(&session) {
-            log::info!("devices from the cluster: {:?}", devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>());
-            return Ok(devices);
+        let known = remote::session_devices(&session).unwrap_or_default();
+        // The cluster lists only devices online in Connect right now; idle
+        // speakers and computers come from the Web API (one request, only
+        // when the devices sheet opens). Either alone still answers.
+        let listed = match remote::devices(&session, &self.inner.web.player_tokens().await).await {
+            Ok(listed) => listed,
+            Err(error) if !known.is_empty() => {
+                log::info!("devices from the cluster only: {error}");
+                Vec::new()
+            }
+            Err(error) => return Err(web_error(error)),
+        };
+        let mut devices = known;
+        for device in listed {
+            let same = devices.iter().any(|d| d.id == device.id || d.name == device.name);
+            if !same {
+                devices.push(device);
+            }
         }
-        remote::devices(&session, &self.inner.web.player_tokens().await).await.map_err(web_error)
+        Ok(devices)
     }
 
     /// What is playing on any device; None when nothing is. Read from the
