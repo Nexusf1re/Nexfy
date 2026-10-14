@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-java@v5
         with:
@@ -53,7 +53,7 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nexfy-debug
           path: app/build/outputs/apk/debug/app-debug.apk
