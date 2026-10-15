@@ -1,5 +1,21 @@
 package dev.nexfy.app.ui.design
 
+import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
+import android.graphics.Shader
+import android.os.Build
+import androidx.annotation.RequiresApi
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionOnScreen
+import androidx.compose.ui.unit.IntSize
 import dev.chrisbanes.haze.HazeInputScale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -10,7 +26,10 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.runtime.State
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -33,17 +52,55 @@ val LocalHaze = staticCompositionLocalOf<HazeState?> { null }
 fun Modifier.glassSource(state: HazeState?) = if (state != null) hazeSource(state) else this
 
 /**
- * Liquid glass: a real blur of what is behind (Haze, RenderEffect on
- * API 31+), a light tint with grain, then lens edges: a specular rim
- * brighter on top, a soft inner shadow at the bottom and a faint refraction
- * band along the border.
+ * The glass lens, as a RenderEffect shader over the blurred backdrop: near
+ * the rim it samples towards the centre, so what is behind bends and
+ * magnifies at the edge like through thick glass, with the colours split a
+ * little. Deep inside it passes the backdrop through untouched.
+ */
+private const val LENS = """
+uniform shader content;
+uniform float2 size;
+uniform float radius;
+uniform float band;
+uniform float depth;
+
+half4 main(float2 p) {
+    float2 c = size * 0.5;
+    float2 s = sign(p - c);
+    float2 q = abs(p - c) - (c - radius);
+    float2 outer = max(q, 0.0);
+    float d = length(outer) + min(max(q.x, q.y), 0.0) - radius;
+    float k = 1.0 - clamp(-d / band, 0.0, 1.0);
+    k = k * k * k;
+    float2 n;
+    if (outer.x > 0.0 || outer.y > 0.0) {
+        n = normalize(outer + 0.0001) * s;
+    } else if (q.x > q.y) {
+        n = float2(s.x, 0.0);
+    } else {
+        n = float2(0.0, s.y);
+    }
+    float2 shift = -n * k * depth;
+    half4 g = content.eval(p + shift);
+    half r = content.eval(p + shift * 1.15).r;
+    half b = content.eval(p + shift * 0.85).b;
+    return half4(r, g.g, b, g.a);
+}
+"""
+
+/**
+ * Liquid glass: what is behind, blurred and bent by a lens at the rim
+ * (API 33+; a plain Haze blur before), a light tint, then a specular rim
+ * brighter on top and a soft inner shadow at the bottom.
  */
 @Composable
 fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
     val haze = LocalHaze.current
-    val tint = if (dark) Color(0xFF1C1C20).copy(alpha = .42f) else Color.White.copy(alpha = .5f)
+    val tint = if (dark) Color(0xFF1C1C20).copy(alpha = .38f) else Color.White.copy(alpha = .46f)
     val base = clip(shape)
-    val blurred = if (haze != null) {
+    val blurred = if (haze != null && Build.VERSION.SDK_INT >= 33) {
+        base.refracted(haze, shape, tint, dark)
+    } else if (haze != null) {
         base.hazeEffect(
             haze,
             HazeStyle(
@@ -99,6 +156,53 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
 }
 
 /**
+ * The backdrop for [liquidGlass] on API 33+: Haze's recording of the main
+ * content, drawn at this element's place into a layer that blurs it and
+ * runs the [LENS]. The effect is rebuilt only when the size changes.
+ */
+@RequiresApi(33)
+@Composable
+private fun Modifier.refracted(haze: HazeState, shape: Shape, tint: Color, dark: Boolean): Modifier {
+    val lens = rememberGraphicsLayer()
+    val shader = remember { RuntimeShader(LENS) }
+    val origin = remember { mutableStateOf(Offset.Zero) }
+    // Plain, not snapshot state: written while drawing.
+    val built = remember { arrayOf(Size.Zero) }
+    val fallback = (if (dark) Color(0xFF1C1C20) else Color.White).copy(alpha = .9f)
+    return onGloballyPositioned { origin.value = it.positionOnScreen() }.drawWithContent {
+        val area = haze.areas.firstOrNull()
+        val source = area?.contentLayer
+        if (source == null || size.isEmpty()) {
+            drawRect(fallback)
+            drawContent()
+            return@drawWithContent
+        }
+        if (built[0] != size) {
+            val outline = shape.createOutline(size, layoutDirection, this)
+            val radius = (outline as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x ?: 0f
+            shader.setFloatUniform("size", size.width, size.height)
+            shader.setFloatUniform("radius", radius.coerceAtMost(size.minDimension / 2f))
+            shader.setFloatUniform("band", minOf(size.minDimension / 2f, 20.dp.toPx()))
+            shader.setFloatUniform("depth", 10.dp.toPx())
+            val blur = 14.dp.toPx()
+            lens.renderEffect = RenderEffect.createChainEffect(
+                RenderEffect.createRuntimeShaderEffect(shader, "content"),
+                RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP),
+            ).asComposeRenderEffect()
+            built[0] = size
+        }
+        val shift = area.positionOnScreen - origin.value
+        lens.record(IntSize(size.width.toInt(), size.height.toInt())) {
+            drawRect(if (dark) Color.Black else Color.White)
+            translate(shift.x, shift.y) { drawLayer(source) }
+        }
+        drawLayer(lens)
+        drawRect(tint)
+        drawContent()
+    }
+}
+
+/**
  * Glass over artwork (player and collection headers): translucent tint,
  * an optional blurred copy of [backdrop], and a thin top highlight.
  */
@@ -123,5 +227,19 @@ fun GlassBox(
         }
         Box(Modifier.matchParentSize().background(tint).border(1.dp, edge, shape))
         content()
+    }
+}
+
+/**
+ * A page's background with a faint glow of [accent] (the playing cover's
+ * colour) rising from the bottom left. The colour is read while drawing, so
+ * a new song only repaints, never recomposes.
+ */
+fun Modifier.ambientGlow(background: Color, accent: State<Color>, dark: Boolean): Modifier = drawBehind {
+    drawRect(background)
+    val glow = accent.value.copy(alpha = if (dark) .14f else .09f)
+    val center = Offset(size.width * .3f, size.height)
+    scale(1f, .55f, pivot = center) {
+        drawCircle(Brush.radialGradient(listOf(glow, Color.Transparent), center, size.width), size.width, center)
     }
 }

@@ -30,19 +30,32 @@ import kotlinx.coroutines.flow.flowOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Dark base: graphite, a hair off black so glass and hairlines read on it. */
+val Graphite = Color(0xFF0A0B0D)
+
+/** Light base: the icon's ivory. */
+val Ivory = Color(0xFFF6F5F1)
+
+/** Width of the thin lines that separate rows and frame glass. */
+val Hairline = 0.5.dp
+
+/** Figures of equal width, so times and counts line up and do not jitter as they change. */
+fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = "tnum")
+
 /**
- * Neutral black/white scheme; colour comes from the artwork, never from
- * dynamic system colours. Every role Material controls read is set.
+ * Graphite (dark) and ivory (light) neutrals; colour comes from the artwork,
+ * never from dynamic system colours. Every role Material controls read is set.
  */
 private fun neutral(dark: Boolean): ColorScheme {
-    val bg = if (dark) Color.Black else Color(0xFFFAFAFA)
-    val fg = if (dark) Color(0xFFF5F5F5) else Color(0xFF151515)
-    val surface = if (dark) Color(0xFF0D0D0F) else Color.White
-    val raised = if (dark) Color(0xFF19191C) else Color(0xFFEFEFF1)
-    val quiet = if (dark) Color(0xFFA0A0A6) else Color(0xFF616168)
-    val edge = if (dark) Color(0xFF353539) else Color(0xFFD5D5DA)
+    val bg = if (dark) Graphite else Ivory
+    val fg = if (dark) Color(0xFFEEEFF2) else Color(0xFF141414)
+    val surface = if (dark) Color(0xFF111215) else Color.White
+    val raised = if (dark) Color(0xFF1A1B1F) else Color(0xFFEDEBE6)
+    val quiet = if (dark) Color(0xFF8C8F98) else Color(0xFF66656A)
+    val edge = if (dark) Color(0xFF2A2C31) else Color(0xFFDCD9D2)
     val scheme = if (dark) darkColorScheme() else lightColorScheme()
     return scheme.copy(
         primary = fg, onPrimary = bg, primaryContainer = raised, onPrimaryContainer = fg,
@@ -61,9 +74,13 @@ private val Type = Typography(
     headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 36.sp, lineHeight = 42.sp, letterSpacing = (-1).sp),
     titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-.5f).sp),
     titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 23.sp),
-    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 23.sp),
-    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 20.sp),
+    // Body text is tabular too: plain Text inherits it, so every time and count in a row lines up.
+    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 23.sp).tabular(),
+    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 20.sp).tabular(),
     labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 14.sp, lineHeight = 20.sp),
+    // Times, counts and track numbers.
+    labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 12.sp, lineHeight = 16.sp, letterSpacing = .2.sp).tabular(),
+    labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium, fontSize = 11.sp, lineHeight = 14.sp, letterSpacing = .3.sp).tabular(),
 )
 
 /**
@@ -87,7 +104,7 @@ data class Look(
 val LocalLook = compositionLocalOf { Look() }
 
 /**
- * [accentArt] is the cover the accent follows (null: the brand green). The
+ * [accentArt] is the cover the accent follows (null: the icon's orange). The
  * scheme is remembered: a new instance would recompose every screen.
  */
 @Composable
@@ -104,13 +121,14 @@ fun NexfyTheme(
     }
 }
 
-private fun brand(dark: Boolean) = if (dark) Color(0xFF1ED760) else Color(0xFF14A44A)
+/** The icon's orange: the accent while nothing plays. */
+private fun brand(dark: Boolean) = if (dark) Color(0xFFFF6A47) else Color(0xFFD9431F)
 
 /** A State, never a Color: only composables that read it follow its changes. */
 private val LocalAccent = staticCompositionLocalOf<State<Color>> { mutableStateOf(brand(true)) }
 
 /**
- * The accent: the playing cover's colour made legible, or the brand green.
+ * The accent: the playing cover's colour made legible, or the icon's orange.
  * It glides to each new colour; nothing here reads it, so the theme itself
  * never recomposes for it.
  */
@@ -138,7 +156,7 @@ private fun legible(raw: Color, dark: Boolean): Color {
     ColorUtils.colorToHSL(raw.toArgb(), hsl)
     hsl[1] = hsl[1].coerceIn(.45f, .85f)
     hsl[2] = if (dark) hsl[2].coerceIn(.55f, .7f) else hsl[2].coerceIn(.3f, .45f)
-    val background = if (dark) Color.Black.toArgb() else Color(0xFFFAFAFA).toArgb()
+    val background = (if (dark) Graphite else Ivory).toArgb()
     var argb = ColorUtils.HSLToColor(hsl)
     while (ColorUtils.calculateContrast(argb, background) < 4.5 && hsl[2] in .15f..0.85f) {
         hsl[2] += if (dark) .03f else -.03f

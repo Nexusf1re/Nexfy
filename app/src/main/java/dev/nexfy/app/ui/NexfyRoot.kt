@@ -75,6 +75,8 @@ import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
+import dev.nexfy.app.ui.design.ambientGlow
+import dev.nexfy.app.ui.theme.accentState
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.springPress
 import dev.nexfy.app.ui.player.PlayerControls
@@ -343,6 +345,7 @@ fun NexfyRoot(
     val actions = remember { AppActions(app, nav, openBrowser, scope) }
     val snapshot by app.bridge.state.collectAsState()
     val haze = remember { HazeState() }
+    val glow = accentState()
 
     ShimmerDriver()
     // Whether this account is in a Jam, so the song menus and "Adicionar à
@@ -395,7 +398,7 @@ fun NexfyRoot(
                                     Modifier.fillMaxSize().graphicsLayer {
                                         shape = RoundedCornerShape(corner)
                                         clip = corner > 0.5.dp
-                                    }.background(c.background),
+                                    }.ambientGlow(c.background, glow, c.isDark),
                                 ) {
                                     ScreenContent(screen, actions, Modifier.fillMaxSize())
                                 }
