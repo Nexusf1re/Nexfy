@@ -101,6 +101,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import kotlin.math.pow
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -226,6 +227,20 @@ interface PlayerControls {
 /** A getter, so it follows [Motion.reduced]. */
 private val settle get() = Motion.settle<Float>(247f)
 
+/** Letting go below this closes an open player; above [OPEN_AT], the mini one opens. */
+private const val CLOSE_AT = .8f
+private const val OPEN_AT = .2f
+
+/**
+ * How far the full player is open, 0 to 1, for the pages under it: they
+ * step back while it covers them and come forward as it is pulled down.
+ * Read only while drawing, so following it recomposes nothing.
+ */
+object PlayerReveal {
+    var open by mutableFloatStateOf(0f)
+        internal set
+}
+
 /** Requests from outside the composition (a widget tap) to open the full player. */
 object OpenPlayer {
     /** The intent extra that asks for it. */
@@ -337,6 +352,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             if (android.os.SystemClock.elapsedRealtime() - at < 10_000) f.animateTo(1f, settle)
         }
     }
+    LaunchedEffect(Unit) { snapshotFlow { f.value }.collect { PlayerReveal.open = it } }
     dev.nexfy.app.ui.MetricsState("sheet", if (f.isRunning) "moving" else null)
     val collapsed by remember { derivedStateOf { f.value < .05f } }
     val showMini by remember { derivedStateOf { f.value < .6f } }
@@ -360,8 +376,18 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
         val fullW = constraints.maxWidth.toFloat()
         val miniH = with(density) { 68.dp.toPx() }
         val margin = with(density) { 16.dp.toPx() }
+        // Where a drag began, and whether it has passed the point where letting
+        // go closes (from open) or opens (from the mini player): a tick says so.
+        val dragFrom = remember { floatArrayOf(0f) }
+        val committed = remember { booleanArrayOf(false) }
+        fun commits(v: Float) = if (dragFrom[0] > .5f) v < CLOSE_AT else v > OPEN_AT
         val dragState = rememberDraggableState { d ->
-            scope.snapNow(f, (f.value - d / (fullH - miniH)).coerceIn(0f, 1f))
+            val v = (f.value - d / (fullH - miniH)).coerceIn(0f, 1f)
+            scope.snapNow(f, v)
+            if (commits(v) != committed[0]) {
+                committed[0] = !committed[0]
+                haptics.tick()
+            }
         }
         // Mini: a compact card with equal side margins, just above the dock and the gesture bar.
         val navBottom = WindowInsets.navigationBars.getBottom(density).toFloat()
@@ -378,19 +404,27 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     scaleX = sc
                     scaleY = sc
                     transformOrigin = TransformOrigin(.5f, 0f)
-                    shape = SheetShape(lerp(margin, 0f, p), lerp(miniH, fullH, p).coerceIn(miniH, fullH), (lerp(34f, 0f, p) + back * 36f) * density.density)
+                    // Corners round early in a pull: the player turns into a card at once.
+                    val corner = 34f * (1f - p).coerceIn(0f, 1f).pow(.45f)
+                    shape = SheetShape(lerp(margin, 0f, p), lerp(miniH, fullH, p).coerceIn(miniH, fullH), (corner + back * 36f) * density.density)
                     clip = true
                 }
                 .drawBehind { drawRect(surface.copy(alpha = (pf() * 1.6f).coerceIn(0f, 1f))) }
                 .draggable(
                     dragState,
                     Orientation.Vertical,
-                    onDragStarted = { haptics.tick() },
+                    onDragStarted = {
+                        dragFrom[0] = f.value
+                        committed[0] = false
+                        haptics.tick()
+                    },
                     onDragStopped = { v ->
+                        // A short pull is enough either way; a flick wins over distance.
                         val target = when {
                             v < -Motion.FlingVelocity -> 1f
                             v > Motion.FlingVelocity -> 0f
-                            else -> if (f.value > .5f) 1f else 0f
+                            commits(f.value) -> if (dragFrom[0] > .5f) 0f else 1f
+                            else -> if (dragFrom[0] > .5f) 1f else 0f
                         }
                         f.animateTo(target, settle, initialVelocity = -v / (fullH - miniH))
                     },
@@ -635,6 +669,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             val p = pf()
                             alpha = ((p - .4f) / .6f).coerceIn(0f, 1f)
                             translationY = lerp(rise, 0f, p)
+                            // Pulled down, the controls recede a touch with the card.
+                            val sc = lerp(.94f, 1f, p)
+                            scaleX = sc
+                            scaleY = sc
+                            transformOrigin = TransformOrigin(.5f, 0f)
                         }
                         .padding(horizontal = 28.dp),
                 ) {

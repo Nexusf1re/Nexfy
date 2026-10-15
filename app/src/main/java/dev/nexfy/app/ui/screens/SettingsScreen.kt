@@ -284,9 +284,11 @@ private fun BehaviourSection(actions: AppActions) {
     val library = actions.app.library
     val addedBy by library.showAddedBy.collectAsState()
     val haptics by library.haptics.collectAsState()
+    val swipeBack by library.swipeBack.collectAsState()
     Section("Reprodução e comportamento", "O que as listas mostram e como o app responde ao toque.") {
         Toggle("Mostrar quem adicionou", "A foto de quem pôs cada música, em playlists compartilhadas e na fila.", addedBy, library::setShowAddedBy)
         Toggle("Vibração", "Uma vibração leve nos toques e gestos.", haptics, library::setHaptics)
+        Toggle("Voltar arrastando", "Arraste uma página para o lado, de qualquer ponto, para voltar.", swipeBack, library::setSwipeBack)
     }
 }
 

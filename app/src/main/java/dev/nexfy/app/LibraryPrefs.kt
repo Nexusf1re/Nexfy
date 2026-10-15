@@ -209,6 +209,16 @@ class LibraryPrefs(context: Context) {
         prefs.edit { putBoolean(HAPTICS, on) }
     }
 
+    private val _swipeBack = MutableStateFlow(prefs.getBoolean(SWIPE_BACK, true))
+
+    /** A sideways drag anywhere on a page goes back, as in Telegram. */
+    val swipeBack: StateFlow<Boolean> = _swipeBack
+
+    fun setSwipeBack(on: Boolean) {
+        _swipeBack.value = on
+        prefs.edit { putBoolean(SWIPE_BACK, on) }
+    }
+
     fun toggleKept(key: String) {
         val now = _kept.value.let { if (key in it) it - key else it + key }
         _kept.value = now
@@ -300,5 +310,6 @@ class LibraryPrefs(context: Context) {
         const val LYRICS_SIZE = "lyrics_size"
         const val SHOW_ADDED_BY = "show_added_by"
         const val HAPTICS = "haptics"
+        const val SWIPE_BACK = "swipe_back"
     }
 }

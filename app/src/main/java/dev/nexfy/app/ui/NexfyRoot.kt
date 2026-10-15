@@ -49,6 +49,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -395,12 +404,64 @@ fun NexfyRoot(
     }
     BackHandler(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
 
+    // Back by dragging the page sideways from anywhere: the same seekable
+    // transition, with a slide that follows the finger instead of the card.
+    val swipeBackOn by app.library.swipeBack.collectAsState()
+    var swiping by remember { mutableStateOf(false) }
+    var swipe by remember { mutableFloatStateOf(-1f) }
+    var swipeParent by remember { mutableStateOf<Screen?>(null) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { swipe }.collect { p ->
+            val parent = swipeParent
+            if (p >= 0f && parent != null) screens.seekTo(p, parent)
+        }
+    }
+    LaunchedEffect(screens.currentState, screens.targetState) {
+        if (screens.currentState == screens.targetState && swipe < 0f) swiping = false
+    }
+    val swipeBack = Modifier.swipeToBack(
+        enabled = swipeBackOn && nav.stack().isNotEmpty(),
+        onStart = {
+            haptics.tick()
+            swipeParent = nav.parentScreen()
+            swiping = true
+        },
+        onProgress = { swipe = it },
+        onEnd = { done ->
+            swipe = -1f
+            if (done) {
+                nav.pop()
+            } else {
+                scope.launch { screens.animateTo(screens.currentState) }
+            }
+        },
+    )
+
     val bottomSpace = if (snapshot.track != null) 176.dp else 104.dp
     CompositionLocalProvider(LocalHaze provides haze, LocalBottomSpace provides bottomSpace, dev.nexfy.app.ui.design.LocalPlaying provides snapshot.playing) {
         // The background stays put; everything on it steps back under an open sheet.
         Box(Modifier.fillMaxSize().background(c.background).sheetDepth()) {
             // Everything behind the dock and the mini player is what their glass blurs.
-            Box(Modifier.fillMaxSize().glassSource(haze)) {
+            Box(
+                Modifier.fillMaxSize()
+                    // Under the open player the pages step back and dim; pulling it down brings them forward.
+                    .graphicsLayer {
+                        val p = dev.nexfy.app.ui.player.PlayerReveal.open.coerceIn(0f, 1f)
+                        if (p > .001f) {
+                            val sc = 1f - .06f * p
+                            scaleX = sc
+                            scaleY = sc
+                            shape = RoundedCornerShape((28f * p).dp)
+                            clip = true
+                        }
+                    }
+                    .drawWithContent {
+                        drawContent()
+                        val p = dev.nexfy.app.ui.player.PlayerReveal.open.coerceIn(0f, 1f)
+                        if (p > .001f) drawRect(Color.Black.copy(alpha = .4f * p))
+                    }
+                    .glassSource(haze).then(swipeBack),
+            ) {
                 SharedTransitionLayout(Modifier.fillMaxSize()) {
                     CompositionLocalProvider(LocalSharedScope provides this) {
                         rememberTransition(screens, label = "screen").AnimatedContent(
@@ -409,7 +470,7 @@ fun NexfyRoot(
                                 when {
                                     initialState.tab != targetState.tab ->
                                         Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
-                                    targetState.depth < initialState.depth -> Motion.pageBack
+                                    targetState.depth < initialState.depth -> if (swiping) Motion.swipeBack else Motion.pageBack
                                     else -> Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
                                 }
                             },
@@ -597,5 +658,42 @@ private fun LinkOpener(actions: AppActions) {
             }
             null -> android.widget.Toast.makeText(actions.app, "Esse link do Spotify não abre no Nexfy", android.widget.Toast.LENGTH_SHORT).show()
         }
+    }
+}
+
+/**
+ * A rightward drag that starts anywhere on the page and that nothing under
+ * the finger took (a carousel scrolls first). [onProgress] gets 0 to 1 of
+ * the width; [onEnd] says whether it went far or fast enough to go back.
+ */
+private fun Modifier.swipeToBack(
+    enabled: Boolean,
+    onStart: () -> Unit,
+    onProgress: (Float) -> Unit,
+    onEnd: (Boolean) -> Unit,
+): Modifier = if (!enabled) this else pointerInput(Unit) {
+    val width = size.width.toFloat().coerceAtLeast(1f)
+    val fling = Motion.FlingVelocity * density
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        var dx = 0f
+        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
+            if (over > 0f) {
+                change.consume()
+                dx = over
+            }
+        } ?: return@awaitEachGesture
+        val tracker = VelocityTracker()
+        tracker.addPosition(start.uptimeMillis, start.position)
+        onStart()
+        onProgress((dx / width).coerceIn(0f, 1f))
+        val ended = horizontalDrag(start.id) { change ->
+            dx += change.positionChange().x
+            change.consume()
+            tracker.addPosition(change.uptimeMillis, change.position)
+            onProgress((dx / width).coerceIn(0f, 1f))
+        }
+        val v = tracker.calculateVelocity().x
+        onEnd(ended && (dx / width > .35f || v > fling) && v > -fling)
     }
 }

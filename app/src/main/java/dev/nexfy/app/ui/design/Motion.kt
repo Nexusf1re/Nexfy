@@ -19,6 +19,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.interaction.InteractionSource
@@ -143,6 +144,21 @@ object Motion {
                 targetContentZIndex = -1f,
             )
         }
+
+    /**
+     * Back by a sideways drag, as in Telegram: the page slides off to the
+     * right under the finger and the one beneath comes in from a little to
+     * the left, brightening. Linear, so a seek follows the finger one to one.
+     */
+    val swipeBack: ContentTransform
+        get() = ContentTransform(
+            slideInHorizontally(tween(SWIPE_MS, easing = LinearEasing)) { -it / 4 } +
+                fadeIn(tween(SWIPE_MS, easing = LinearEasing), initialAlpha = .55f),
+            slideOutHorizontally(tween(SWIPE_MS, easing = LinearEasing)) { it },
+            targetContentZIndex = -1f,
+        )
+
+    private const val SWIPE_MS = 320
 
     /** Content taking its skeleton's place: it slides in a little from the right as the skeleton fades. */
     val arrive: ContentTransform
