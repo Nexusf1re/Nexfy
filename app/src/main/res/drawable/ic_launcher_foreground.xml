@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nexfy mark: the N as one soft ink stroke and an orange "now playing" dot.
+     Drawn on the 108dp adaptive canvas and scaled into the 72dp that launchers show. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.7"
+        android:scaleY="0.7">
+        <path
+            android:pathData="M37,71V41c0,-4 4,-5.5 6.5,-2.5l21,31c2.5,3 6.5,1.5 6.5,-2.5V37"
+            android:strokeWidth="8"
+            android:strokeColor="#FF141414"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M79,31m-5.5,0a5.5,5.5 0,1 1,11 0a5.5,5.5 0,1 1,-11 0"
+            android:fillColor="#FFFF5A36" />
+    </group>
+</vector>

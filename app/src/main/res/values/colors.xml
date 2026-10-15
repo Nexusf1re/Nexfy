@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="nexfy_black">#FF121212</color>
-    <!-- Splash: the icon art's deep navy. -->
-    <color name="nexfy_splash">#FF00030C</color>
+    <!-- Splash: near black like the app, with the ivory icon tile in the middle. -->
+    <color name="nexfy_splash">#FF0B0B0E</color>
+    <color name="nexfy_ivory">#FFF4F0E8</color>
 </resources>

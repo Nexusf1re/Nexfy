@@ -96,7 +96,7 @@ internal fun openApp(now: Shown?): Action =
 @Composable
 internal fun Idle(tones: Tones, mark: Dp = 44.dp) {
     Row(GlanceModifier.fillMaxSize().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Image(ImageProvider(R.drawable.ic_launcher_foreground), "Nexfy", GlanceModifier.size(mark))
+        Image(ImageProvider(R.drawable.ic_nexfy_badge), "Nexfy", GlanceModifier.size(mark))
         Spacer(GlanceModifier.width(8.dp))
         Column(GlanceModifier.defaultWeight()) {
             Title("Nexfy", tones.text)
@@ -129,7 +129,7 @@ internal fun Cover(art: Bitmap?, size: Dp, corner: Dp, tones: Tones) {
         Image(ImageProvider(art), null, modifier, contentScale = ContentScale.Crop)
     } else {
         Box(modifier.background(tones.placeholder), contentAlignment = Alignment.Center) {
-            Image(ImageProvider(R.drawable.ic_launcher_foreground), null, GlanceModifier.size(size))
+            Image(ImageProvider(R.drawable.ic_nexfy_badge), null, GlanceModifier.size(size))
         }
     }
 }

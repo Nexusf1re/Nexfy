@@ -65,7 +65,7 @@ private fun Pill(now: Shown?) {
             Sheen()
             Row(GlanceModifier.fillMaxSize().padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (now == null) {
-                    Image(ImageProvider(R.drawable.ic_launcher_foreground), "Nexfy", GlanceModifier.size(inner))
+                    Image(ImageProvider(R.drawable.ic_nexfy_badge), "Nexfy", GlanceModifier.size(inner))
                     Spacer(GlanceModifier.width(8.dp))
                     Title("Nexfy", tones.text, 14.sp)
                     return@Row

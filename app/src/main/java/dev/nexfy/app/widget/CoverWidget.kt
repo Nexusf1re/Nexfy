@@ -75,7 +75,7 @@ private fun CoverCard(now: Shown?) {
     ) {
         if (now == null) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(ImageProvider(R.drawable.ic_launcher_foreground), "Nexfy", GlanceModifier.size(64.dp))
+                Image(ImageProvider(R.drawable.ic_nexfy_badge), "Nexfy", GlanceModifier.size(64.dp))
                 if (roomy) {
                     Title("Nexfy", tones.text)
                     Subtitle("Toque para abrir", tones.quiet)
@@ -87,7 +87,7 @@ private fun CoverCard(now: Shown?) {
         if (art != null) {
             Image(ImageProvider(art), null, GlanceModifier.fillMaxSize(), contentScale = ContentScale.Crop)
         } else {
-            Image(ImageProvider(R.drawable.ic_launcher_foreground), null, GlanceModifier.size(if (roomy) 96.dp else 72.dp))
+            Image(ImageProvider(R.drawable.ic_nexfy_badge), null, GlanceModifier.size(if (roomy) 96.dp else 72.dp))
         }
         // Text and button stay readable on any cover, light ones too.
         Image(
