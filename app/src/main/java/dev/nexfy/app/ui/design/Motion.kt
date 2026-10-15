@@ -31,6 +31,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -138,6 +143,15 @@ object Motion {
             )
         }
 
+    /** Content taking its skeleton's place: it slides in a little from the right as the skeleton fades. */
+    val arrive: ContentTransform
+        get() = if (reduced) {
+            fadeIn(tween(scaled(240), easing = Standard)) togetherWith fadeOut(tween(scaled(160)))
+        } else {
+            (fadeIn(tween(320, 40, Standard)) + slideInHorizontally(spring(1f, 300f)) { it / 10 }) togetherWith
+                fadeOut(tween(160, easing = EmphasizedAccelerate))
+        }
+
     /** Tab switch: the new tab slides in from its side; the old one just fades. */
     fun tabSwitch(direction: Int): ContentTransform {
         if (reduced) return fadeIn(tween(scaled(240), easing = FastOutSlowInEasing)) togetherWith fadeOut(tween(scaled(140)))
@@ -232,5 +246,34 @@ fun Modifier.cascade(index: Int, clock: Cascade): Modifier {
         translationY = (1f - v) * 60f
         scaleX = 0.94f + 0.06f * v
         scaleY = scaleX
+    }
+}
+
+/**
+ * Depth as a row scrolls: a card coming in at the right edge grows to full
+ * size and brightens as it arrives, one leaving at the left recedes a
+ * little. Its place is noted at layout and read while drawing only.
+ */
+@Composable
+fun Modifier.carouselDepth(): Modifier {
+    if (Motion.reduced) return this
+    val enter = remember { mutableFloatStateOf(0f) }
+    val leave = remember { mutableFloatStateOf(0f) }
+    return onPlaced { coords ->
+        val row = coords.parentLayoutCoordinates ?: return@onPlaced
+        val x = coords.positionInParent().x
+        val w = coords.size.width.toFloat().coerceAtLeast(1f)
+        enter.floatValue = ((x + w - row.size.width) / w).coerceIn(0f, 1f)
+        leave.floatValue = (-x / w).coerceIn(0f, 1f)
+    }.graphicsLayer {
+        val e = enter.floatValue
+        val l = leave.floatValue
+        val s = 1f - .1f * e - .06f * l
+        scaleX = s
+        scaleY = s
+        alpha = 1f - .5f * e - .35f * l
+        // Alpha on each drawing, not through an offscreen copy of the card every frame.
+        compositingStrategy = CompositingStrategy.ModulateAlpha
+        transformOrigin = TransformOrigin(if (e > 0f) 0f else 1f, .5f)
     }
 }

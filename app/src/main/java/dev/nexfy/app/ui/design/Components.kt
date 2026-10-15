@@ -60,6 +60,16 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.rememberGraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
@@ -155,8 +165,9 @@ fun PillButton(
 }
 
 /**
- * Segmented choice whose highlight stretches between options: its leading
- * edge springs fast, the trailing one lags, then it settles.
+ * Segmented choice whose highlight is a liquid lens, like the dock's: its
+ * leading edge springs fast, the trailing one lags, then it settles; the
+ * labels under it show magnified, more so while it stretches.
  */
 @Composable
 fun <T> PillSelector(
@@ -180,22 +191,44 @@ fun <T> PillSelector(
     val left by animateFloatAsState(index, if (goingRight.value) slow else fast, label = "l")
     val right by animateFloatAsState(index + 1, if (goingRight.value) fast else slow, label = "r")
     val n = options.size.coerceAtLeast(1)
-    Box(modifier.clip(CircleShape).background(c.surfaceVariant).padding(4.dp)) {
-        Box(
-            Modifier.matchParentSize().drawBehind {
+    val dark = c.isDark
+    val accent = dev.nexfy.app.ui.theme.accentColor()
+    val labels = rememberGraphicsLayer()
+    val lensPath = remember { Path() }
+    Box(modifier.glassPane(CircleShape, c.surfaceVariant.copy(alpha = .7f), dark).padding(4.dp)) {
+        Row(
+            Modifier.drawWithContent {
                 val w = size.width / n
                 val l = left.coerceIn(-0.2f, n.toFloat()) * w
                 val r = right.coerceIn(0f, n + 0.2f) * w
-                if (r > l) {
-                    drawRoundRect(c.primary, Offset(l, 0f), Size(r - l, size.height), CornerRadius(size.height / 2))
+                labels.record { this@drawWithContent.drawContent() }
+                if (r <= l) {
+                    drawLayer(labels)
+                    return@drawWithContent
                 }
+                val stretch = ((r - l) / w - 1f).coerceIn(0f, 1f)
+                val lens = Rect(l, 0f, r, size.height)
+                val corner = CornerRadius(size.height / 2)
+                lensPath.rewind()
+                lensPath.addRoundRect(RoundRect(lens, corner))
+                drawRoundRect(accent.copy(alpha = if (dark) .2f else .14f), lens.topLeft, lens.size, corner)
+                clipPath(lensPath, ClipOp.Difference) { drawLayer(labels) }
+                clipPath(lensPath) { scale(1.06f + .06f * stretch, pivot = lens.center) { drawLayer(labels) } }
+                drawRoundRect(
+                    Brush.verticalGradient(
+                        listOf(Color.White.copy(if (dark) .4f else .9f), Color.White.copy(.04f), Color.White.copy(if (dark) .16f else .5f)),
+                        startY = lens.top,
+                        endY = lens.bottom,
+                    ),
+                    lens.topLeft, lens.size, corner,
+                    style = Stroke(1.dp.toPx()),
+                )
             },
-        )
-        Row {
+        ) {
             options.forEach { option ->
                 val source = remember { MutableInteractionSource() }
                 val on = option == selected
-                val fg by animateColorAsState(if (on) c.onPrimary else c.onSurfaceVariant, label = "fg")
+                val fg by animateColorAsState(if (on) c.onSurface else c.onSurfaceVariant, label = "fg")
                 Box(
                     Modifier.weight(1f).springPress(source).clip(CircleShape)
                         .clickable(source, null) {
@@ -365,7 +398,7 @@ fun CoverCard(
     val pane = if (circle) Color.Transparent else tileColor(imageUrl, key).copy(alpha = if (c.isDark) .3f else .36f)
     val ink = c.onSurface
     Column(
-        Modifier.width(156.dp).weightedPress(source, 16.dp)
+        Modifier.carouselDepth().width(156.dp).weightedPress(source, 16.dp)
             .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
             .clickable(source, null) {
                 haptics.tick()

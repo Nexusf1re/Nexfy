@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import dev.nexfy.app.ui.design.Motion
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
@@ -31,7 +33,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import dev.nexfy.app.ui.design.glassPane
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -217,7 +223,8 @@ private fun Loaded<*>.pending() = value == null && loading
 
 /**
  * A titled home row: the cards once [data] is there, a skeleton of the same
- * size while it is [pending], nothing otherwise. One fades into the other.
+ * size while it is [pending], nothing otherwise. The cards slide in over
+ * the fading skeleton.
  */
 private fun <T> LazyListScope.homeRow(
     key: String,
@@ -232,7 +239,7 @@ private fun <T> LazyListScope.homeRow(
     item(key = key) {
         Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
             SectionTitle(title)
-            Crossfade(data != null, animationSpec = skeletonFade(), label = key) { loaded ->
+            AnimatedContent(data != null, transitionSpec = { Motion.arrive using SizeTransform(clip = false) }, label = key) { loaded ->
                 if (loaded && data != null) content(data) else CarouselSkeleton(circle)
             }
         }
@@ -240,15 +247,19 @@ private fun <T> LazyListScope.homeRow(
 }
 
 
-/** Big gradient tile for liked songs. */
+/** Big glass tile for liked songs, tinted from violet to the accent; the heart beats when pressed. */
 @Composable
 private fun LikedTile(onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     val accent = accentColor()
+    val pressed by source.collectIsPressedAsState()
+    val beat = animateFloatAsState(if (pressed) 1.22f else 1f, if (pressed) spring(.4f, 900f) else spring(.32f, 420f), label = "beat")
+    val shape = RoundedCornerShape(20.dp)
     Row(
-        Modifier.fillMaxWidth().height(76.dp).weightedPress(source, 20.dp).clip(RoundedCornerShape(20.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF4B2BD6), accent.copy(alpha = .85f))))
+        Modifier.fillMaxWidth().height(76.dp).weightedPress(source, 20.dp)
+            .background(Brush.linearGradient(listOf(Color(0xFF4B2BD6), accent.copy(alpha = .85f))), shape)
+            .glassPane(shape, Color.Transparent, true)
             .clickable(source, null) {
                 haptics.tick()
                 onClick()
@@ -256,7 +267,13 @@ private fun LikedTile(onClick: () -> Unit) {
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Favorite, null, tint = Color.White, modifier = Modifier.size(28.dp))
+        Icon(
+            Icons.Rounded.Favorite, null, tint = Color.White,
+            modifier = Modifier.size(28.dp).graphicsLayer {
+                scaleX = beat.value
+                scaleY = beat.value
+            },
+        )
         Spacer(Modifier.width(14.dp))
         Text("Músicas curtidas", color = Color.White, style = MaterialTheme.typography.titleMedium)
     }

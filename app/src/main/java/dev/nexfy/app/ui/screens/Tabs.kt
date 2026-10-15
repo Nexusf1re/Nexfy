@@ -29,7 +29,6 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +44,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import dev.nexfy.app.ui.theme.isDark
+import dev.nexfy.app.ui.design.glassPane
+import dev.nexfy.app.ui.design.Motion
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -142,14 +155,49 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
         ) {
             item(key = "title") { LargeTitle("Buscar", collapse, Modifier.padding(start = 4.dp)) }
             item(key = "field") {
+                // A pane of glass that lights up in the accent while focused; a
+                // light runs along its lower edge while a search is on its way.
+                val focus = remember { MutableInteractionSource() }
+                val focused by focus.collectIsFocusedAsState()
+                val glow = animateFloatAsState(if (focused) 1f else 0f, Motion.standard(), label = "focus")
+                val accent = accentColor()
+                val icon by animateColorAsState(if (focused) accent else c.onSurfaceVariant, Motion.standard(), label = "icon")
+                val sweep = remember { Animatable(0f) }
+                LaunchedEffect(searching) {
+                    while (searching) {
+                        sweep.snapTo(0f)
+                        sweep.animateTo(1f, tween(Motion.scaled(950), easing = LinearEasing))
+                    }
+                }
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 10.dp).height(52.dp).clip(CircleShape).background(c.surfaceVariant)
+                    Modifier.fillMaxWidth().padding(vertical = 10.dp).height(52.dp)
+                        .glassPane(CircleShape, c.surfaceVariant.copy(alpha = .75f), c.isDark)
+                        .drawWithContent {
+                            drawContent()
+                            val g = glow.value
+                            if (g > 0f) {
+                                drawRoundRect(
+                                    accent.copy(alpha = .75f * g), cornerRadius = CornerRadius(size.height / 2),
+                                    style = Stroke(1.5.dp.toPx()),
+                                )
+                            }
+                            if (searching) {
+                                val w = size.width * .35f
+                                val x = sweep.value * (size.width + w) - w
+                                val line = 2.dp.toPx()
+                                drawRect(
+                                    Brush.horizontalGradient(listOf(Color.Transparent, accent, Color.Transparent), startX = x, endX = x + w),
+                                    topLeft = Offset(0f, size.height - line), size = Size(size.width, line),
+                                )
+                            }
+                        }
                         .padding(start = 16.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Rounded.Search, null, tint = c.onSurfaceVariant)
+                    Icon(Icons.Rounded.Search, null, tint = icon)
                     BasicTextField(
                         query, { query = it }, Modifier.weight(1f).padding(horizontal = 12.dp), singleLine = true,
+                        interactionSource = focus,
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = c.onSurface),
                         cursorBrush = SolidColor(c.onSurface),
                         decorationBox = { field ->
@@ -159,9 +207,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             field()
                         },
                     )
-                    if (searching) {
-                        CircularProgressIndicator(Modifier.size(44.dp).padding(12.dp), strokeWidth = 2.dp, color = c.onSurface)
-                    } else if (query.isNotEmpty()) {
+                    if (query.isNotEmpty()) {
                         IconButton({ query = "" }) { Icon(Icons.Rounded.Close, "Limpar busca", tint = c.onSurfaceVariant) }
                     }
                 }
