@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.LoginService
 import dev.nexfy.app.LyricsSize
 import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.ui.AppActions
@@ -99,6 +100,7 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
 private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
     val c = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val core = actions.core
     var user by remember { mutableStateOf<String?>(null) }
     var web by remember { mutableStateOf<WebStatus?>(null) }
@@ -115,9 +117,12 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
         scope.launch {
             onMessage(
                 try {
-                    actions.openBrowser(begin())
-                    onMessage("Aguardando o Spotify no navegador…")
-                    finish()
+                    val url = begin()
+                    LoginService.during(context) {
+                        actions.openBrowser(url)
+                        onMessage("Aguardando o Spotify no navegador…")
+                        finish()
+                    }
                     "$label conectado"
                 } catch (e: Exception) {
                     e.message ?: "Erro no login"
