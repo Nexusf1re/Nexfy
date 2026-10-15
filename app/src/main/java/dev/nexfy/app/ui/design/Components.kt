@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -44,6 +45,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.chrisbanes.haze.HazeState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
@@ -245,19 +248,38 @@ fun GlassIcon(
     light: Boolean = false,
     /** A toggle that is on: the icon takes the accent. */
     selected: Boolean = false,
+    /**
+     * Floats over a page's own glass backdrop ([LocalHaze] set to it), so
+     * it can be real liquid glass; off, a tinted pane for use inside lists.
+     */
+    liquid: Boolean = false,
 ) {
+    val dark = !light || MaterialTheme.colorScheme.isDark
     val tint = when {
         selected -> dev.nexfy.app.ui.theme.accentColor()
         light -> MaterialTheme.colorScheme.onBackground
         else -> Color.White
     }
-    GlassBox(Modifier.size(48.dp), CircleShape, dark = !light || MaterialTheme.colorScheme.isDark) {
+    val content: @Composable BoxScope.() -> Unit = {
         Box(
             Modifier.matchParentSize().clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {
             Icon(icon, description, tint = tint.copy(alpha = if (enabled) 1f else .4f))
         }
+    }
+    if (liquid) {
+        val source = remember { MutableInteractionSource() }
+        Box(Modifier.size(48.dp).springPress(source).liquidGlass(CircleShape, dark, GlassLevel.Subtle)) {
+            Box(
+                Modifier.matchParentSize().clickable(source, null, enabled = enabled, onClick = onClick),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, description, tint = tint.copy(alpha = if (enabled) 1f else .4f))
+            }
+        }
+    } else {
+        GlassBox(Modifier.size(48.dp), CircleShape, dark = dark, content = content)
     }
 }
 
@@ -626,44 +648,64 @@ fun headerInk(): Color = if (MaterialTheme.colorScheme.isDark) Color.White else 
 
 /** Detail top bar: back always visible; title and play appear once the header scrolls away. */
 @Composable
-fun DetailTopBar(title: String, collapse: State<Float>, onBack: () -> Unit, onPlay: (() -> Unit)?) {
+fun DetailTopBar(
+    title: String,
+    collapse: State<Float>,
+    onBack: () -> Unit,
+    /** The page's own glass backdrop (see [glassSource]): the bar is liquid glass over it. */
+    glass: HazeState? = null,
+    onPlay: (() -> Unit)?,
+) = CompositionLocalProvider(LocalHaze provides (glass ?: LocalHaze.current)) {
     val c = MaterialTheme.colorScheme
     // Appears only once the header has faded out, so the two never overlap.
     val bar by remember { derivedStateOf { ((collapse.value - .7f) / .3f).coerceIn(0f, 1f) } }
-    val edge = 12.dp
-    Row(
-        Modifier.fillMaxWidth()
-            // Opaque behind the status bar too, with a soft edge below instead of a hard line.
-            .drawBehind {
-                val solid = size.height - edge.toPx()
-                drawRect(c.background.copy(alpha = bar), size = Size(size.width, solid))
-                drawRect(
-                    Brush.verticalGradient(
-                        listOf(c.background.copy(alpha = bar), Color.Transparent),
-                        startY = solid,
-                        endY = size.height,
-                    ),
-                    topLeft = Offset(0f, solid),
-                    size = Size(size.width, edge.toPx()),
-                )
-            }
-            .statusBarsPadding()
-            .padding(bottom = edge)
-            .height(TopBarHeight)
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        GlassIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", onBack, light = bar > .5f)
-        Text(
-            title, Modifier.weight(1f).padding(horizontal = 12.dp).graphicsLayer { alpha = bar },
-            style = MaterialTheme.typography.titleMedium, color = c.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        if (bar > 0f && onPlay != null) {
+    // On a page with its own glass backdrop the bar is liquid glass with a
+    // rounded lower edge; elsewhere it stays an opaque band.
+    val liquid = glass != null
+    val edge = if (liquid) 0.dp else 12.dp
+    Box(Modifier.fillMaxWidth()) {
+        if (liquid && bar > 0f) {
             Box(
-                Modifier.size(48.dp).graphicsLayer { alpha = bar }.clip(CircleShape).clickable(enabled = bar > .5f, onClick = onPlay),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Rounded.PlayCircle, "Tocar", tint = c.onBackground, modifier = Modifier.size(32.dp))
+                Modifier.matchParentSize().graphicsLayer { alpha = bar }
+                    .liquidGlass(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp), c.isDark, GlassLevel.Regular),
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth()
+                // Opaque behind the status bar too, with a soft edge below instead of a hard line.
+                .then(
+                    if (liquid) Modifier else Modifier.drawBehind {
+                        val solid = size.height - edge.toPx()
+                        drawRect(c.background.copy(alpha = bar), size = Size(size.width, solid))
+                        drawRect(
+                            Brush.verticalGradient(
+                                listOf(c.background.copy(alpha = bar), Color.Transparent),
+                                startY = solid,
+                                endY = size.height,
+                            ),
+                            topLeft = Offset(0f, solid),
+                            size = Size(size.width, edge.toPx()),
+                        )
+                    },
+                )
+                .statusBarsPadding()
+                .padding(bottom = edge)
+                .height(TopBarHeight)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            GlassIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", onBack, light = bar > .5f, liquid = liquid)
+            Text(
+                title, Modifier.weight(1f).padding(horizontal = 12.dp).graphicsLayer { alpha = bar },
+                style = MaterialTheme.typography.titleMedium, color = c.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            if (bar > 0f && onPlay != null) {
+                Box(
+                    Modifier.size(48.dp).graphicsLayer { alpha = bar }.clip(CircleShape).clickable(enabled = bar > .5f, onClick = onPlay),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.PlayCircle, "Tocar", tint = c.onBackground, modifier = Modifier.size(32.dp))
+                }
             }
         }
     }

@@ -238,7 +238,7 @@ fun ShowScreen(actions: AppActions, id: String, list: LazyListState, modifier: M
                 }
             }
         }
-        DetailTopBar(name, collapse, back, next?.let { episode -> { play(episode) } })
+        DetailTopBar(name, collapse, back, onPlay = next?.let { episode -> { play(episode) } })
     }
 }
 

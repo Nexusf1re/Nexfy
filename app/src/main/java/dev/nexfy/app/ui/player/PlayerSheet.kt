@@ -147,6 +147,7 @@ import dev.nexfy.app.ui.design.ThinSlider
 import dev.nexfy.app.ui.design.kenBurns
 import dev.nexfy.app.ui.design.snapNow
 import dev.nexfy.app.ui.design.liquidGlass
+import dev.nexfy.app.ui.design.GlassLevel
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.springPress
 import dev.nexfy.app.ui.theme.isDark
@@ -394,7 +395,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 Box(
                     Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(68.dp)
                         .graphicsLayer { alpha = (1f - pf()).coerceIn(0f, 1f) }
-                        .liquidGlass(RoundedCornerShape(34.dp), c.isDark),
+                        .liquidGlass(RoundedCornerShape(34.dp), c.isDark, GlassLevel.Strong),
                 )
             }
             // Living backdrop: a slow mesh gradient in the cover's colours.

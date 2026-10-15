@@ -18,7 +18,6 @@ import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.unit.IntSize
 import dev.chrisbanes.haze.HazeInputScale
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
@@ -30,6 +29,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.runtime.State
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -52,10 +52,24 @@ val LocalHaze = staticCompositionLocalOf<HazeState?> { null }
 fun Modifier.glassSource(state: HazeState?) = if (state != null) hazeSource(state) else this
 
 /**
+ * How much glass: [Subtle] for small controls, [Regular] for bars,
+ * [Strong] for the floating pieces that carry the look. [depth] is how far
+ * the rim bends what is behind, [band] how wide that rim is, [calm] how much
+ * the backdrop's contrast is flattened towards the theme so what sits on the
+ * glass always reads.
+ */
+enum class GlassLevel(val depth: Float, val band: Float, val blur: Float, val calm: Float, val tint: Float) {
+    Subtle(depth = 5f, band = 12f, blur = 10f, calm = .45f, tint = .30f),
+    Regular(depth = 9f, band = 18f, blur = 14f, calm = .5f, tint = .36f),
+    Strong(depth = 15f, band = 26f, blur = 16f, calm = .42f, tint = .32f),
+}
+
+/**
  * The glass lens, as a RenderEffect shader over the blurred backdrop: near
  * the rim it samples towards the centre, so what is behind bends and
  * magnifies at the edge like through thick glass, with the colours split a
- * little. Deep inside it passes the backdrop through untouched.
+ * little. The backdrop is then made a touch more vivid but flatter, pulled
+ * towards the theme's base, so icons and text on the glass keep their edge.
  */
 private const val LENS = """
 uniform shader content;
@@ -63,6 +77,8 @@ uniform float2 size;
 uniform float radius;
 uniform float band;
 uniform float depth;
+uniform float calm;
+uniform float base;
 
 half4 main(float2 p) {
     float2 c = size * 0.5;
@@ -82,9 +98,11 @@ half4 main(float2 p) {
     }
     float2 shift = -n * k * depth;
     half4 g = content.eval(p + shift);
-    half r = content.eval(p + shift * 1.15).r;
-    half b = content.eval(p + shift * 0.85).b;
-    return half4(r, g.g, b, g.a);
+    float3 col = float3(content.eval(p + shift * 1.15).r, g.g, content.eval(p + shift * 0.85).b);
+    float l = dot(col, float3(0.2126, 0.7152, 0.0722));
+    col = mix(float3(l), col, 1.2);
+    col = mix(col, col * 0.5 + base * 0.5, calm);
+    return half4(half3(clamp(col, 0.0, 1.0)), g.a);
 }
 """
 
@@ -94,12 +112,12 @@ half4 main(float2 p) {
  * brighter on top and a soft inner shadow at the bottom.
  */
 @Composable
-fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
+fun Modifier.liquidGlass(shape: Shape, dark: Boolean, level: GlassLevel = GlassLevel.Regular): Modifier {
     val haze = LocalHaze.current
-    val tint = if (dark) Color(0xFF1C1C20).copy(alpha = .38f) else Color.White.copy(alpha = .46f)
+    val tint = if (dark) Color(0xFF16171B).copy(alpha = level.tint) else Color.White.copy(alpha = level.tint + .12f)
     val base = clip(shape)
     val blurred = if (haze != null && Build.VERSION.SDK_INT >= 33) {
-        base.refracted(haze, shape, tint, dark)
+        base.refracted(haze, shape, tint, dark, level)
     } else if (haze != null) {
         base.hazeEffect(
             haze,
@@ -122,37 +140,48 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
         }
     }
     return blurred.drawWithContent {
-        drawContent()
         val outline = shape.createOutline(size, layoutDirection, this)
-        drawOutline(
-            outline,
-            Brush.verticalGradient(
-                0f to Color.White.copy(if (dark) .10f else .35f),
-                .35f to Color.Transparent,
-                .8f to Color.Transparent,
-                1f to Color.Black.copy(if (dark) .22f else .08f),
-            ),
-        )
-        drawOutline(
-            outline,
-            Brush.radialGradient(
-                listOf(Color.White.copy(if (dark) .09f else .2f), Color.Transparent),
-                center = Offset(size.width * .3f, 0f),
-                radius = size.width * .45f,
-            ),
-        )
-        drawOutline(
-            outline,
-            Brush.verticalGradient(
-                listOf(
-                    Color.White.copy(if (dark) .38f else .9f),
-                    Color.White.copy(.06f),
-                    Color.White.copy(if (dark) .16f else .4f),
-                ),
-            ),
-            style = Stroke(1.dp.toPx()),
-        )
+        // The sheen goes under what sits on the glass, only the rim over it.
+        glassSheen(outline, dark)
+        drawContent()
+        glassRim(outline, dark)
     }
+}
+
+/** Light on the glass body: brighter towards the top, a soft shade at the bottom, a highlight up left. */
+private fun DrawScope.glassSheen(outline: Outline, dark: Boolean) {
+    drawOutline(
+        outline,
+        Brush.verticalGradient(
+            0f to Color.White.copy(if (dark) .10f else .35f),
+            .35f to Color.Transparent,
+            .8f to Color.Transparent,
+            1f to Color.Black.copy(if (dark) .22f else .08f),
+        ),
+    )
+    drawOutline(
+        outline,
+        Brush.radialGradient(
+            listOf(Color.White.copy(if (dark) .09f else .2f), Color.Transparent),
+            center = Offset(size.width * .3f, 0f),
+            radius = size.width * .45f,
+        ),
+    )
+}
+
+/** The glass edge: a specular line, bright on top, faint on the sides, lit again at the bottom. */
+private fun DrawScope.glassRim(outline: Outline, dark: Boolean) {
+    drawOutline(
+        outline,
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(if (dark) .38f else .9f),
+                Color.White.copy(.06f),
+                Color.White.copy(if (dark) .16f else .4f),
+            ),
+        ),
+        style = Stroke(1.dp.toPx()),
+    )
 }
 
 /**
@@ -162,7 +191,7 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean): Modifier {
  */
 @RequiresApi(33)
 @Composable
-private fun Modifier.refracted(haze: HazeState, shape: Shape, tint: Color, dark: Boolean): Modifier {
+private fun Modifier.refracted(haze: HazeState, shape: Shape, tint: Color, dark: Boolean, level: GlassLevel): Modifier {
     val lens = rememberGraphicsLayer()
     val shader = remember { RuntimeShader(LENS) }
     val origin = remember { mutableStateOf(Offset.Zero) }
@@ -182,9 +211,11 @@ private fun Modifier.refracted(haze: HazeState, shape: Shape, tint: Color, dark:
             val radius = (outline as? Outline.Rounded)?.roundRect?.topLeftCornerRadius?.x ?: 0f
             shader.setFloatUniform("size", size.width, size.height)
             shader.setFloatUniform("radius", radius.coerceAtMost(size.minDimension / 2f))
-            shader.setFloatUniform("band", minOf(size.minDimension / 2f, 20.dp.toPx()))
-            shader.setFloatUniform("depth", 10.dp.toPx())
-            val blur = 14.dp.toPx()
+            shader.setFloatUniform("band", minOf(size.minDimension / 2f, level.band.dp.toPx()))
+            shader.setFloatUniform("depth", level.depth.dp.toPx())
+            shader.setFloatUniform("calm", level.calm)
+            shader.setFloatUniform("base", if (dark) .05f else .96f)
+            val blur = level.blur.dp.toPx()
             lens.renderEffect = RenderEffect.createChainEffect(
                 RenderEffect.createRuntimeShaderEffect(shader, "content"),
                 RenderEffect.createBlurEffect(blur, blur, Shader.TileMode.CLAMP),
@@ -214,8 +245,8 @@ fun GlassBox(
     dark: Boolean = true,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val tint = if (dark) Color.White.copy(alpha = .10f) else Color.White.copy(alpha = .55f)
-    val edge = Brush.verticalGradient(listOf(Color.White.copy(alpha = if (dark) .35f else .9f), Color.White.copy(alpha = .04f)))
+    // A touch darker than before on dark art, so the label on it keeps its edge.
+    val tint = if (dark) Color.Black.copy(alpha = .16f) else Color.White.copy(alpha = .55f)
     Box(modifier.clip(shape)) {
         if (!backdrop.isNullOrBlank()) {
             AsyncImage(
@@ -225,8 +256,15 @@ fun GlassBox(
                 modifier = Modifier.matchParentSize().blur(40.dp).graphicsLayer { alpha = .55f },
             )
         }
-        Box(Modifier.matchParentSize().background(tint).border(1.dp, edge, shape))
+        Box(
+            Modifier.matchParentSize().drawBehind {
+                drawRect(tint)
+                glassSheen(shape.createOutline(size, layoutDirection, this), dark)
+            },
+        )
         content()
+        // Same lit edge as the liquid glass, over the content.
+        Box(Modifier.matchParentSize().drawBehind { glassRim(shape.createOutline(size, layoutDirection, this), dark) })
     }
 }
 

@@ -76,6 +76,18 @@ import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.ambientGlow
+import dev.nexfy.app.ui.design.GlassLevel
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import dev.nexfy.app.ui.theme.accentState
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.springPress
@@ -467,9 +479,10 @@ private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifie
 }
 
 /**
- * Floating glass dock. The highlight is a liquid pill: its leading edge
+ * Floating glass dock. The highlight is a liquid lens: its leading edge
  * runs on a firm spring and the trailing one follows on a soft spring, so it
- * stretches on the way and settles with a slight bounce.
+ * stretches on the way and settles with a slight bounce. The tabs under it
+ * show magnified, as through a drop of water, and more so while it moves.
  */
 @Composable
 private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
@@ -481,12 +494,14 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
     val lead = animateFloatAsState(index, spring(.62f, 620f), label = "lead")
     val trail = animateFloatAsState(index, spring(.74f, 230f), label = "trail")
     val pill = accent.copy(alpha = if (c.isDark) .16f else .12f)
+    val tabsLayer = rememberGraphicsLayer()
+    val lensPath = remember { Path() }
     Box(modifier) {
         // The blur node carries no shadow layer; the shadow is a sibling behind it.
         Box(Modifier.matchParentSize().shadow(18.dp, CircleShape, ambientColor = Color.Black.copy(.25f), spotColor = Color.Black.copy(.25f)))
         Row(
-            Modifier.fillMaxWidth().liquidGlass(CircleShape, c.isDark).padding(5.dp)
-                .drawBehind {
+            Modifier.fillMaxWidth().liquidGlass(CircleShape, c.isDark, GlassLevel.Regular).padding(5.dp)
+                .drawWithContent {
                     val w = size.width / tabs.size
                     val n = (tabs.size - 1).toFloat()
                     val l = minOf(lead.value, trail.value).coerceIn(0f, n)
@@ -494,11 +509,24 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
                     val stretch = (r - l).coerceIn(0f, 1f)
                     val inset = 2.dp.toPx() * (1f - stretch)
                     val squash = size.height * .06f * stretch
+                    val lens = Rect(Offset(l * w + inset, squash), Size((r - l + 1f) * w - 2 * inset, size.height - 2 * squash))
+                    val corner = CornerRadius(lens.height / 2f)
+                    lensPath.rewind()
+                    lensPath.addRoundRect(RoundRect(lens, corner))
+                    tabsLayer.record { this@drawWithContent.drawContent() }
+                    drawRoundRect(pill, lens.topLeft, lens.size, corner)
+                    clipPath(lensPath, ClipOp.Difference) { drawLayer(tabsLayer) }
+                    clipPath(lensPath) {
+                        scale(1.1f + .08f * stretch, pivot = lens.center) { drawLayer(tabsLayer) }
+                    }
                     drawRoundRect(
-                        pill,
-                        Offset(l * w + inset, squash),
-                        Size((r - l + 1f) * w - 2 * inset, size.height - 2 * squash),
-                        CornerRadius(size.height / 2f),
+                        Brush.verticalGradient(
+                            listOf(Color.White.copy(if (c.isDark) .42f else .9f), Color.White.copy(.04f), Color.White.copy(if (c.isDark) .18f else .5f)),
+                            startY = lens.top,
+                            endY = lens.bottom,
+                        ),
+                        lens.topLeft, lens.size, corner,
+                        style = Stroke(1.dp.toPx()),
                     )
                 },
         ) {
@@ -506,7 +534,6 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
                 val on = t == tab
                 val source = remember { MutableInteractionSource() }
                 val tint by animateColorAsState(if (on) accent else c.onSurfaceVariant, Motion.standard(), label = "tint")
-                val scale = animateFloatAsState(if (on) 1.1f else 1f, spring(.55f, 500f), label = "icon")
                 Column(
                     Modifier.weight(1f).springPress(source).clip(CircleShape)
                         .clickable(source, null) {
@@ -516,14 +543,7 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
                         .padding(vertical = 9.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Icon(
-                        t.icon, null, tint = tint,
-                        modifier = Modifier.size(23.dp).graphicsLayer {
-                            val k = scale.value.coerceIn(.8f, 1.25f)
-                            scaleX = k
-                            scaleY = k
-                        },
-                    )
+                    Icon(t.icon, null, tint = tint, modifier = Modifier.size(23.dp))
                     Text(t.label, color = tint, fontSize = 11.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
                 }
             }

@@ -80,6 +80,8 @@ import dev.nexfy.app.ui.theme.LocalLook
 import dev.nexfy.app.ui.theme.isDark
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.DetailTopBar
+import dev.nexfy.app.ui.design.glassSource
+import dev.chrisbanes.haze.HazeState
 import dev.nexfy.app.ui.design.GlassBox
 import dev.nexfy.app.ui.design.GlassIcon
 import dev.nexfy.app.ui.design.LocalBottomSpace
@@ -228,175 +230,179 @@ fun CollectionScreen(
     }
     val showFaces = addedByOn && contributors.size > 1
 
+    // The page's own glass backdrop: the top bar floats over it as liquid glass.
+    val pageGlass = remember { HazeState() }
     Box(modifier) {
-        CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
-        Box(Modifier.fillMaxSize().dragToDismiss(dismiss, back)) {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                state = list,
-                contentPadding = PaddingValues(bottom = LocalBottomSpace.current),
-            ) {
-                item(key = "header") {
-                    Column(
-                        Modifier.fillMaxWidth().statusBarsPadding().padding(top = TopBarHeight)
-                            .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
-                            .graphicsLayer { alpha = (1f - collapse.value * 1.5f).coerceIn(0f, 1f) },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        val coverModifier = Modifier.size(208.dp).graphicsLayer {
-                            val sc = 1f - .15f * collapse.value.coerceIn(0f, 1f)
-                            scaleX = sc
-                            scaleY = sc
-                        }
-                        val coverRadius = if (round) 104.dp else 10.dp
-                        if (loading && imageUrl == null) {
-                            Bone(coverModifier, RoundedCornerShape(coverRadius), light = dark)
-                        } else {
-                            Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
-                        }
-                        Spacer(Modifier.height(16.dp))
-                        if (loading && title.isBlank()) {
-                            Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
-                                Bone(Modifier.size(180.dp, 22.dp), light = dark)
+        Box(Modifier.fillMaxSize().glassSource(pageGlass)) {
+            CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize().dragToDismiss(dismiss, back)) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    state = list,
+                    contentPadding = PaddingValues(bottom = LocalBottomSpace.current),
+                ) {
+                    item(key = "header") {
+                        Column(
+                            Modifier.fillMaxWidth().statusBarsPadding().padding(top = TopBarHeight)
+                                .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
+                                .graphicsLayer { alpha = (1f - collapse.value * 1.5f).coerceIn(0f, 1f) },
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            val coverModifier = Modifier.size(208.dp).graphicsLayer {
+                                val sc = 1f - .15f * collapse.value.coerceIn(0f, 1f)
+                                scaleX = sc
+                                scaleY = sc
                             }
-                        } else {
-                            Text(
-                                title, color = ink, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        if (!subtitle.isNullOrBlank()) {
-                            Row(
-                                Modifier.clip(CircleShape)
-                                    .then(if (onSubtitle != null) Modifier.clickable { haptics.tick(); onSubtitle() } else Modifier)
-                                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (subtitleImage != null) {
-                                    dev.nexfy.app.ui.design.UserAvatar(UserFace("", subtitle, subtitleImage), Modifier.size(22.dp))
-                                    Spacer(Modifier.width(8.dp))
+                            val coverRadius = if (round) 104.dp else 10.dp
+                            if (loading && imageUrl == null) {
+                                Bone(coverModifier, RoundedCornerShape(coverRadius), light = dark)
+                            } else {
+                                Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
+                            }
+                            Spacer(Modifier.height(16.dp))
+                            if (loading && title.isBlank()) {
+                                Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
+                                    Bone(Modifier.size(180.dp, 22.dp), light = dark)
                                 }
+                            } else {
                                 Text(
-                                    subtitle,
-                                    color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                    title, color = ink, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            if (!subtitle.isNullOrBlank()) {
+                                Row(
+                                    Modifier.clip(CircleShape)
+                                        .then(if (onSubtitle != null) Modifier.clickable { haptics.tick(); onSubtitle() } else Modifier)
+                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    if (subtitleImage != null) {
+                                        dev.nexfy.app.ui.design.UserAvatar(UserFace("", subtitle, subtitleImage), Modifier.size(22.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(
+                                        subtitle,
+                                        color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            if (loading && meta.isBlank()) {
+                                Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
+                                    Bone(Modifier.size(132.dp, 10.dp), light = dark)
+                                }
+                            } else {
+                                Text(
+                                    meta.uppercase(), color = ink.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
+                                    textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.height(16.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                // A toggle, as in Spotify: on, "Tocar" plays shuffled; flipped while
+                                // this list plays, the player follows.
+                                GlassIcon(Icons.Rounded.Shuffle, if (shuffleOn) "Aleatório ligado" else "Aleatório desligado", {
+                                    haptics.tick()
+                                    val on = !shuffleOn
+                                    if (playingHere) actions.setShuffle(on) else library.setShuffle(on)
+                                }, enabled = all.isNotEmpty(), light = !dark, selected = shuffleOn)
+                                GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape, dark = dark) {
+                                    Row(
+                                        Modifier.matchParentSize().clickable(enabled = all.isNotEmpty()) {
+                                            haptics.press()
+                                            playAll()
+                                        },
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center,
+                                    ) {
+                                        Icon(Icons.Rounded.PlayArrow, null, tint = ink)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Tocar", color = ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                                    }
+                                }
+                                if (keepKey != null) {
+                                    GlassIcon(if (kept) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline, if (kept) "Tirar do aparelho" else "Manter no aparelho", {
+                                        haptics.press()
+                                        actions.app.library.toggleKept(keepKey)
+                                        android.widget.Toast.makeText(
+                                            actions.app,
+                                            if (kept) "Não fica mais no aparelho" else "Mantida no aparelho: baixa no Wi-Fi",
+                                            android.widget.Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }, enabled = all.isNotEmpty(), light = !dark)
+                                }
+                                onMore?.let { more ->
+                                    GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); more() }, light = !dark)
+                                }
+                            }
+                            if (kept && all.isNotEmpty()) {
+                                Text(
+                                    if (onPhone >= all.size) "Todas no aparelho" else "$onPhone de ${all.size} no aparelho · baixando no Wi-Fi",
+                                    Modifier.padding(top = 10.dp),
+                                    color = ink.copy(.7f), fontSize = 12.sp,
                                 )
                             }
                         }
-                        if (loading && meta.isBlank()) {
-                            Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
-                                Bone(Modifier.size(132.dp, 10.dp), light = dark)
-                            }
-                        } else {
-                            Text(
-                                meta.uppercase(), color = ink.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
-                                textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
+                    }
+                    if (loading && error == null) {
+                        item(key = "tools") { TrackToolsSkeleton() }
+                    } else if (all.size > 1) {
+                        item(key = "tools") {
+                            TrackTools(query, { query = it }, sort, { new ->
+                                sort = new
+                                source?.let { library.setTrackSort(it, new.name) }
+                            }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
                         }
-                        Spacer(Modifier.height(16.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            // A toggle, as in Spotify: on, "Tocar" plays shuffled; flipped while
-                            // this list plays, the player follows.
-                            GlassIcon(Icons.Rounded.Shuffle, if (shuffleOn) "Aleatório ligado" else "Aleatório desligado", {
-                                haptics.tick()
-                                val on = !shuffleOn
-                                if (playingHere) actions.setShuffle(on) else library.setShuffle(on)
-                            }, enabled = all.isNotEmpty(), light = !dark, selected = shuffleOn)
-                            GlassBox(Modifier.height(48.dp).width(144.dp), CircleShape, dark = dark) {
-                                Row(
-                                    Modifier.matchParentSize().clickable(enabled = all.isNotEmpty()) {
-                                        haptics.press()
-                                        playAll()
-                                    },
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center,
-                                ) {
-                                    Icon(Icons.Rounded.PlayArrow, null, tint = ink)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Tocar", color = ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                    }
+                    if (loading) {
+                        if (error != null) {
+                            item(key = "error") { LoadError(error, onRetry) }
+                        } else {
+                            items(10, key = { "sk$it" }) { i ->
+                                Column(Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = skeletonFade())) {
+                                    TrackRowSkeleton(i, Modifier.padding(horizontal = 16.dp), numbered = numbered)
+                                    HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
                                 }
                             }
-                            if (keepKey != null) {
-                                GlassIcon(if (kept) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline, if (kept) "Tirar do aparelho" else "Manter no aparelho", {
-                                    haptics.press()
-                                    actions.app.library.toggleKept(keepKey)
-                                    android.widget.Toast.makeText(
-                                        actions.app,
-                                        if (kept) "Não fica mais no aparelho" else "Mantida no aparelho: baixa no Wi-Fi",
-                                        android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                }, enabled = all.isNotEmpty(), light = !dark)
-                            }
-                            onMore?.let { more ->
-                                GlassIcon(Icons.Rounded.MoreHoriz, "Mais opções", { haptics.tick(); more() }, light = !dark)
-                            }
                         }
-                        if (kept && all.isNotEmpty()) {
+                    }
+                    if (shown.isEmpty() && query.isNotBlank()) {
+                        item(key = "none") {
                             Text(
-                                if (onPhone >= all.size) "Todas no aparelho" else "$onPhone de ${all.size} no aparelho · baixando no Wi-Fi",
-                                Modifier.padding(top = 10.dp),
-                                color = ink.copy(.7f), fontSize = 12.sp,
+                                "Nada encontrado para “${query.trim()}”",
+                                Modifier.fillMaxWidth().padding(32.dp),
+                                color = c.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
                             )
                         }
                     }
-                }
-                if (loading && error == null) {
-                    item(key = "tools") { TrackToolsSkeleton() }
-                } else if (all.size > 1) {
-                    item(key = "tools") {
-                        TrackTools(query, { query = it }, sort, { new ->
-                            sort = new
-                            source?.let { library.setTrackSort(it, new.name) }
-                        }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
-                    }
-                }
-                if (loading) {
-                    if (error != null) {
-                        item(key = "error") { LoadError(error, onRetry) }
-                    } else {
-                        items(10, key = { "sk$it" }) { i ->
-                            Column(Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = skeletonFade())) {
-                                TrackRowSkeleton(i, Modifier.padding(horizontal = 16.dp), numbered = numbered)
+                    itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
+                        val track = entry.value
+                        Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = reorderSpring, fadeOutSpec = null)) {
+                            Box(Modifier.padding(horizontal = 16.dp)) {
+                                TrackRow(
+                                    track,
+                                    { actions.play(shownTracks, i, shuffle = shuffleOn, source = source, contextUri = rowContext) },
+                                    number = if (numbered) entry.index + 1 else null,
+                                    // The queue keeps the URI as listed; the playing one may be relinked.
+                                    playing = playingUris.first == track.uri || playingUris.second == track.uri,
+                                    onLongClick = { menuFor = track },
+                                    onSwipe = { actions.addToQueue(track) },
+                                    addedBy = if (showFaces) track.addedBy?.let(faces::get) else null,
+                                )
+                            }
+                            if (i < shown.lastIndex) {
                                 HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
                             }
                         }
                     }
+                    footer()
                 }
-                if (shown.isEmpty() && query.isNotBlank()) {
-                    item(key = "none") {
-                        Text(
-                            "Nada encontrado para “${query.trim()}”",
-                            Modifier.fillMaxWidth().padding(32.dp),
-                            color = c.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
-                }
-                itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
-                    val track = entry.value
-                    Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = reorderSpring, fadeOutSpec = null)) {
-                        Box(Modifier.padding(horizontal = 16.dp)) {
-                            TrackRow(
-                                track,
-                                { actions.play(shownTracks, i, shuffle = shuffleOn, source = source, contextUri = rowContext) },
-                                number = if (numbered) entry.index + 1 else null,
-                                // The queue keeps the URI as listed; the playing one may be relinked.
-                                playing = playingUris.first == track.uri || playingUris.second == track.uri,
-                                onLongClick = { menuFor = track },
-                                onSwipe = { actions.addToQueue(track) },
-                                addedBy = if (showFaces) track.addedBy?.let(faces::get) else null,
-                            )
-                        }
-                        if (i < shown.lastIndex) {
-                            HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
-                        }
-                    }
-                }
-                footer()
             }
         }
-        DetailTopBar(title, collapse, back) { haptics.press(); playAll() }
+        DetailTopBar(title, collapse, back, pageGlass) { haptics.press(); playAll() }
     }
 }
 
