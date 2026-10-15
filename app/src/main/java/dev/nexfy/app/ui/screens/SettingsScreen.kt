@@ -154,7 +154,7 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
                 Icon(Icons.AutoMirrored.Rounded.HelpOutline, null, tint = accentColor(), modifier = Modifier.size(20.dp))
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                     Text("Como criar o seu app", color = c.onSurface, fontSize = 14.sp)
-                    Text("Passo a passo com o link e dúvidas comuns", color = c.onSurfaceVariant, fontSize = 12.sp)
+                    Text("Passo a passo e dúvidas comuns", color = c.onSurfaceVariant, fontSize = 12.sp)
                 }
                 Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
             }
