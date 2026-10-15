@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -142,6 +144,20 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
         }
         HorizontalDivider(color = c.outlineVariant)
         Group("App pessoal", "Tua própria cota da Web API: biblioteca e busca mais rápidas.") {
+            // How to make the app: the dashboard link, the redirect to copy and common snags.
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(accentColor().copy(.12f))
+                    .clickable { actions.open(Route.Guide) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.HelpOutline, null, tint = accentColor(), modifier = Modifier.size(20.dp))
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text("Como criar o seu app", color = c.onSurface, fontSize = 14.sp)
+                    Text("Passo a passo com o link e dúvidas comuns", color = c.onSurfaceVariant, fontSize = 12.sp)
+                }
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = c.onSurfaceVariant)
+            }
             OutlinedTextField(
                 value = clientId,
                 onValueChange = { clientId = it.trim() },
@@ -310,7 +326,7 @@ private fun AboutSection() {
 }
 
 @Composable
-private fun Section(title: String, description: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, description: String, content: @Composable () -> Unit) {
     val c = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(c.surfaceVariant).padding(18.dp),
@@ -369,7 +385,7 @@ private fun <T> Choice(title: String, options: List<T>, selected: T, label: (T) 
 }
 
 @Composable
-private fun StatusRow(text: String, ok: Boolean) {
+internal fun StatusRow(text: String, ok: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier.padding(end = 8.dp).clip(CircleShape)
