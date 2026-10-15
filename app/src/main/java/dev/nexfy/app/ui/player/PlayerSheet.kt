@@ -138,7 +138,6 @@ import androidx.compose.ui.util.lerp
 import coil3.compose.AsyncImage
 import dev.nexfy.app.playback.PlaybackSnapshot
 import dev.nexfy.app.ui.design.Bone
-import dev.nexfy.app.ui.design.GlassBox
 import dev.nexfy.app.ui.design.TextBone
 import dev.nexfy.app.ui.design.boneWidth
 import dev.nexfy.app.ui.design.LivingArtwork
@@ -147,6 +146,10 @@ import dev.nexfy.app.ui.design.ThinSlider
 import dev.nexfy.app.ui.design.kenBurns
 import dev.nexfy.app.ui.design.snapNow
 import dev.nexfy.app.ui.design.liquidGlass
+import androidx.compose.runtime.CompositionLocalProvider
+import dev.nexfy.app.ui.design.LocalHaze
+import dev.nexfy.app.ui.design.glassSource
+import dev.chrisbanes.haze.HazeState
 import dev.nexfy.app.ui.design.GlassLevel
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.springPress
@@ -298,6 +301,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     // device keeps its own queue: assume it has one.
     val hasNext = s.remote != null || s.queue.next.isNotEmpty()
     var showQueue by remember { mutableStateOf(false) }
+    // The living backdrop is the glass source for the player's own controls.
+    val playerGlass = remember { HazeState() }
     var showActions by remember { mutableStateOf(false) }
     if (showActions) {
         TrackActionsSheet(track, controls, onNavigate = { scope.launch { f.animateTo(0f, settle) } }) { showActions = false }
@@ -400,7 +405,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             }
             // Living backdrop: a slow mesh gradient in the cover's colours.
             if (showBg) {
-                Box(Modifier.fillMaxSize().graphicsLayer { alpha = pf() }) {
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = pf() }.glassSource(playerGlass)) {
                     LivingArtwork(track.coverUrl, Modifier.fillMaxSize(), dim = .2f)
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(.15f), Color.Black.copy(.55f)))))
                 }
@@ -689,10 +694,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             },
                         )
                         val shown = drag?.let { (it * duration).toLong() } ?: position
-                        Row {
-                            Text(fmt(shown), color = Color.White.copy(.6f), fontSize = 12.sp)
+                        Row(Modifier.padding(top = 2.dp)) {
+                            val time = MaterialTheme.typography.labelMedium
+                            Text(fmt(shown), color = Color.White.copy(.66f), style = time)
                             Spacer(Modifier.weight(1f))
-                            Text("-" + fmt(duration - shown), color = Color.White.copy(.6f), fontSize = 12.sp)
+                            Text("-" + fmt(duration - shown), color = Color.White.copy(.66f), style = time)
                         }
                         s.remote?.let { d ->
                             // Playing on another device: say where, and tap to change it.
@@ -707,44 +713,46 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             }
                         }
                         Spacer(Modifier.height(24.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            SideButton(Icons.Rounded.SkipPrevious, "Anterior", Modifier.weight(1f), true, controls::previous)
-                            PlayButton(s, controls, 84.dp, Color.White, Color.Black, Modifier.weight(2f), pill = true)
-                            SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, controls::next)
-                        }
-                        Spacer(Modifier.height(18.dp))
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            ToggleIcon(Icons.Rounded.Shuffle, "Aleatório", s.queue.shuffle) { controls.setShuffle(!s.queue.shuffle) }
-                            Spacer(Modifier.width(8.dp))
-                            ToggleIcon(
-                                if (s.queue.repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-                                when (s.queue.repeat) {
-                                    RepeatMode.ONE -> "Repetir faixa"
-                                    RepeatMode.ALL -> "Repetir fila"
-                                    RepeatMode.OFF -> "Repetição desligada"
-                                },
-                                s.queue.repeat != RepeatMode.OFF,
+                        CompositionLocalProvider(LocalHaze provides playerGlass) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                controls.setRepeat(
-                                    when (s.queue.repeat) {
-                                        RepeatMode.OFF -> RepeatMode.ALL
-                                        RepeatMode.ALL -> RepeatMode.ONE
-                                        RepeatMode.ONE -> RepeatMode.OFF
-                                    },
-                                )
+                                SideButton(Icons.Rounded.SkipPrevious, "Anterior", Modifier.weight(1f), true, controls::previous)
+                                PlayButton(s, controls, 84.dp, Color.White, Color.White, Modifier.weight(2f), pill = true, glass = true)
+                                SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, controls::next)
                             }
-                            Spacer(Modifier.weight(1f))
-                            ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
-                            Spacer(Modifier.weight(1f))
-                            ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
-                                showLyrics = !showLyrics
-                                library.lyricsOpen = showLyrics
-                                if (showLyrics) flipped = false
-                                if (!showLyrics) lyricsFull = false
+                            Spacer(Modifier.height(18.dp))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                ToggleIcon(Icons.Rounded.Shuffle, "Aleatório", s.queue.shuffle) { controls.setShuffle(!s.queue.shuffle) }
+                                Spacer(Modifier.width(8.dp))
+                                ToggleIcon(
+                                    if (s.queue.repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                                    when (s.queue.repeat) {
+                                        RepeatMode.ONE -> "Repetir faixa"
+                                        RepeatMode.ALL -> "Repetir fila"
+                                        RepeatMode.OFF -> "Repetição desligada"
+                                    },
+                                    s.queue.repeat != RepeatMode.OFF,
+                                ) {
+                                    controls.setRepeat(
+                                        when (s.queue.repeat) {
+                                            RepeatMode.OFF -> RepeatMode.ALL
+                                            RepeatMode.ALL -> RepeatMode.ONE
+                                            RepeatMode.ONE -> RepeatMode.OFF
+                                        },
+                                    )
+                                }
+                                Spacer(Modifier.weight(1f))
+                                ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
+                                Spacer(Modifier.weight(1f))
+                                ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
+                                    showLyrics = !showLyrics
+                                    library.lyricsOpen = showLyrics
+                                    if (showLyrics) flipped = false
+                                    if (!showLyrics) lyricsFull = false
+                                }
                             }
                         }
                         Spacer(Modifier.height(12.dp))
@@ -789,11 +797,14 @@ private fun PlayButton(
     fg: Color,
     modifier: Modifier = Modifier,
     pill: Boolean = false,
+    /** Strong liquid glass over the player's backdrop instead of a solid [bg]. */
+    glass: Boolean = false,
 ) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     Box(
-        modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).springPress(source).clip(CircleShape).background(bg)
+        modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).springPress(source)
+            .then(if (glass) Modifier.liquidGlass(CircleShape, true, GlassLevel.Strong) else Modifier.clip(CircleShape).background(bg))
             .clickable(source, null) {
                 haptics.press()
                 controls.playPause()
@@ -819,16 +830,16 @@ private fun PlayButton(
 private fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
-    GlassBox(modifier.height(84.dp).alpha(if (enabled) 1f else .35f).springPress(source), CircleShape) {
-        Box(
-            Modifier.matchParentSize().clickable(source, null, enabled = enabled) {
+    Box(
+        modifier.height(84.dp).alpha(if (enabled) 1f else .35f).springPress(source)
+            .liquidGlass(CircleShape, true, GlassLevel.Regular)
+            .clickable(source, null, enabled = enabled) {
                 haptics.press()
                 onClick()
             },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, description, tint = Color.White, modifier = Modifier.size(32.dp))
-        }
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = Color.White, modifier = Modifier.size(32.dp))
     }
 }
 
@@ -836,9 +847,10 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
 private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
+    // On: solid white; off: a drop of subtle glass.
     Box(
-        Modifier.size(48.dp).springPress(source).clip(CircleShape)
-            .background(if (on) Color.White.copy(.9f) else Color.White.copy(.08f))
+        Modifier.size(48.dp).springPress(source)
+            .then(if (on) Modifier.clip(CircleShape).background(Color.White.copy(.92f)) else Modifier.liquidGlass(CircleShape, true, GlassLevel.Subtle))
             .clickable(source, null) {
                 haptics.tick()
                 onClick()

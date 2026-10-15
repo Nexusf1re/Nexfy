@@ -25,7 +25,6 @@ import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -35,9 +34,9 @@ import dev.nexfy.app.ui.theme.Hairline
 import dev.nexfy.app.ui.theme.isDark
 
 /**
- * A bottom sheet of frosted glass: translucent graphite with the lit glass
- * rim, over the app blurred behind it (cross-window blur, Android 12+ where
- * the device allows it; otherwise the scrim alone).
+ * A bottom sheet of frosted glass: graphite over the app, which blurs and
+ * steps back behind it ([sheetDepth]; the system's cross-window blur too,
+ * where the device allows it).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,12 +46,10 @@ fun GlassSheet(onDismissRequest: () -> Unit, content: @Composable ColumnScope.()
     val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
-        modifier = Modifier.drawWithContent {
-            drawContent()
-            glassRim(shape.createOutline(size, layoutDirection, this), dark)
-        },
         shape = shape,
-        containerColor = (if (dark) Color(0xFF16171B) else Color.White).copy(alpha = if (dark) .9f else .93f),
+        // Solid: lighter spots of the blurred app (a glass button, a bright cover)
+        // would otherwise show through the list as smudges.
+        containerColor = if (dark) Color(0xFF16171B) else Color.White,
         tonalElevation = 0.dp,
         scrimColor = Color.Black.copy(alpha = if (dark) .28f else .16f),
         dragHandle = {
