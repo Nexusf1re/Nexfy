@@ -183,11 +183,13 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** Swiping the app away while paused ends the service; while playing it keeps going. */
+    /**
+     * Swiping the app away from recents stops the music here and ends the
+     * service. A song on another device keeps playing there.
+     */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (!player.playWhenReady || player.mediaItemCount == 0) {
-            stopSelf()
-        }
+        if (!remote) runCatching { (application as NexfyApp).core.pause() }
+        stopSelf()
     }
 
     override fun onDestroy() {

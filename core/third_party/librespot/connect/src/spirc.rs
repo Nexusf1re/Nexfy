@@ -676,7 +676,12 @@ impl SpircTask {
                     pending: self.context_resolver.pending(),
                     username: self.session.username(),
                     position_ms: self.position(),
-                    playing: self.connect_state.is_playing(),
+                    // The play status, not the last state sent: a pause made
+                    // offline never reached the server.
+                    playing: matches!(
+                        self.play_status,
+                        SpircPlayStatus::Playing { .. } | SpircPlayStatus::LoadingPlay { .. }
+                    ),
                 };
                 *self
                     .disconnected_playback
@@ -948,6 +953,18 @@ impl SpircTask {
                         self.play_status = SpircPlayStatus::Playing {
                             nominal_start_time: new_nominal_start_time,
                             preloading_of_next_track_triggered: false,
+                        };
+                    }
+                    // Resumed on the player directly (works offline): follow it.
+                    SpircPlayStatus::Paused {
+                        preloading_of_next_track_triggered,
+                        ..
+                    } => {
+                        self.connect_state
+                            .update_position(position_ms, self.now_ms());
+                        self.play_status = SpircPlayStatus::Playing {
+                            nominal_start_time: new_nominal_start_time,
+                            preloading_of_next_track_triggered,
                         };
                     }
                     _ => return Ok(()),

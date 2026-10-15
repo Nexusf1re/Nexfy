@@ -238,6 +238,9 @@ struct Inner {
     track_cache: Mutex<HashMap<String, Track>>,
     listener: Mutex<Option<Arc<dyn CoreListener>>>,
     playing: AtomicBool,
+    /// A song sits in this phone's player (playing or paused), so pause,
+    /// resume and seek can act on it directly, without the network.
+    loaded: AtomicBool,
     levels: Arc<sound::Levels>,
     /// Runs on the player's output; the app changes it live.
     equalizer: Arc<equalizer::Equalizer>,
@@ -276,6 +279,7 @@ impl NexfyCore {
                 reconnecting: tokio::sync::Mutex::new(()),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
+                loaded: AtomicBool::new(false),
             }),
         })
     }
@@ -1125,29 +1129,39 @@ impl NexfyCore {
         self.inner.with_spirc(|spirc| spirc.add_to_queue(uri))
     }
 
+    /// Pause, resume and seek go straight to this phone's player when a song
+    /// is loaded here: instant, and offline too. Spirc follows the player's
+    /// events and tells the other devices once the network allows.
     pub fn seek(&self, position_ms: u32) -> Result<(), CoreError> {
+        if self.inner.loaded.load(Ordering::Relaxed) {
+            return self.inner.with_player(|player| player.seek(position_ms));
+        }
         self.inner.with_spirc(|spirc| spirc.set_position_ms(position_ms))
     }
 
-    pub async fn pause(&self) -> Result<(), CoreError> {
-        self.inner.ensure_session().await?;
+    pub fn pause(&self) -> Result<(), CoreError> {
         log::info!("pause");
-        self.inner.with_spirc(|spirc| spirc.pause())
+        self.inner.with_player(|player| player.pause())
     }
 
-    /// Activates this device first: Spirc drops commands while another
-    /// device holds the session, and the song here would not resume.
+    /// With nothing loaded here, activates this device first: Spirc drops
+    /// commands while another device holds the session.
     pub async fn resume(&self) -> Result<(), CoreError> {
-        self.inner.ensure_session().await?;
         log::info!("resume");
+        if self.inner.loaded.load(Ordering::Relaxed) {
+            return self.inner.with_player(|player| player.play());
+        }
+        self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play()))
     }
 
-    /// Toggles from what Spirc is doing, not what the screen last showed.
+    /// Toggles from what the player is doing, not what the screen last showed.
     pub async fn play_pause(&self) -> Result<(), CoreError> {
-        self.inner.ensure_session().await?;
-        log::info!("play/pause");
-        self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play_pause()))
+        if self.inner.playing.load(Ordering::Relaxed) {
+            self.pause()
+        } else {
+            self.resume().await
+        }
     }
 
     pub async fn next(&self) -> Result<(), CoreError> {
@@ -1680,6 +1694,15 @@ impl Inner {
             .ok_or_else(|| CoreError::Session("não conectado".into()))
     }
 
+    fn with_player(&self, action: impl FnOnce(&Player)) -> Result<(), CoreError> {
+        let connected = self.connected.lock().unwrap();
+        let connected = connected
+            .as_ref()
+            .ok_or_else(|| CoreError::Playback("não conectado".into()))?;
+        action(&connected.player);
+        Ok(())
+    }
+
     fn with_session<T>(&self, action: impl FnOnce(&Session) -> T) -> Option<T> {
         self.connected
             .lock()
@@ -1750,10 +1773,12 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                 track: track_info(&audio_item),
             }),
             PlayerEvent::Playing { position_ms, .. } => {
+                inner.loaded.store(true, Ordering::Relaxed);
                 inner.playing.store(true, Ordering::Relaxed);
                 inner.emit(CoreEvent::Playing { position_ms });
             }
             PlayerEvent::Paused { position_ms, .. } => {
+                inner.loaded.store(true, Ordering::Relaxed);
                 inner.playing.store(false, Ordering::Relaxed);
                 inner.emit(CoreEvent::Paused { position_ms });
             }
@@ -1767,6 +1792,7 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
             }
             PlayerEvent::Loading { .. } => inner.emit(CoreEvent::Loading),
             PlayerEvent::Stopped { .. } => {
+                inner.loaded.store(false, Ordering::Relaxed);
                 inner.playing.store(false, Ordering::Relaxed);
                 inner.emit(CoreEvent::Stopped);
             }
