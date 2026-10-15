@@ -142,9 +142,9 @@ pub fn player_config(quality: AudioQuality, levels: &Levels) -> PlayerConfig {
     }
 }
 
-/// Normalisation is on unless the user turned it off.
+/// Off until the user turns it on: no file means it was never chosen.
 pub fn load_normalize(dir: &Path) -> bool {
-    std::fs::read_to_string(dir.join("normalize")).map_or(true, |text| text.trim() != "0")
+    std::fs::read_to_string(dir.join("normalize")).is_ok_and(|text| text.trim() == "1")
 }
 
 pub fn save_normalize(dir: &Path, on: bool) {

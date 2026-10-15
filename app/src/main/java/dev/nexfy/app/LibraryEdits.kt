@@ -103,6 +103,9 @@ class LibraryEdits(private val app: NexfyApp, private val scope: CoroutineScope)
         }
     }
 
+    /** Tell something over the dock, from outside the library (a refused command). */
+    fun tell(message: String) = say(message)
+
     private fun say(message: String, back: (() -> Unit)? = null) {
         _notice.value = Notice(System.nanoTime(), message, back)
     }

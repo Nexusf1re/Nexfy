@@ -1,15 +1,45 @@
 package dev.nexfy.app.playback
 
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.SystemClock
 import dev.nexfy.app.NexfyApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import uniffi.nexfy_core.RemoteCommand
 import uniffi.nexfy_core.RemoteState
+import uniffi.nexfy_core.RepeatMode
+
+/** A command that did not go through: what to tell, and a new [id] each time. */
+data class Refusal(val id: Long, val message: String)
+
+/** The last refused command; the play controls shake when it changes. */
+object Refusals {
+    private val _last = MutableStateFlow<Refusal?>(null)
+    val last: StateFlow<Refusal?> = _last
+
+    fun post(message: String) {
+        _last.value = Refusal(System.nanoTime(), message)
+    }
+}
+
+/** Long enough for a reconnect, short enough that a dead network never leaves a tap hanging. */
+private const val COMMAND_TIMEOUT_MS = 12_000L
+
+/** How long a song may load before the wait is explained. */
+private const val LOADING_PATIENCE_MS = 8_000L
 
 /**
  * Playback commands shared by the screens and the home-screen widget: to
- * this phone through the core, or to the device playing elsewhere.
+ * this phone through the core, or to the device playing elsewhere. Each
+ * shows its effect at once and takes it back if the command fails.
  */
 class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     private val core get() = app.core
@@ -18,15 +48,58 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     /** The device playing elsewhere, if any: commands go to it. */
     val remote get() = bridge.state.value.remote
 
-    /** Run a command off the main thread, reporting failures. */
-    fun run(action: suspend () -> Unit) {
+    /**
+     * Run a command off the main thread. On failure [undo] takes back what
+     * was shown ahead and the refusal is told in words a person reads.
+     */
+    fun run(undo: () -> Unit = {}, action: suspend () -> Unit) {
         scope.launch(Dispatchers.IO) {
             try {
-                // The widget can wake the app with no session yet.
-                if (!core.isConnected()) core.restoreSession()
-                action()
+                withTimeout(COMMAND_TIMEOUT_MS) {
+                    // The widget can wake the app with no session yet.
+                    if (!core.isConnected()) core.restoreSession()
+                    action()
+                }
             } catch (e: Exception) {
-                bridge.reportError(e.message ?: e.toString())
+                undo()
+                refuse(e)
+            }
+        }
+    }
+
+    private fun refuse(e: Exception) = refuse(
+        when {
+            !online() -> "Sem conexão: só toca o que está baixado"
+            e is TimeoutCancellationException -> "O Spotify não respondeu. Tente de novo"
+            else -> e.message ?: "Não deu certo"
+        },
+    )
+
+    private fun refuse(message: String) {
+        bridge.reportError(message)
+        app.edits.tell(message)
+        Refusals.post(message)
+    }
+
+    private fun online(): Boolean {
+        val connectivity = app.getSystemService(ConnectivityManager::class.java)
+        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private var loadingWatch: Job? = null
+
+    /**
+     * A skip the core accepts can still hang: with no network the song
+     * never arrives and the player waits without an error. Say so once it
+     * has loaded too long; it still starts if the network comes back.
+     */
+    fun watchLoading() {
+        loadingWatch?.cancel()
+        loadingWatch = scope.launch {
+            delay(LOADING_PATIENCE_MS)
+            if (remote == null && bridge.local.value.loading) {
+                refuse(if (online()) "A música está demorando para carregar" else "Sem conexão: essa música não está baixada")
             }
         }
     }
@@ -51,7 +124,7 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
             val radio = try {
                 core.radio(seedUri)
             } catch (e: Exception) {
-                bridge.reportError(e.message ?: e.toString())
+                refuse(e)
                 return@launch
             }
             radio.contextUri?.takeIf { it.startsWith("spotify:playlist:") }?.substringAfterLast(':')?.let(onPlaylist)
@@ -82,18 +155,47 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
             remote(if (playing) RemoteCommand.Pause else RemoteCommand.Play) { it.copy(playing = !playing) }
             return
         }
-        run { core.playPause() }
+        val undo = showPlaying(!playing)
+        run(undo) { if (playing) core.pause() else core.resume() }
+    }
+
+    /** The play button turns and the clock stops or starts in the same frame as the tap. */
+    fun showPlaying(playing: Boolean): () -> Unit {
+        val now = SystemClock.elapsedRealtime()
+        return bridge.optimistic { it.copy(playing = playing, positionMs = it.currentPositionMs(now), positionAt = now) }
     }
 
     fun next() {
-        bridge.preview(forward = true)
+        val undo = bridge.preview(forward = true)
         if (remote != null) return remote(RemoteCommand.Next)
-        run { core.next() }
+        run(undo) { core.next() }
+        watchLoading()
     }
 
     fun previous() {
-        bridge.preview(forward = false)
+        val undo = bridge.preview(forward = false)
         if (remote != null) return remote(RemoteCommand.Previous)
-        run { core.previous() }
+        run(undo) { core.previous() }
+        watchLoading()
+    }
+
+    fun seek(positionMs: Long) {
+        val at = positionMs.coerceAtLeast(0).toUInt()
+        if (remote != null) return remote(RemoteCommand.Seek(at)) { it.copy(progressMs = at) }
+        val now = SystemClock.elapsedRealtime()
+        val undo = bridge.optimistic { it.copy(positionMs = at.toLong(), positionAt = now) }
+        run(undo) { core.seek(at) }
+    }
+
+    fun setShuffle(on: Boolean) {
+        if (remote != null) return remote(RemoteCommand.Shuffle(on)) { it.copy(shuffle = on) }
+        val undo = bridge.optimistic { it.copy(queue = it.queue.copy(shuffle = on)) }
+        run(undo) { core.setShuffle(on) }
+    }
+
+    fun setRepeat(mode: RepeatMode) {
+        if (remote != null) return remote(RemoteCommand.Repeat(mode)) { it.copy(repeat = mode) }
+        val undo = bridge.optimistic { it.copy(queue = it.queue.copy(repeat = mode)) }
+        run(undo) { core.setRepeat(mode) }
     }
 }

@@ -66,7 +66,7 @@ fun NoticeBar(edits: LibraryEdits, modifier: Modifier) {
             ) {
                 Text(
                     n.message, Modifier.padding(vertical = 6.dp).weight(1f, fill = false),
-                    color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = Color.White, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
                 n.undo?.let { undo ->
                     Text(

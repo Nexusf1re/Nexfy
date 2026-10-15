@@ -207,7 +207,7 @@ class AppActions(
     fun back() = nav.pop()
 
     /** Run a playback command off the main thread, reporting failures. */
-    private fun command(action: suspend () -> Unit) = app.commands.run(action)
+    private fun command(action: suspend () -> Unit) = app.commands.run(action = action)
 
     /**
      * Play [tracks] from [index]. With a [contextUri] (a whole playlist,
@@ -243,15 +243,25 @@ class AppActions(
             app.refreshRemoteSoon()
             return
         }
+        // The tapped song takes the player at once, loading, while Spotify starts it.
+        val t = tracks[start]
+        val now = android.os.SystemClock.elapsedRealtime()
+        val undo = app.bridge.optimistic {
+            it.copy(
+                track = TrackInfo(t.uri, t.title, t.artists, t.album, t.imageUrl, t.durationMs),
+                loading = true, stopped = false, positionMs = 0, positionAt = now,
+            )
+        }
         // Shuffled, the start is the random song the caller picked (a new one
         // each time) and librespot shuffles the rest with a fresh seed.
-        command {
+        app.commands.run(undo) {
             if (contextUri != null) {
                 core.playContext(contextUri, tracks[start].uri, shuffle)
             } else {
                 core.playTracks(tracks.map { it.uri }, start.toUInt(), shuffle)
             }
         }
+        app.commands.watchLoading()
     }
 
     /** Add a song to Spotify's queue; it plays after the current one. */
@@ -281,23 +291,15 @@ class AppActions(
 
     override fun previous() = app.commands.previous()
 
-    override fun seek(positionMs: Long) {
-        val at = positionMs.coerceAtLeast(0).toUInt()
-        if (remote != null) return remoteCommand(RemoteCommand.Seek(at)) { it.copy(progressMs = at) }
-        command { core.seek(at) }
-    }
+    override fun seek(positionMs: Long) = app.commands.seek(positionMs)
 
     override fun setShuffle(on: Boolean) {
         // One shuffle mode: the player's toggle and the pages' shuffle buttons agree.
         app.library.setShuffle(on)
-        if (remote != null) return remoteCommand(RemoteCommand.Shuffle(on)) { it.copy(shuffle = on) }
-        command { core.setShuffle(on) }
+        app.commands.setShuffle(on)
     }
 
-    override fun setRepeat(mode: RepeatMode) {
-        if (remote != null) return remoteCommand(RemoteCommand.Repeat(mode)) { it.copy(repeat = mode) }
-        command { core.setRepeat(mode) }
-    }
+    override fun setRepeat(mode: RepeatMode) = app.commands.setRepeat(mode)
 
     override suspend fun devices(): List<Device> = core.devices()
 
@@ -361,6 +363,13 @@ fun NexfyRoot(
     val glow = accentState()
 
     ShimmerDriver()
+    // A refused command buzzes once, whichever control sent it.
+    val haptics = rememberHaptics()
+    val refusal by dev.nexfy.app.playback.Refusals.last.collectAsState()
+    val seenRefusal = remember { refusal?.id }
+    LaunchedEffect(refusal?.id) {
+        if (refusal != null && refusal?.id != seenRefusal) haptics.reject()
+    }
     // Whether this account is in a Jam, so the song menus and "Adicionar à
     // fila" go to it without the Jam sheet having been opened first.
     LaunchedEffect(Unit) {

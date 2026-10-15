@@ -27,6 +27,7 @@ import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -276,4 +277,21 @@ fun Modifier.carouselDepth(): Modifier {
         compositingStrategy = CompositingStrategy.ModulateAlpha
         transformOrigin = TransformOrigin(if (e > 0f) 0f else 1f, .5f)
     }
+}
+
+/**
+ * Shakes sideways, briefly, when a playback command is refused: the
+ * control that was tapped says "no" where the eye already is. Refusals
+ * from before this control appeared are not replayed.
+ */
+@Composable
+fun Modifier.refusalShake(): Modifier {
+    val refusal by dev.nexfy.app.playback.Refusals.last.collectAsState()
+    val seen = remember { refusal?.id }
+    val x = remember { Animatable(0f) }
+    LaunchedEffect(refusal?.id) {
+        if (refusal == null || refusal?.id == seen || Motion.reduced) return@LaunchedEffect
+        for (to in floatArrayOf(9f, -7f, 5f, -3f, 0f)) x.animateTo(to, tween(55, easing = LinearEasing))
+    }
+    return graphicsLayer { translationX = x.value * density }
 }

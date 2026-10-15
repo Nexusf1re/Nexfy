@@ -35,8 +35,9 @@ data class PlaybackSnapshot(
     /** Another device is playing: the snapshot mirrors it and controls go to it. */
     val remote: Device? = null,
 ) {
+    /** The clock runs only while the song plays: not paused, and not while it loads. */
     fun currentPositionMs(now: Long = SystemClock.elapsedRealtime()): Long =
-        if (playing) positionMs + (now - positionAt) else positionMs
+        if (playing && !loading) positionMs + (now - positionAt) else positionMs
 }
 
 /**
@@ -128,8 +129,41 @@ class CoreBridge(core: NexfyCore) : CoreListener {
         publish()
     }
 
+    /** Moves with every core event, so an undo knows whether the core spoke since. */
+    @Volatile
+    private var heard = 0L
+
+    /**
+     * Show a command's effect on this phone at once, before the core
+     * confirms it. Returns the undo for when the core refuses; it does
+     * nothing once a real event has replaced the guess.
+     */
+    @Synchronized
+    fun optimistic(change: (PlaybackSnapshot) -> PlaybackSnapshot): () -> Unit {
+        val before = _local.value
+        val at = heard
+        val after = change(before)
+        _local.value = after
+        publish()
+        return {
+            synchronized(this) {
+                val shown = _local.value
+                when {
+                    heard == at -> _local.value = before
+                    // Events about the old song came meanwhile, but the song
+                    // shown ahead is still up loading: take back just that.
+                    after.loading && shown.loading && shown.track == after.track && after.track != before.track ->
+                        _local.value = shown.copy(track = before.track, loading = before.loading)
+                    else -> return@synchronized
+                }
+                publish()
+            }
+        }
+    }
+
     override fun onEvent(event: CoreEvent) {
         val now = SystemClock.elapsedRealtime()
+        heard++
         _local.update { s ->
             when (event) {
                 is CoreEvent.TrackChanged -> s.copy(track = event.track, stopped = false, error = null)
@@ -193,11 +227,14 @@ class CoreBridge(core: NexfyCore) : CoreListener {
      * Show the next or previous song right away, before Spotify confirms
      * the skip; the real TrackChanged event then replaces it.
      */
-    fun preview(forward: Boolean) {
-        if (remote != null) return previewRemote(forward)
-        val target = (if (forward) neighbours.first else neighbours.second) ?: return
+    fun preview(forward: Boolean): () -> Unit {
+        if (remote != null) {
+            previewRemote(forward)
+            return {}
+        }
+        val target = (if (forward) neighbours.first else neighbours.second) ?: return {}
         val now = SystemClock.elapsedRealtime()
-        _local.update {
+        return optimistic {
             it.copy(
                 track = TrackInfo(target.uri, target.title, target.artists, target.album, target.imageUrl, target.durationMs),
                 loading = true,
@@ -205,6 +242,5 @@ class CoreBridge(core: NexfyCore) : CoreListener {
                 positionAt = now,
             )
         }
-        publish()
     }
 }

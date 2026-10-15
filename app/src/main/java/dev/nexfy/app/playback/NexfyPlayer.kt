@@ -202,7 +202,8 @@ class NexfyPlayer(
         }
         this.playWhenReady = playWhenReady
         val s = bridge.local.value
-        return runCore {
+        val undo = if (s.queue.current != null && s.playing != playWhenReady) commands.showPlaying(playWhenReady) else ({})
+        return runCore(undo) {
             when {
                 s.queue.current == null -> Unit
                 playWhenReady -> core.resume()
@@ -333,12 +334,13 @@ class NexfyPlayer(
      * Run a core call off the main thread. The returned future completes
      * when it is done, so Media3 reads the state the core reported meanwhile.
      */
-    private fun runCore(action: suspend () -> Unit): ListenableFuture<Unit> {
+    private fun runCore(undo: () -> Unit = {}, action: suspend () -> Unit): ListenableFuture<Unit> {
         val done = SettableFuture.create<Unit>()
         scope.launch(Dispatchers.IO) {
             try {
                 action()
             } catch (e: Exception) {
+                undo()
                 bridge.reportError(e.message ?: e.toString())
             } finally {
                 done.set(Unit)

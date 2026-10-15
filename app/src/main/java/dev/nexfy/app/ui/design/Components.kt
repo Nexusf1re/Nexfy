@@ -119,6 +119,11 @@ class Haptics(private val feedback: HapticFeedback, private val enabled: Boolean
         if (enabled) feedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
+    /** A command did not go through. */
+    fun reject() {
+        if (enabled) feedback.performHapticFeedback(HapticFeedbackType.Reject)
+    }
+
     fun press() {
         if (enabled) feedback.performHapticFeedback(HapticFeedbackType.LongPress)
     }

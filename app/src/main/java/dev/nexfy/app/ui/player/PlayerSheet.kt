@@ -25,6 +25,7 @@ import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.rounded.Close
 import dev.nexfy.app.ui.design.GlassSheet
+import dev.nexfy.app.ui.design.refusalShake
 import dev.nexfy.app.ui.design.PlayingBars
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -803,7 +804,7 @@ private fun PlayButton(
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     Box(
-        modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).springPress(source)
+        modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).refusalShake().springPress(source)
             .then(if (glass) Modifier.liquidGlass(CircleShape, true, GlassLevel.Strong) else Modifier.clip(CircleShape).background(bg))
             .clickable(source, null) {
                 haptics.press()
@@ -831,7 +832,7 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     Box(
-        modifier.height(84.dp).alpha(if (enabled) 1f else .35f).springPress(source)
+        modifier.height(84.dp).alpha(if (enabled) 1f else .35f).refusalShake().springPress(source)
             .liquidGlass(CircleShape, true, GlassLevel.Regular)
             .clickable(source, null, enabled = enabled) {
                 haptics.press()
