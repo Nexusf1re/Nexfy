@@ -44,7 +44,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -62,6 +61,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.glassMenuColor
+import dev.nexfy.app.ui.design.glassMenuEdge
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.AlbumSort
 import dev.nexfy.app.PlaylistSort
 import dev.nexfy.app.pinnedFirst
@@ -266,7 +268,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
 
     menuFor?.let { entry ->
         val isPinned = entry.key in pinned
-        ModalBottomSheet(onDismissRequest = { menuFor = null }) {
+        GlassSheet(onDismissRequest = { menuFor = null }) {
             Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
                 Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Cover(entry.imageUrl, Modifier.size(52.dp), 10.dp)
@@ -313,7 +315,7 @@ private fun <T> SortButton(options: List<T>, selected: T, label: (T) -> String, 
             Spacer(Modifier.width(8.dp))
             Text(label(selected), color = c.onSurface, style = MaterialTheme.typography.labelLarge)
         }
-        DropdownMenu(open, { open = false }, shape = RoundedCornerShape(18.dp)) {
+        DropdownMenu(open, { open = false }, shape = RoundedCornerShape(18.dp), containerColor = glassMenuColor(), shadowElevation = 18.dp, border = glassMenuEdge()) {
             options.forEach { option ->
                 DropdownMenuItem(
                     text = { Text(label(option)) },

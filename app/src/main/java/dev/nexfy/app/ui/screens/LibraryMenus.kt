@@ -23,7 +23,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.ListRowSkeleton
@@ -90,7 +90,7 @@ fun AddToPlaylistSheet(uris: List<String>, onDismiss: () -> Unit) {
             app.edits.create(name) { app.edits.addTo(it, uris) }
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             Text("Adicionar à playlist", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
             PlaylistChoice(null, "Nova playlist", null) { naming = true }
@@ -181,7 +181,7 @@ fun NameDialogFull(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PageMenu(title: String, imageUrl: String?, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Cover(imageUrl, Modifier.size(52.dp), 10.dp)

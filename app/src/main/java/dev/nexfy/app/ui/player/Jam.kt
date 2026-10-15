@@ -25,7 +25,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.PillButton
@@ -121,7 +121,7 @@ fun JamSheet(onDismiss: () -> Unit) {
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 20.dp)) {
             Text("Jam", style = MaterialTheme.typography.titleLarge)
             Crossfade(if (loading) null else jam, animationSpec = tween(dev.nexfy.app.ui.design.Motion.Short), label = "jam") { current ->

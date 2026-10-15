@@ -149,7 +149,7 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean, level: GlassLevel = GlassL
 }
 
 /** Light on the glass body: brighter towards the top, a soft shade at the bottom, a highlight up left. */
-private fun DrawScope.glassSheen(outline: Outline, dark: Boolean) {
+internal fun DrawScope.glassSheen(outline: Outline, dark: Boolean) {
     drawOutline(
         outline,
         Brush.verticalGradient(
@@ -170,7 +170,7 @@ private fun DrawScope.glassSheen(outline: Outline, dark: Boolean) {
 }
 
 /** The glass edge: a specular line, bright on top, faint on the sides, lit again at the bottom. */
-private fun DrawScope.glassRim(outline: Outline, dark: Boolean) {
+internal fun DrawScope.glassRim(outline: Outline, dark: Boolean) {
     drawOutline(
         outline,
         Brush.verticalGradient(
@@ -280,4 +280,17 @@ fun Modifier.ambientGlow(background: Color, accent: State<Color>, dark: Boolean)
     scale(1f, .55f, pivot = center) {
         drawCircle(Brush.radialGradient(listOf(glow, Color.Transparent), center, size.width), size.width, center)
     }
+}
+
+/**
+ * A pane of glass for cards inside lists, where nothing behind can be
+ * refracted: [tint] over the page, the glass sheen, and the lit rim over
+ * the content.
+ */
+fun Modifier.glassPane(shape: Shape, tint: Color, dark: Boolean): Modifier = clip(shape).drawWithContent {
+    val outline = shape.createOutline(size, layoutDirection, this)
+    drawOutline(outline, tint)
+    glassSheen(outline, dark)
+    drawContent()
+    glassRim(outline, dark)
 }

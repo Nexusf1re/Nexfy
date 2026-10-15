@@ -77,6 +77,7 @@ import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.ambientGlow
 import dev.nexfy.app.ui.design.GlassLevel
+import dev.nexfy.app.ui.design.sheetDepth
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
@@ -387,7 +388,8 @@ fun NexfyRoot(
 
     val bottomSpace = if (snapshot.track != null) 176.dp else 104.dp
     CompositionLocalProvider(LocalHaze provides haze, LocalBottomSpace provides bottomSpace, dev.nexfy.app.ui.design.LocalPlaying provides snapshot.playing) {
-        Box(Modifier.fillMaxSize().background(c.background)) {
+        // The background stays put; everything on it steps back under an open sheet.
+        Box(Modifier.fillMaxSize().background(c.background).sheetDepth()) {
             // Everything behind the dock and the mini player is what their glass blurs.
             Box(Modifier.fillMaxSize().glassSource(haze)) {
                 SharedTransitionLayout(Modifier.fillMaxSize()) {

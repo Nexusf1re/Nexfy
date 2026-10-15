@@ -92,15 +92,28 @@ object Motion {
     /** The player's cover turning over: a slow spring with a little sway. */
     fun <T> turn() = if (reduced) settle<T>() else spring(dampingRatio = .74f, stiffness = 150f)
 
-    /** A pushed screen: fades in while rising a little on a soft spring. */
+    /**
+     * A pushed screen comes forward out of depth: it grows from a rounded
+     * card a little smaller than the screen on a spring that never
+     * overshoots, fading in just behind the start of the motion.
+     */
     val pageEnter: EnterTransition
         get() = if (reduced) {
             fadeIn(tween(scaled(420), easing = Standard))
         } else {
-            fadeIn(tween(420, delayMillis = Stagger, easing = Standard)) +
-                slideInVertically(spring(dampingRatio = 0.8f, stiffness = 230f)) { it / 28 }
+            fadeIn(tween(300, delayMillis = 40, easing = Standard)) +
+                scaleIn(spring(dampingRatio = 1f, stiffness = 340f), initialScale = .94f) +
+                slideInVertically(spring(dampingRatio = 1f, stiffness = 340f)) { it / 40 }
         }
-    val pageExit: ExitTransition get() = fadeOut(tween(scaled(240), easing = EmphasizedAccelerate))
+
+    /** The screen underneath steps back past the viewer as the new one arrives. */
+    val pageExit: ExitTransition
+        get() = if (reduced) {
+            fadeOut(tween(scaled(240), easing = EmphasizedAccelerate))
+        } else {
+            fadeOut(tween(220, easing = EmphasizedAccelerate)) +
+                scaleOut(tween(380, easing = Standard), targetScale = 1.04f)
+        }
 
     /**
      * Back: the page shrinks into a fading card above the one underneath,

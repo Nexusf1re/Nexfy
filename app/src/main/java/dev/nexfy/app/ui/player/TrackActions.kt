@@ -26,7 +26,6 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.rememberHaptics
 import kotlinx.coroutines.CancellationException
@@ -88,7 +88,7 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
         open()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Cover(track.coverUrl, Modifier.size(52.dp), 10.dp)

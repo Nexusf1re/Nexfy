@@ -12,7 +12,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -22,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.playback.Sleep
 import dev.nexfy.app.ui.design.rememberHaptics
@@ -66,7 +66,7 @@ fun SleepTimerSheet(onDismiss: () -> Unit) {
         action()
         onDismiss()
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             Text("Timer de sono", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
             Durations.forEach { (minutes, label) ->

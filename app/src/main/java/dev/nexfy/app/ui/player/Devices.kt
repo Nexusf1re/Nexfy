@@ -31,7 +31,6 @@ import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.NexfyApp
 import dev.nexfy.app.playback.PlaybackSnapshot
 import dev.nexfy.app.ui.design.Bone
@@ -130,7 +130,7 @@ fun DevicesSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () ->
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(start = 20.dp, end = 20.dp, bottom = 16.dp)) {
             Text("Tocar em", Modifier.padding(start = 4.dp, bottom = 12.dp), style = MaterialTheme.typography.titleLarge)
             Crossfade(devices, animationSpec = tween(Motion.Short), label = "devices") { list ->

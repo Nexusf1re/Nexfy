@@ -346,7 +346,7 @@ fun Cover(url: String?, modifier: Modifier, radius: Dp = 14.dp, motion: Boolean 
     }
 }
 
-/** Flat cover card with a weighted press and a soft tint of its cover behind the text. */
+/** Cover card on a pane of glass tinted by its cover, with a weighted press. */
 @Composable
 fun CoverCard(
     imageUrl: String?,
@@ -361,10 +361,12 @@ fun CoverCard(
     val c = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
-    val tile = if (circle) Color.Transparent else tileColor(imageUrl, key)
-    val ink = if (circle) c.onSurface else contentFor(tile)
+    // A pane of glass tinted by the cover; the text stays in the theme's ink on it.
+    val pane = if (circle) Color.Transparent else tileColor(imageUrl, key).copy(alpha = if (c.isDark) .3f else .36f)
+    val ink = c.onSurface
     Column(
-        Modifier.width(156.dp).weightedPress(source, 16.dp).clip(RoundedCornerShape(16.dp)).background(tile)
+        Modifier.width(156.dp).weightedPress(source, 16.dp)
+            .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
             .clickable(source, null) {
                 haptics.tick()
                 onClick()

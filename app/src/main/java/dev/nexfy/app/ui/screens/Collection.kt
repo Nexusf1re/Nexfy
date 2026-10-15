@@ -70,6 +70,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.glassMenuColor
+import dev.nexfy.app.ui.design.glassMenuEdge
 import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.LoadError
@@ -495,7 +497,7 @@ private fun TrackTools(
                         modifier = Modifier.size(20.dp),
                     )
                 }
-                DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(18.dp)) {
+                DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(18.dp), containerColor = glassMenuColor(), shadowElevation = 18.dp, border = glassMenuEdge()) {
                     TrackSort.entries.filter { dated || it != TrackSort.Added }.forEach { option ->
                         DropdownMenuItem(
                             text = { Text(option.label) },

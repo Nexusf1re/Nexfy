@@ -24,6 +24,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.rounded.Close
+import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.ui.design.PlayingBars
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -35,7 +36,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.theme.accentColor
 import androidx.compose.foundation.lazy.LazyColumn
@@ -928,7 +928,7 @@ private fun QueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss:
     }
     fun faceOf(entry: QueueEntry) = if (showFaces) adders[entry.uri]?.let(faces::get) else null
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
             s.track?.let { track ->
                 item(key = "now") {
@@ -986,7 +986,7 @@ private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDi
             emptyList()
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    GlassSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
             s.track?.let { track ->
                 item(key = "now") {
