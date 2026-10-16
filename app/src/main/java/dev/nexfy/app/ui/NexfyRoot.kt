@@ -531,12 +531,12 @@ fun NexfyRoot(
                 app.updates,
                 { actions.showUpdate.value = true },
                 Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace - 16.dp),
+                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace + 6.dp),
             )
             NoticeBar(
                 app.edits,
                 Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace - 16.dp),
+                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace + 6.dp),
             )
             if (actions.showDevices.value) DevicesSheet(snapshot, actions) { actions.showDevices.value = false }
             if (actions.showUpdate.value) {
