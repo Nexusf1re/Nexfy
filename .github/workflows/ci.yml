@@ -5,7 +5,10 @@ name: CI
 on:
   push:
     branches: [main]
+    # Text alone (notes, docs) builds nothing new.
+    paths-ignore: ["**.md", "release-notes/**"]
   pull_request:
+    paths-ignore: ["**.md", "release-notes/**"]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,6 +28,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          # Gradle's downloads and wrapper, kept between runs.
+          cache: gradle
 
       # The runner image ships the Android SDK; only the pinned NDK is added.
       - name: Android NDK
@@ -39,8 +44,11 @@ jobs:
       - name: ALSA headers
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
+      # Saved from main only, under a key the release workflow reads too.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: nexfy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           workspaces: |
             core -> target
             core/uniffi-bindgen -> target

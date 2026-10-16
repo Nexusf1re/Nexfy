@@ -37,6 +37,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          # Gradle's downloads and wrapper, kept between runs.
+          cache: gradle
 
       # The runner image ships the Android SDK; only the pinned NDK is added.
       - name: Android NDK
@@ -47,8 +49,12 @@ jobs:
           rustup target add aarch64-linux-android
           cargo install cargo-ndk --version 4.1.2 --locked
 
+      # Reads the cache main's CI keeps (crates, the host tools) and saves none:
+      # a tag cannot read another tag's cache, so each would be a dead copy.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: nexfy
+          save-if: false
           workspaces: |
             core -> target
             core/uniffi-bindgen -> target
