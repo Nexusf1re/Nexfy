@@ -249,7 +249,7 @@ private fun VolumeRow(volume: Int, onVolume: (Int) -> Unit) {
         Icon(Icons.AutoMirrored.Rounded.VolumeDown, null, tint = c.onSurfaceVariant, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(10.dp))
         ThinSlider(
-            drag ?: (volume / 100f),
+            { drag ?: (volume / 100f) },
             { drag = it },
             { drag?.let { onVolume((it * 100).toInt()) } },
             Modifier.weight(1f),

@@ -1,5 +1,9 @@
 package dev.nexfy.app.ui.design
 
+import kotlin.math.sin
+import kotlin.math.PI
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.foundation.Canvas
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
@@ -324,19 +328,22 @@ fun GlassIcon(
 /** Thin progress slider: a 4 dp track that thickens while dragging. [value] is 0..1. */
 @Composable
 fun ThinSlider(
-    value: Float,
+    /** Read while drawing, so a position that moves every frame costs no recomposition. */
+    progress: () -> Float,
     onChange: (Float) -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** The song is still coming: the bar breathes instead of standing dead. */
+    waiting: () -> Boolean = { false },
 ) {
     val haptics = rememberHaptics()
     var dragging by remember { mutableStateOf(false) }
-    val thick by animateFloatAsState(if (dragging) 1f else 0f, Motion.settle(), label = "thick")
+    // Held: the track swells, the head grows into a knob and a halo opens under it.
+    val grab by animateFloatAsState(if (dragging) 1f else 0f, Motion.settle(260f), label = "grab")
     val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
-    val track = RoundedCornerShape(50)
-    Box(
+    Canvas(
         modifier.fillMaxWidth().height(28.dp).then(
             if (!enabled) {
                 Modifier
@@ -361,11 +368,20 @@ fun ThinSlider(
                     }
             },
         ),
-        contentAlignment = Alignment.CenterStart,
     ) {
-        val height: Dp = 4.dp + 4.dp * thick.coerceIn(0f, 1f)
-        Box(Modifier.fillMaxWidth().height(height).clip(track).background(Color.White.copy(alpha = .22f)))
-        Box(Modifier.fillMaxWidth(value.coerceIn(0f, 1f)).height(height).clip(track).background(Color.White.copy(alpha = .92f)))
+        val thickness = (4.dp + 4.dp * grab).toPx()
+        val knob = (3.dp + 4.dp * grab).toPx()
+        val y = size.height / 2
+        // The head never leaves the track, so the knob has room at both ends.
+        val from = knob
+        val to = size.width - knob
+        val head = from + (to - from) * progress().coerceIn(0f, 1f)
+        // Waiting: the played part fades in and out, about once a second.
+        val breath = if (waiting()) .55f + .37f * (1f + sin(now() / 1000f * PI.toFloat() * 2f)) / 2f else .92f
+        drawLine(Color.White.copy(alpha = .22f), Offset(from, y), Offset(to, y), thickness, StrokeCap.Round)
+        drawLine(Color.White.copy(alpha = breath), Offset(from, y), Offset(head, y), thickness, StrokeCap.Round)
+        if (grab > 0f) drawCircle(Color.White.copy(alpha = .18f * grab), knob + 10.dp.toPx() * grab, Offset(head, y))
+        drawCircle(Color.White.copy(alpha = breath), knob, Offset(head, y))
     }
 }
 
@@ -815,3 +831,6 @@ fun Modifier.dragToDismiss(dismiss: Animatable<Float, AnimationVector1D>, onBack
             alpha = 1f - .4f * d
         }
 }
+
+/** Milliseconds for the draw-time animations above; the same clock everywhere. */
+private fun now() = android.os.SystemClock.elapsedRealtime()

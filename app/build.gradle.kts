@@ -11,7 +11,10 @@ plugins {
 val ndkVersionPinned = "30.0.16248370"
 val coreDir: File = rootProject.file("core")
 val jniLibsDir: File = file("src/main/jniLibs")
-val coreLibrary: File = jniLibsDir.resolve("arm64-v8a/libnexfy_core.so")
+// Phones only by default; -PABIS="arm64-v8a,x86_64" adds the emulator's.
+val abis: List<String> =
+    ((findProperty("ABIS") as String?) ?: "arm64-v8a").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+val coreLibrary: File = jniLibsDir.resolve("${abis[0]}/libnexfy_core.so")
 val bindingsDir: File = file("src/main/java/uniffi")
 
 // Full LTO only when a release APK is requested; debug builds use the
@@ -33,18 +36,19 @@ val cargo: String = File(
 
 val buildRustCore by tasks.registering(Exec::class) {
     group = "rust"
-    description = "Builds core/ for arm64 Android into jniLibs."
+    description = "Builds core/ for the chosen Android ABIs into jniLibs."
     inputs.dir(coreDir.resolve("src"))
     inputs.dir(coreDir.resolve("third_party"))
     inputs.files(coreDir.resolve("Cargo.toml"), coreDir.resolve("Cargo.lock"))
     inputs.property("profile", rustProfile)
+    inputs.property("abis", abis)
     outputs.file(coreLibrary)
     workingDir = coreDir
     environment("ANDROID_NDK_HOME", "$sdkDir/ndk/$ndkVersionPinned")
     // Optimised even for debug APKs: a debug librespot cannot decode in real time.
     commandLine(
-        cargo, "ndk", "-t", "arm64-v8a", "--platform", "31", "-o", jniLibsDir.path,
-        "build", "--profile", rustProfile,
+        listOf(cargo, "ndk") + abis.flatMap { listOf("-t", it) } +
+            listOf("--platform", "31", "-o", jniLibsDir.path, "build", "--profile", rustProfile),
     )
 }
 
@@ -89,8 +93,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // The core is only built for arm64 (S23+); keep JNA's other ABIs out.
-        ndk { abiFilters += "arm64-v8a" }
+        // Only what the core was built for; keeps JNA's other ABIs out.
+        ndk { abiFilters += abis }
     }
 
     signingConfigs {

@@ -29,6 +29,7 @@ import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.rounded.Close
 import dev.nexfy.app.ui.design.GlassSheet
+import dev.nexfy.app.ui.design.ambientClock
 import dev.nexfy.app.ui.design.refusalShake
 import dev.nexfy.app.ui.design.PlayingBars
 import androidx.compose.animation.fadeIn
@@ -736,13 +737,23 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         }
                         Spacer(Modifier.height(18.dp))
                         var drag by remember { mutableStateOf<Float?>(null) }
+                        // The bar is redrawn with the frame clock, so it glides
+                        // instead of stepping with the four reads a second the
+                        // times below are happy with.
+                        val tick = ambientClock()
                         ThinSlider(
-                            drag ?: (position.toFloat() / duration),
+                            {
+                                drag ?: run {
+                                    tick.value
+                                    s.currentPositionMs().toFloat() / duration
+                                }
+                            },
                             { drag = it },
                             {
                                 drag?.let { controls.seek((it * duration).toLong()) }
                                 drag = null
                             },
+                            waiting = { tick.value; s.loading },
                         )
                         val shown = drag?.let { (it * duration).toLong() } ?: position
                         Row(Modifier.padding(top = 2.dp)) {
