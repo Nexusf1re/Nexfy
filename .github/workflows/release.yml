@@ -83,5 +83,7 @@ jobs:
             git log --no-merges --format="- %s" ${PREVIOUS:+$PREVIOUS..}"$GITHUB_REF_NAME" \
               | sed -E 's/^- [a-z]+(\([^)]*\))?: /- /' > "$NOTES"
           fi
+          # A tag moved and pushed again replaces its release rather than failing.
+          gh release delete "$GITHUB_REF_NAME" --yes --cleanup-tag=false 2>/dev/null || true
           gh release create "$GITHUB_REF_NAME" "nexfy-$VERSION.apk" \
             --title "Nexfy $VERSION" --notes-file "$NOTES"
