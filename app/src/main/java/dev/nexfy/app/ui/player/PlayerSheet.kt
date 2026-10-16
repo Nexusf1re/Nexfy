@@ -484,6 +484,12 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val breath = animateFloatAsState(if (s.playing || !expanded || showLyrics) 1f else 0.84f, Motion.settle(169f), label = "breath")
             // Throwable cover: a strong horizontal drag skips, a weak one springs back.
             val throwX = remember { Animatable(0f) }
+            val throwable = settled && !showLyrics && !flipped
+            // Whatever interrupts a throw (the lyrics, a flip, the player closing),
+            // the cover comes home: left out there it is simply gone from the screen.
+            LaunchedEffect(throwable) {
+                if (!throwable && throwX.value != 0f) throwX.animateTo(0f, Motion.settle(520f))
+            }
             val currentUri by rememberUpdatedState(track.uri)
             // Plain holder: set by a throw, read once by the cover transition.
             val thrown = remember { booleanArrayOf(false) }
@@ -564,7 +570,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         shadowElevation = lerp(0f, 24f, p) * density.density
                     }
                     .then(
-                        if (settled && !showLyrics && !flipped) {
+                        if (throwable) {
                             Modifier.pointerInput(track.uri) {
                                 // An episode has no album to turn to.
                                 detectTapGestures(onTap = if (track.uri.startsWith("spotify:episode:")) null else { _ ->
@@ -580,50 +586,49 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             Modifier
                         },
                     )
-                    .then(
-                        if (settled && !showLyrics && !flipped) {
-                            Modifier.draggable(
-                                rememberDraggableState { d ->
-                                    // Nothing comes next: the cover gives way less and less, like
-                                    // a rubber band, instead of acting as if a song would follow.
-                                    val step = if (!hasNext && throwX.value + d < 0f) {
-                                        d * .35f / (1f + kotlin.math.abs(throwX.value) / (fullW * .12f))
-                                    } else {
-                                        d
-                                    }
-                                    scope.snapNow(throwX, throwX.value + step)
-                                },
-                                Orientation.Horizontal,
-                                onDragStopped = { v ->
-                                    val go = when {
-                                        throwX.value < -fullW / 3 || v < -1800f -> 1
-                                        throwX.value > fullW / 3 || v > 1800f -> -1
-                                        else -> 0
-                                    }
-                                    if (!hasNext && throwX.value < 0f) {
-                                        // A short, bouncy "no" on the way back.
-                                        if (go == 1 || throwX.value < -fullW * .06f) haptics.tick()
-                                        throwX.animateTo(0f, Motion.refuse(), initialVelocity = v * .3f)
-                                        return@draggable
-                                    }
-                                    if (go != 0 && (go == -1 || hasNext)) {
-                                        haptics.press()
-                                        // Skip first: the next song loads while the cover flies out.
-                                        val before = currentUri
-                                        thrown[0] = true
-                                        if (go == 1) controls.next() else controls.previous()
-                                        throwX.animateTo(-go * fullW * 1.2f, Motion.exit(170))
-                                        // Come back in with the new song's cover, not the old one
-                                        // (another device confirms a skip in a second or more).
-                                        withTimeoutOrNull(if (s.remote != null) 2500L else 700L) { snapshotFlow { currentUri }.first { it != before } }
-                                            ?: run { thrown[0] = false }
-                                        throwX.snapTo(go * fullW * .8f)
-                                    }
-                                    throwX.animateTo(0f, Motion.settle(520f))
-                                },
-                            )
-                        } else {
-                            Modifier
+                    .draggable(
+                        rememberDraggableState { d ->
+                            // Nothing comes next: the cover gives way less and less, like
+                            // a rubber band, instead of acting as if a song would follow.
+                            val step = if (!hasNext && throwX.value + d < 0f) {
+                                d * .35f / (1f + kotlin.math.abs(throwX.value) / (fullW * .12f))
+                            } else {
+                                d
+                            }
+                            scope.snapNow(throwX, throwX.value + step)
+                        },
+                        Orientation.Horizontal,
+                        enabled = throwable,
+                        // In the screen's own scope, not the drag's: a throw that ends
+                        // while the player closes still brings the cover back.
+                        onDragStopped = { v ->
+                            scope.launch {
+                                val go = when {
+                                    throwX.value < -fullW / 3 || v < -1800f -> 1
+                                    throwX.value > fullW / 3 || v > 1800f -> -1
+                                    else -> 0
+                                }
+                                if (!hasNext && throwX.value < 0f) {
+                                    // A short, bouncy "no" on the way back.
+                                    if (go == 1 || throwX.value < -fullW * .06f) haptics.tick()
+                                    throwX.animateTo(0f, Motion.refuse(), initialVelocity = v * .3f)
+                                    return@launch
+                                }
+                                if (go != 0 && (go == -1 || hasNext)) {
+                                    haptics.press()
+                                    // Skip first: the next song loads while the cover flies out.
+                                    val before = currentUri
+                                    thrown[0] = true
+                                    if (go == 1) controls.next() else controls.previous()
+                                    throwX.animateTo(-go * fullW * 1.2f, Motion.exit(170))
+                                    // Come back in with the new song's cover, not the old one
+                                    // (another device confirms a skip in a second or more).
+                                    withTimeoutOrNull(if (s.remote != null) 2500L else 700L) { snapshotFlow { currentUri }.first { it != before } }
+                                        ?: run { thrown[0] = false }
+                                    throwX.snapTo(go * fullW * .8f)
+                                }
+                                throwX.animateTo(0f, Motion.settle(520f))
+                            }
                         },
                     )
                     .background(c.outline),
