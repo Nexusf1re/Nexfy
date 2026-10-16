@@ -330,6 +330,9 @@ class AppActions(
     /** Whether the devices sheet is open; any screen can open it. */
     val showDevices = mutableStateOf(false)
 
+    /** Whether the new-version sheet is open (from the banner or the settings). */
+    val showUpdate = mutableStateOf(false)
+
     override fun openEqualizer() = open(Route.Equalizer)
 
     override fun openDevices() {
@@ -524,12 +527,30 @@ fun NexfyRoot(
 
             PlayerSheet(snapshot, actions)
             LinkOpener(actions)
+            UpdateBanner(
+                app.updates,
+                { actions.showUpdate.value = true },
+                Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace - 16.dp),
+            )
             NoticeBar(
                 app.edits,
                 Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(start = 24.dp, end = 24.dp, bottom = bottomSpace - 16.dp),
             )
             if (actions.showDevices.value) DevicesSheet(snapshot, actions) { actions.showDevices.value = false }
+            if (actions.showUpdate.value) {
+                val release by app.updates.offer.collectAsState()
+                val r = release
+                if (r != null) {
+                    UpdateSheet(r, app.updates.installed, onDownload = {
+                        actions.showUpdate.value = false
+                        actions.openBrowser(r.apkUrl ?: r.pageUrl)
+                    }) { actions.showUpdate.value = false }
+                } else {
+                    LaunchedEffect(Unit) { actions.showUpdate.value = false }
+                }
+            }
         }
     }
 }

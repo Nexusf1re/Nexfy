@@ -59,6 +59,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     val commands: Commands by lazy { Commands(this, scope) }
     val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
     val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
+    val updates: Updates by lazy { Updates(this) }
 
     /** Songs played here, for the listening stats. */
     val playLog: PlayLog by lazy { PlayLog(this, scope) { core } }
@@ -82,6 +83,8 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 if (!shown) return@collectLatest
                 delay(3_000)
                 playLog.importElsewhere()
+                // And whether a newer Nexfy is out, once a day.
+                runCatching { updates.checkDaily() }.onFailure { Log.d("Nexfy", "update check: ${it.message}") }
             }
         }
         // Playback can start from another device (Spotify Connect) while no

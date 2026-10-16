@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.theme.accentColor
+import androidx.compose.foundation.border
 import dev.nexfy.app.ui.design.awaitShown
 
 import androidx.compose.runtime.derivedStateOf
@@ -119,7 +121,18 @@ fun RootHeader(title: String, collapse: State<Float>, actions: AppActions) {
                 letterSpacing = (-1).sp,
             )
             RoundIconButton(Icons.Rounded.Devices, "Dispositivos", { actions.openDevices() }, container = c.background)
-            RoundIconButton(Icons.Rounded.Settings, "Ajustes", { actions.open(Route.Settings) }, container = c.background)
+            Spacer(Modifier.width(8.dp))
+            // A dot on the gear while a newer Nexfy waits in the settings.
+            val update by actions.app.updates.offer.collectAsState()
+            Box {
+                RoundIconButton(Icons.Rounded.Settings, if (update != null) "Ajustes, atualização disponível" else "Ajustes", { actions.open(Route.Settings) }, container = c.background)
+                if (update != null) {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp).size(10.dp)
+                            .clip(CircleShape).background(accentColor()).border(2.dp, c.background, CircleShape),
+                    )
+                }
+            }
         }
         Text(
             title,

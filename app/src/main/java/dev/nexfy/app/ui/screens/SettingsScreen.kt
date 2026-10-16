@@ -68,6 +68,7 @@ import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.systemAnimationsOff
 import dev.nexfy.app.ui.theme.accentColor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.AudioQuality
 import uniffi.nexfy_core.WebApp
@@ -89,13 +90,29 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
         Text("Ajustes", fontSize = 34.sp, style = MaterialTheme.typography.headlineLarge)
         message?.let { Text(it, color = accentColor()) }
 
+        // Pending while this install is behind: it stays until the update is in.
+        val update by actions.app.updates.offer.collectAsState()
+        update?.let { release ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(accentColor().copy(.14f))
+                    .padding(start = 18.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Atualização disponível", style = MaterialTheme.typography.titleMedium)
+                    Text("Nexfy ${release.version} · você tem a ${actions.app.updates.installed}", color = c.onSurfaceVariant, fontSize = 13.sp)
+                }
+                PillButton("Atualizar", { actions.showUpdate.value = true })
+            }
+        }
+
         EqualizerCard(actions)
         AccountSection(actions) { message = it }
         SoundSection(actions)
         AppearanceSection(actions)
         BehaviourSection(actions)
         StorageSection(actions)
-        AboutSection()
+        AboutSection(actions)
     }
 }
 
@@ -312,18 +329,44 @@ private fun BehaviourSection(actions: AppActions) {
 
 /** App name and version. */
 @Composable
-private fun AboutSection() {
+private fun AboutSection(actions: AppActions) {
     val c = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val updates = actions.app.updates
     val version = remember {
         runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
             ?.let { "Versão ${it.versionName} (${it.longVersionCode})" }
     }
+    var checking by remember { mutableStateOf(false) }
+    var answer by remember { mutableStateOf<String?>(null) }
     Section("Sobre", "Um app pessoal para ouvir o Spotify no Android.") {
         Column {
             Text("Nexfy", style = MaterialTheme.typography.titleMedium)
             version?.let { Text(it, color = c.onSurfaceVariant, fontSize = 13.sp) }
         }
+        PillButton(if (checking) "Procurando…" else "Procurar atualização", {
+            if (checking) return@PillButton
+            checking = true
+            answer = null
+            scope.launch {
+                answer = try {
+                    val release = updates.check()
+                    if (release != null) {
+                        actions.showUpdate.value = true
+                        null
+                    } else {
+                        "Você já tem a versão mais recente"
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    "Não deu para consultar o GitHub agora"
+                }
+                checking = false
+            }
+        }, filled = false)
+        answer?.let { Text(it, color = c.onSurfaceVariant, fontSize = 13.sp) }
     }
 }
 
