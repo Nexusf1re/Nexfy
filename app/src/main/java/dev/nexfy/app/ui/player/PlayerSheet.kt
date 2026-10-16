@@ -84,6 +84,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -209,6 +212,9 @@ interface PlayerControls {
 
     /** What plays next on the device playing elsewhere. */
     suspend fun remoteQueue(): List<Track>
+
+    /** Open the equalizer page (the player folds down first). */
+    fun openEqualizer()
 
     /** Show the devices sheet. */
     fun openDevices()
@@ -684,14 +690,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         IconButton({ scope.launch { f.animateTo(0f, settle) } }) {
                             Icon(Icons.Rounded.KeyboardArrowDown, "Recolher", tint = Color.White)
                         }
-                        // Balances the two buttons on the right, keeping the handle centred.
-                        Spacer(Modifier.width(48.dp))
+                        // One button a side keeps the handle centred; devices moved to the row below.
                         Spacer(Modifier.weight(1f))
                         Box(Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape).background(Color.White.copy(.35f)))
                         Spacer(Modifier.weight(1f))
-                        IconButton({ controls.openDevices() }) {
-                            Icon(Icons.Rounded.Devices, "Dispositivos", tint = if (s.remote != null) accentColor() else Color.White)
-                        }
                         IconButton({ showActions = true }) {
                             Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White)
                         }
@@ -714,17 +716,21 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             if (kotlin.math.abs((h - controlsH).value) > 1f) controlsH = h
                         },
                     ) {
-                        AnimatedContent(track, transitionSpec = { songChange() }, label = "title") { t ->
-                            Column {
-                                Text(
-                                    t.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
-                                    letterSpacing = (-.5f).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    t.artists, color = Color.White.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
+                        // The heart sits on the artist's line, however long the title runs.
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            AnimatedContent(track, Modifier.weight(1f), transitionSpec = { songChange() }, label = "title") { t ->
+                                Column {
+                                    Text(
+                                        t.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
+                                        letterSpacing = (-.5f).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        t.artists, color = Color.White.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
+                            LikeButton(track.uri)
                         }
                         Spacer(Modifier.height(18.dp))
                         var drag by remember { mutableStateOf<Float?>(null) }
@@ -767,9 +773,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, controls::next)
                             }
                             Spacer(Modifier.height(18.dp))
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            // Evenly spread: how it plays (shuffle, repeat), what goes with it
+                            // (lyrics, queue), where it sounds (equalizer, devices).
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 ToggleIcon(Icons.Rounded.Shuffle, "Aleatório", s.queue.shuffle) { controls.setShuffle(!s.queue.shuffle) }
-                                Spacer(Modifier.width(8.dp))
                                 ToggleIcon(
                                     if (s.queue.repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
                                     when (s.queue.repeat) {
@@ -787,15 +794,18 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                         },
                                     )
                                 }
-                                Spacer(Modifier.weight(1f))
-                                ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
-                                Spacer(Modifier.weight(1f))
                                 ToggleIcon(Icons.Rounded.Lyrics, "Letra", showLyrics) {
                                     showLyrics = !showLyrics
                                     library.lyricsOpen = showLyrics
                                     if (showLyrics) flipped = false
                                     if (!showLyrics) lyricsFull = false
                                 }
+                                ToggleIcon(Icons.AutoMirrored.Rounded.QueueMusic, "Fila", false) { showQueue = true }
+                                ToggleIcon(Icons.Rounded.GraphicEq, "Equalizador", false) {
+                                    scope.launch { f.animateTo(0f, settle) }
+                                    controls.openEqualizer()
+                                }
+                                ToggleIcon(Icons.Rounded.Devices, "Dispositivos", s.remote != null) { controls.openDevices() }
                             }
                         }
                         Spacer(Modifier.height(12.dp))
@@ -890,17 +900,45 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
 private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
-    // On: solid white; off: a drop of subtle glass.
+    // On: a solid white disc that fills in; off: just the icon, so six of them
+    // read as one quiet row (and draw no glass).
+    val fill by animateFloatAsState(if (on) 1f else 0f, Motion.settle(400f), label = "toggle")
     Box(
-        Modifier.size(48.dp).springPress(source)
-            .then(if (on) Modifier.clip(CircleShape).background(Color.White.copy(.92f)) else Modifier.liquidGlass(CircleShape, true, GlassLevel.Subtle))
+        Modifier.size(46.dp).springPress(source)
+            .drawBehind { if (fill > 0f) drawCircle(Color.White.copy(.92f * fill), size.minDimension / 2 * (.6f + .26f * fill)) }
             .clickable(source, null) {
                 haptics.tick()
                 onClick()
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, description, tint = if (on) Color.Black else Color.White.copy(.8f), modifier = Modifier.size(22.dp))
+        Icon(icon, description, tint = androidx.compose.ui.graphics.lerp(Color.White.copy(.78f), Color.Black, fill), modifier = Modifier.size(22.dp))
+    }
+}
+
+/** The song's heart, beside its title: fills and pops when liked. */
+@Composable
+private fun LikeButton(uri: String) {
+    val edits = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).edits
+    val haptics = rememberHaptics()
+    LaunchedEffect(uri) { edits.load(listOf(uri)) }
+    val liked = edits.saved[uri] == true
+    val pop = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+    IconButton({
+        haptics.press()
+        edits.setSaved(uri, !liked, if (liked) "Removida das curtidas" else "Adicionada às curtidas")
+        if (!liked) scope.launch {
+            pop.snapTo(.7f)
+            pop.animateTo(1f, Motion.settle(300f))
+        }
+    }) {
+        Icon(
+            if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+            if (liked) "Descurtir" else "Curtir",
+            tint = if (liked) accentColor() else Color.White.copy(.8f),
+            modifier = Modifier.size(28.dp).graphicsLayer { scaleX = pop.value; scaleY = pop.value },
+        )
     }
 }
 
@@ -1041,6 +1079,13 @@ private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDi
             emptyList()
         }
     }
+    // Who queued each song (Jam guests), as the device playing reports it.
+    val core = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).core
+    val adders = remember(next) { next.orEmpty().mapNotNull { it.addedBy }.toSet() }
+    val showFaces = dev.nexfy.app.ui.theme.LocalLook.current.showAddedBy && adders.isNotEmpty()
+    val faces by produceState<Map<String, UserFace>>(emptyMap(), adders, showFaces) {
+        if (showFaces) value = runCatching { core.users(adders.toList()) }.getOrDefault(emptyList()).associateBy { it.id }
+    }
     GlassSheet(onDismissRequest = onDismiss) {
         LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
             s.track?.let { track ->
@@ -1063,7 +1108,7 @@ private fun RemoteQueueSheet(s: PlaybackSnapshot, controls: PlayerControls, onDi
                 else -> {
                     item(key = "h-next") { QueueHeading("A seguir") }
                     itemsIndexed(list, key = { i, t -> "r$i:${t.uri}" }) { i, t ->
-                        QueueEntryRow(t, i) {
+                        QueueEntryRow(t, i, if (showFaces) t.addedBy?.let(faces::get) else null) {
                             if (i < REMOTE_SKIP_MAX) {
                                 repeat(i + 1) { controls.next() }
                                 onDismiss()
@@ -1125,7 +1170,8 @@ private fun QueueRow(
         }
         if (face != null) {
             Spacer(Modifier.width(10.dp))
-            dev.nexfy.app.ui.design.UserAvatar(face, Modifier.padding(end = 4.dp).size(26.dp))
+            // Small and quiet: who added it is a hint, not the row's subject.
+            dev.nexfy.app.ui.design.UserAvatar(face, Modifier.padding(end = 4.dp).size(20.dp).alpha(.8f))
         }
     }
 }

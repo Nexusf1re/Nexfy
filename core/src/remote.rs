@@ -371,15 +371,23 @@ pub async fn session_state(session: &Session) -> Option<Option<RemoteState>> {
 }
 
 /// What plays next on the active device, as the cluster lists it.
-pub fn session_queue_uris() -> Option<Vec<String>> {
+/// The next songs of the device playing elsewhere, with who queued each (a
+/// Jam guest) when Spotify says.
+pub fn session_queue() -> Option<Vec<(String, Option<String>)>> {
     let cluster = librespot_connect::cluster_cache::latest()?;
     let player = cluster.player_state.as_ref()?;
     Some(
         player
             .next_tracks
             .iter()
-            .map(|t| t.uri.clone())
-            .filter(|uri| uri.starts_with("spotify:track:") || uri.starts_with("spotify:episode:"))
+            .filter(|t| t.uri.starts_with("spotify:track:") || t.uri.starts_with("spotify:episode:"))
+            .inspect(|t| {
+                // Which keys a queued song carries, to learn how Spotify names its adder.
+                if t.provider == "queue" {
+                    log::info!("queued {} metadata keys: {:?}", t.uri, t.metadata.keys().collect::<Vec<_>>());
+                }
+            })
+            .map(|t| (t.uri.clone(), librespot_connect::queued_by(t)))
             .take(50)
             .collect(),
     )

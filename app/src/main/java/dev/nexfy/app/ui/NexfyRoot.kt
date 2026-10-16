@@ -237,6 +237,7 @@ class AppActions(
         if (tracks.isEmpty()) return
         source?.let(app.library::recordPlay)
         val start = index.coerceIn(0, tracks.lastIndex)
+        val inJam = dev.nexfy.app.ui.player.JamState.current.value != null
         if (remote != null) {
             command {
                 if (shuffle) {
@@ -245,8 +246,13 @@ class AppActions(
                     val order = listOf(tracks[start]) + (tracks - tracks[start]).shuffled()
                     core.remoteCommand(RemoteCommand.Shuffle(false))
                     core.remoteCommand(RemoteCommand.PlayTracks(order.map { it.uri }, 0u))
-                } else if (contextUri != null) {
+                } else if (contextUri != null && !(inJam && contextUri.endsWith(":collection"))) {
                     core.remoteCommand(RemoteCommand.PlayContext(contextUri, tracks[start].uri))
+                } else if (inJam) {
+                    // A device of another account resolves a Liked Songs context against
+                    // its own library (a Jam host would play its own likes), so the songs
+                    // themselves go, from the tapped one on (the command takes up to 300).
+                    core.remoteCommand(RemoteCommand.PlayTracks(tracks.drop(start).take(300).map { it.uri }, 0u))
                 } else {
                     core.remoteCommand(RemoteCommand.PlayTracks(tracks.map { it.uri }, start.toUInt()))
                 }
@@ -323,6 +329,8 @@ class AppActions(
 
     /** Whether the devices sheet is open; any screen can open it. */
     val showDevices = mutableStateOf(false)
+
+    override fun openEqualizer() = open(Route.Equalizer)
 
     override fun openDevices() {
         showDevices.value = true

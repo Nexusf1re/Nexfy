@@ -937,6 +937,13 @@ impl NexfyCore {
         faces
     }
 
+    /// Songs played on any device of the account (a PC, a speaker) after
+    /// `after_ms` (Unix ms), newest first, at most 50: what the listening
+    /// stats add to the phone's own log.
+    pub async fn plays_since(&self, after_ms: u64) -> Result<Vec<RecentPlay>, CoreError> {
+        self.inner.web.plays_after(after_ms).await.map_err(web_error)
+    }
+
     /// What was played lately, from the session (one row per playlist,
     /// album or artist, cached 5 min); the Web API when the session cannot
     /// answer, and a saved copy when neither does.
@@ -1438,8 +1445,17 @@ impl NexfyCore {
 
     pub async fn remote_queue(&self) -> Result<Vec<Track>, CoreError> {
         let session = self.inner.live_session().await?;
-        if let Some(uris) = remote::session_queue_uris() {
-            return Ok(session_reads::tracks(&session, &uris).await);
+        if let Some(queue) = remote::session_queue() {
+            let uris: Vec<String> = queue.iter().map(|(uri, _)| uri.clone()).collect();
+            let adders: HashMap<String, String> =
+                queue.into_iter().filter_map(|(uri, by)| Some((uri, by?))).collect();
+            let mut tracks = session_reads::tracks(&session, &uris).await;
+            for track in &mut tracks {
+                if let Some(by) = adders.get(&track.uri) {
+                    track.added_by = Some(by.clone());
+                }
+            }
+            return Ok(tracks);
         }
         remote::queue(&self.inner.web.player_tokens().await).await.map_err(web_error)
     }

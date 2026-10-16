@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
@@ -44,8 +46,10 @@ fun GlassSheet(onDismissRequest: () -> Unit, content: @Composable ColumnScope.()
     val c = MaterialTheme.colorScheme
     val dark = c.isDark
     val shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
+        sheetState = sheetState,
         shape = shape,
         // Solid: lighter spots of the blurred app (a glass button, a bright cover)
         // would otherwise show through the list as smudges.
@@ -59,9 +63,12 @@ fun GlassSheet(onDismissRequest: () -> Unit, content: @Composable ColumnScope.()
             )
         },
     ) {
-        DisposableEffect(Unit) {
-            SheetDepth.open++
-            onDispose { SheetDepth.open-- }
+        // The app comes forward as soon as the sheet starts to close, with it,
+        // not after it has gone.
+        val showing = sheetState.targetValue != SheetValue.Hidden
+        DisposableEffect(showing) {
+            if (showing) SheetDepth.open++
+            onDispose { if (showing) SheetDepth.open-- }
         }
         BlurBehind(24.dp)
         content()
@@ -116,7 +123,9 @@ object SheetDepth {
 /** The app under open sheets: blurred and a touch smaller, eased in and out. */
 @Composable
 fun Modifier.sheetDepth(): Modifier {
-    val depth = animateFloatAsState(if (SheetDepth.open > 0) 1f else 0f, Motion.standard(Motion.Medium), label = "sheetDepth")
+    val open = SheetDepth.open > 0
+    // In at the sheet's pace; out quicker, so no blur lingers once it is gone.
+    val depth = animateFloatAsState(if (open) 1f else 0f, Motion.standard(if (open) Motion.Medium else Motion.Short), label = "sheetDepth")
     return graphicsLayer {
         val d = depth.value
         if (d > 0.001f) {

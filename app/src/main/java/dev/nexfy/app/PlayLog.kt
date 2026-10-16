@@ -13,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import uniffi.nexfy_core.NexfyCore
 
-/** One song played on this phone: when it started and how long it really played. */
+/** One song played: when it started and how long it played (the whole song for plays elsewhere). */
 data class Listen(
     val uri: String,
     val title: String,
@@ -66,6 +66,47 @@ class PlayLog(context: Context, private val scope: CoroutineScope, private val c
             publish()
             runCatching { file.appendText(encode(entry).toString() + "\n") }
                 .onFailure { Log.d("Nexfy", "play log: ${it.message}") }
+        }
+    }
+
+    /** Spotify history read up to here (Unix ms of the newest play taken). */
+    private val cursor = File(file.parentFile, "listens.cursor")
+
+    /**
+     * Plays on the account's other devices (a PC, a speaker), from Spotify's
+     * history. It keeps only the last 50, so this runs each time the app
+     * opens. Spotify gives no listened time, so these count as the whole
+     * song; one already logged here (same song, same moment) is skipped.
+     */
+    fun importElsewhere() {
+        scope.launch(io) {
+            val after = runCatching { cursor.readText().trim().toLong() }.getOrDefault(0L)
+            val plays = runCatching { core().playsSince(after.toULong()) }
+                .onFailure { Log.d("Nexfy", "play history: ${it.message}") }
+                .getOrNull() ?: return@launch
+            var newest = after
+            // Only recent phone plays can be the same listen.
+            val near = entries.values.filter { it.at > after - DAY_MS }
+            var added = 0
+            for (play in plays) {
+                val end = runCatching { java.time.Instant.parse(play.playedAt).toEpochMilli() }.getOrNull() ?: continue
+                newest = maxOf(newest, end)
+                val t = play.track
+                val ms = t.durationMs.toLong()
+                val start = end - ms
+                if (near.any { it.uri == t.uri && kotlin.math.abs(it.at - start) < ms + SAME_PLAY_SLACK_MS }) continue
+                var key = start
+                while (entries.containsKey(key)) key++
+                val listen = Listen(t.uri, t.title, t.artists, t.artistIds, t.album, t.imageUrl, key, ms)
+                entries[key] = listen
+                runCatching { file.appendText(encode(listen).toString() + "\n") }
+                added++
+            }
+            if (added > 0) {
+                trim()
+                publish()
+            }
+            if (newest > after) runCatching { cursor.writeText(newest.toString()) }
         }
     }
 
@@ -123,5 +164,10 @@ class PlayLog(context: Context, private val scope: CoroutineScope, private val c
     private companion object {
         /** Years of listening at a few hours a day. */
         const val MAX_ENTRIES = 60_000
+
+        const val DAY_MS = 86_400_000L
+
+        /** How far apart a phone play and a history play of one song can start and be the same listen. */
+        const val SAME_PLAY_SLACK_MS = 120_000L
     }
 }

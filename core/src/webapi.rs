@@ -1094,6 +1094,26 @@ impl WebApi {
         })
     }
 
+    /// Plays on any device of the account after `after_ms` (Unix ms), newest
+    /// first, at most 50: Spotify keeps no more. Asked fresh each time.
+    pub async fn plays_after(self: &Arc<Self>, after_ms: u64) -> Result<Vec<RecentPlay>> {
+        let path = format!("/me/player/recently-played?limit=50&after={after_ms}");
+        // Straight from the API: each cursor is a new path, not worth a cache file.
+        let page: Paging<RawRecentPlay> = serde_json::from_value(self.get_json(&path, Route::Personal).await?)?;
+        Ok(page
+            .items
+            .into_iter()
+            .flatten()
+            .filter_map(|play| {
+                Some(RecentPlay {
+                    track: play.track?.into_track(None)?,
+                    context_uri: play.context.and_then(|c| c.uri),
+                    played_at: play.played_at?,
+                })
+            })
+            .collect())
+    }
+
     /// The last 50 plays, newest first, with the playlist or album each
     /// came from. Spotify gives no per-playlist play counts; these contexts
     /// are the closest signal of what is listened to most.

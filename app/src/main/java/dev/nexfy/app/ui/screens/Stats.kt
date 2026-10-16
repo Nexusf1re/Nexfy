@@ -152,8 +152,8 @@ private fun Listen.asTrack() = Track(
 )
 
 /**
- * "Tuas estatísticas": what was played on this phone in the last week,
- * month or ever. Minutes count what actually played, not song lengths.
+ * "Tuas estatísticas": what was played, here and on the account's other devices, in the last week,
+ * month or ever. Minutes count what played here; a play elsewhere counts as the whole song.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -178,7 +178,7 @@ fun StatsScreen(actions: AppActions, list: LazyListState, modifier: Modifier = M
                     RoundIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", { actions.back() }, container = c.background)
                 }
                 Text("Tuas estatísticas", Modifier.padding(top = 14.dp), fontSize = 34.sp, lineHeight = 40.sp, style = MaterialTheme.typography.headlineLarge)
-                Text("O que tocou neste celular", color = c.onSurfaceVariant, fontSize = 14.sp)
+                Text("Neste celular e nos teus outros aparelhos", color = c.onSurfaceVariant, fontSize = 14.sp)
                 PillSelector(Period.entries, period, { it.label }, { periodName = it.name }, Modifier.fillMaxWidth().padding(top = 18.dp))
             }
         }
@@ -187,7 +187,7 @@ fun StatsScreen(actions: AppActions, list: LazyListState, modifier: Modifier = M
                 EmptyState(
                     Icons.Rounded.BarChart,
                     "Nada por aqui ainda",
-                    "Músicas tocadas neste celular por mais de 30 segundos aparecem aqui.",
+                    "Músicas ouvidas por mais de 30 segundos, aqui ou em outro aparelho, aparecem aqui.",
                     Modifier.padding(top = 24.dp),
                 )
             }

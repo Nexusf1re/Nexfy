@@ -2110,11 +2110,20 @@ mod recovery_tests {
     }
 }
 
-/// Who queued a track (a Jam guest), when Spotify says so in its metadata.
-fn queued_by(track: &librespot_protocol::player::ProvidedTrack) -> Option<String> {
-    ["added_by_username", "queued_by", "added_by", "added_by_user_id"]
+/// Who queued a track (a Jam guest), when Spotify says so in its metadata:
+/// the known keys first, then any key that names an adder.
+pub fn queued_by(track: &librespot_protocol::player::ProvidedTrack) -> Option<String> {
+    let known = ["added_by_username", "queued_by", "added_by", "added_by_user_id"];
+    known
         .iter()
         .find_map(|key| track.metadata.get(*key))
+        .or_else(|| {
+            track
+                .metadata
+                .iter()
+                .find(|(key, _)| key.contains("added_by") || key.contains("queued_by"))
+                .map(|(_, user)| user)
+        })
         .filter(|user| !user.is_empty())
-        .cloned()
+        .map(|user| user.trim_start_matches("spotify:user:").to_owned())
 }

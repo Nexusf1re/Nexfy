@@ -74,6 +74,15 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         bridge.listening.onListen = playLog::record
+        // Plays on the account's other devices join the log each time the app opens:
+        // Spotify keeps only the last 50. A moment first, for the sign-in to come back.
+        scope.launch {
+            visible.collectLatest { shown ->
+                if (!shown) return@collectLatest
+                delay(3_000)
+                playLog.importElsewhere()
+            }
+        }
         // Playback can start from another device (Spotify Connect) while no
         // screen is open: bring up the media service so it gets a
         // notification and stays alive.
