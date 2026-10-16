@@ -336,8 +336,11 @@ fun ThinSlider(
     enabled: Boolean = true,
     /** The song is still coming: the bar breathes instead of standing dead. */
     waiting: () -> Boolean = { false },
+    /** Playing: the head carries a soft bloom, which dims when the music stops. */
+    lit: Boolean = false,
 ) {
     val haptics = rememberHaptics()
+    val bloom by animateFloatAsState(if (lit) 1f else 0f, Motion.standard(Motion.Medium), label = "bloom")
     var dragging by remember { mutableStateOf(false) }
     // Held: the track swells, the head grows into a knob and a halo opens under it.
     val grab by animateFloatAsState(if (dragging) 1f else 0f, Motion.settle(260f), label = "grab")
@@ -379,7 +382,20 @@ fun ThinSlider(
         // Waiting: the played part fades in and out, about once a second.
         val breath = if (waiting()) .55f + .37f * (1f + sin(now() / 1000f * PI.toFloat() * 2f)) / 2f else .92f
         drawLine(Color.White.copy(alpha = .22f), Offset(from, y), Offset(to, y), thickness, StrokeCap.Round)
-        drawLine(Color.White.copy(alpha = breath), Offset(from, y), Offset(head, y), thickness, StrokeCap.Round)
+        // The played part gathers light toward the head instead of lying flat.
+        drawLine(
+            Brush.horizontalGradient(
+                listOf(Color.White.copy(alpha = breath * .62f), Color.White.copy(alpha = breath)),
+                startX = from,
+                endX = head,
+            ),
+            Offset(from, y),
+            Offset(head, y),
+            thickness,
+            StrokeCap.Round,
+        )
+        // The bloom under the head, and the wider halo while it is held.
+        if (bloom > 0f) drawCircle(Color.White.copy(alpha = .13f * bloom), knob + 9.dp.toPx(), Offset(head, y))
         if (grab > 0f) drawCircle(Color.White.copy(alpha = .18f * grab), knob + 10.dp.toPx() * grab, Offset(head, y))
         drawCircle(Color.White.copy(alpha = breath), knob, Offset(head, y))
     }

@@ -754,11 +754,25 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 drag = null
                             },
                             waiting = { tick.value; s.loading },
+                            lit = s.playing && !s.loading,
                         )
                         val shown = drag?.let { (it * duration).toLong() } ?: position
                         Row(Modifier.padding(top = 2.dp)) {
                             val time = MaterialTheme.typography.labelMedium
-                            Text(fmt(shown), color = Color.White.copy(.66f), style = time)
+                            // Dragging: the time being aimed at steps forward in the song's colour.
+                            val seeking = drag != null
+                            val lift by animateFloatAsState(if (seeking) 1f else 0f, Motion.settle(300f), label = "seeking")
+                            Text(
+                                fmt(shown),
+                                Modifier.graphicsLayer {
+                                    val s = 1f + .18f * lift
+                                    scaleX = s
+                                    scaleY = s
+                                    transformOrigin = TransformOrigin(0f, .5f)
+                                },
+                                color = androidx.compose.ui.graphics.lerp(Color.White.copy(.66f), accentColor(), lift),
+                                style = time,
+                            )
                             Spacer(Modifier.weight(1f))
                             Text("-" + fmt(duration - shown), color = Color.White.copy(.66f), style = time)
                         }
