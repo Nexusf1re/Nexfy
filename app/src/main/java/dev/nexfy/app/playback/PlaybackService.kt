@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.net.wifi.WifiManager
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.annotation.OptIn
@@ -34,7 +33,7 @@ import kotlinx.coroutines.launch
  *
  * SimpleBasePlayer does none of ExoPlayer's housekeeping, so this service
  * also handles audio focus, "becoming noisy" (headphones unplugged) and the
- * wake and Wi-Fi locks that keep the stream going with the screen off.
+ * wake lock that keeps the stream going with the screen off.
  */
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaSessionService() {
@@ -43,7 +42,6 @@ class PlaybackService : MediaSessionService() {
     private lateinit var audioManager: AudioManager
     private lateinit var focusRequest: AudioFocusRequest
     private lateinit var wakeLock: PowerManager.WakeLock
-    private lateinit var wifiLock: WifiManager.WifiLock
 
     private var hasFocus = false
     private var resumeOnFocusGain = false
@@ -76,10 +74,6 @@ class PlaybackService : MediaSessionService() {
 
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Nexfy:playback")
-            .apply { setReferenceCounted(false) }
-        @Suppress("DEPRECATION") // WIFI_MODE_FULL_LOW_LATENCY needs a foreground app.
-        wifiLock = getSystemService(WifiManager::class.java)
-            .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "Nexfy:stream")
             .apply { setReferenceCounted(false) }
 
         player.addListener(object : Player.Listener {
@@ -252,13 +246,17 @@ class PlaybackService : MediaSessionService() {
         private const val REMOTE_PAUSED_LINGER_MS = 10 * 60_000L
     }
 
+    /**
+     * Keeps the processor awake while a song plays here. No Wi-Fi lock: the
+     * one this held asked for the high-performance mode, which Android has
+     * ignored since 12 (`high_perf_active_time_ms` stays 0), and Wi-Fi power
+     * saving does not starve a buffered stream.
+     */
     private fun holdLocks(hold: Boolean) {
         if (hold) {
             if (!wakeLock.isHeld) wakeLock.acquire()
-            if (!wifiLock.isHeld) wifiLock.acquire()
         } else {
             if (wakeLock.isHeld) wakeLock.release()
-            if (wifiLock.isHeld) wifiLock.release()
         }
     }
 }

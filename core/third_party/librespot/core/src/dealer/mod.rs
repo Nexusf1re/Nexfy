@@ -55,6 +55,9 @@ const PING_INTERVAL: Duration = Duration::from_secs(30);
 const PING_TIMEOUT: Duration = Duration::from_secs(3);
 
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(10);
+/// Out of signal, retrying every ten seconds only drains the battery: the
+/// wait doubles up to this, and the first success starts it over.
+const RECONNECT_INTERVAL_MAX: Duration = Duration::from_secs(300);
 
 const DEALER_REQUEST_HANDLERS_POISON_MSG: &str =
     "dealer request handlers mutex should not be poisoned";
@@ -677,6 +680,7 @@ where
     } else {
         (None, None)
     };
+    let mut backoff = RECONNECT_INTERVAL;
 
     while !shared.is_closed() {
         match &mut tasks {
@@ -706,10 +710,14 @@ where
                 }?;
 
                 match connect(&url, proxy.as_ref(), &shared).await {
-                    Ok((s, r)) => tasks = (init_task(s), init_task(r)),
+                    Ok((s, r)) => {
+                        backoff = RECONNECT_INTERVAL;
+                        tasks = (init_task(s), init_task(r));
+                    }
                     Err(e) => {
                         error!("Error while connecting: {e}");
-                        tokio::time::sleep(RECONNECT_INTERVAL).await;
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(RECONNECT_INTERVAL_MAX);
                     }
                 }
             }
