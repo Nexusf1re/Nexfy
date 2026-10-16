@@ -311,3 +311,13 @@ fun Modifier.refusalShake(): Modifier {
     }
     return graphicsLayer { translationX = x.value * density }
 }
+
+/**
+ * Waits for the next frame. A UI loop that sleeps with `delay` goes on in
+ * the background, where no one sees it; following the delay with this
+ * parks it there instead, since the frame clock stops while the app is
+ * hidden, and lets it carry on the moment the app is back.
+ */
+suspend fun awaitShown() {
+    androidx.compose.runtime.withFrameMillis { }
+}

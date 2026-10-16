@@ -1391,6 +1391,16 @@ impl NexfyCore {
         Ok(devices)
     }
 
+    /// Waits until the Connect cluster changes after version [seen], or
+    /// [timeout_ms] passes, and returns the version to pass next time.
+    /// Following another device this way wakes nothing between its changes.
+    pub async fn await_remote_change(&self, seen: u64, timeout_ms: u32) -> u64 {
+        let wait = librespot_connect::cluster_cache::changed(seen);
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms.into()), wait)
+            .await
+            .unwrap_or(seen)
+    }
+
     /// What is playing on any device; None when nothing is. Read from the
     /// cluster, so polling it costs no Web API quota.
     pub async fn remote_state(&self) -> Result<Option<RemoteState>, CoreError> {

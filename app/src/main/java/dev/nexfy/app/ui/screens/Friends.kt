@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -135,6 +137,7 @@ fun FriendsScreen(actions: AppActions, list: LazyListState, modifier: Modifier =
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000)
+            awaitShown()
             friends.refresh()
         }
     }

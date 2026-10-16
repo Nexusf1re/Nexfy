@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import android.os.SystemClock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -49,6 +51,7 @@ fun sleepTimerLabel(): String {
             }
             if (sleep !is Sleep.After) break
             delay(1_000)
+            awaitShown()
         }
     }
     return left?.let { "Timer de sono · $it" } ?: "Timer de sono"

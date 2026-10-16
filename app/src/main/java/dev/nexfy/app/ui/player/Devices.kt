@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -127,6 +129,7 @@ fun DevicesSheet(s: PlaybackSnapshot, controls: PlayerControls, onDismiss: () ->
                 if (devices == null) error = e.message
             }
             delay(4_000)
+            awaitShown()
         }
     }
 

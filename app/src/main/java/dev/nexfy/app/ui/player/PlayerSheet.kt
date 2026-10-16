@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.rounded.CloseFullscreen
 import androidx.compose.material.icons.rounded.OpenInFull
@@ -273,6 +275,7 @@ private fun rememberPosition(s: PlaybackSnapshot): Long {
             position = s.currentPositionMs()
             if (!s.playing) break
             delay(250)
+            awaitShown()
         }
     }
     return position

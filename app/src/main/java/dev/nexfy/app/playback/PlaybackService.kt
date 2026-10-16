@@ -151,8 +151,8 @@ class PlaybackService : MediaSessionService() {
 
     /**
      * With no screen open nothing polls the other device, so follow it from
-     * here for the session to mirror it. The state comes from the Connect
-     * cluster the session keeps (no network), so polling it is cheap. Once
+     * here for the session to mirror it, waking only when the Connect
+     * cluster Spotify pushes changes (no network, no timer). Once
      * that device has been paused a while, or stopped, end the service:
      * Android would not let it come back to the foreground from the
      * background anyway.
@@ -160,6 +160,7 @@ class PlaybackService : MediaSessionService() {
     private fun followRemote(app: NexfyApp) = lifecycleScope.launch {
         var pausedSince = 0L
         var followed = false
+        var seen = 0uL
         while (true) {
             val s = app.bridge.state.value
             val now = SystemClock.elapsedRealtime()
@@ -179,7 +180,7 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
             }
-            delay(if (s.remote != null && s.playing) 2_000 else 10_000)
+            seen = app.core.awaitRemoteChange(seen, 30_000u)
         }
     }
 

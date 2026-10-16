@@ -101,15 +101,16 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
         }
         // While a screen is open, follow what the account plays on other
-        // devices: faster while one of them is playing.
+        // devices, as their changes arrive.
         scope.launch {
             visible.collectLatest { shown ->
                 if (!shown) return@collectLatest
+                var seen = 0uL
                 while (true) {
                     refreshRemote()
-                    // The state comes from the Connect cluster the session keeps (no
-                    // network); the Web API is asked only before the first cluster.
-                    delay(if (bridge.state.value.remote != null) 2_000 else 5_000)
+                    // Woken by the cluster Spotify pushes, not by a timer: nothing runs
+                    // between changes. The timeout covers a session with no cluster yet.
+                    seen = core.awaitRemoteChange(seen, 10_000u)
                 }
             }
         }

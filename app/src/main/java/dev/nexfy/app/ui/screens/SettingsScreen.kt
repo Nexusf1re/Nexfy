@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -420,6 +422,7 @@ private fun StorageSection(actions: AppActions) {
         while (true) {
             info = core.cacheInfo()
             delay(3_000)
+            awaitShown()
         }
     }
     Section(

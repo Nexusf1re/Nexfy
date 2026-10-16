@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.design.awaitShown
+
 import androidx.compose.runtime.derivedStateOf
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.mutableIntStateOf
@@ -193,6 +195,7 @@ fun CollectionScreen(
         while (kept && all.isNotEmpty()) {
             onPhone = actions.core.cachedCount(all.map { it.uri }).toInt()
             delay(4_000)
+            awaitShown()
         }
     }
     var query by rememberSaveable { mutableStateOf("") }

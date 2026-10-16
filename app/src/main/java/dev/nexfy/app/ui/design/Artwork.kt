@@ -7,10 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.PowerManager
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
@@ -187,12 +184,8 @@ fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f
     val context = LocalContext.current
     val allowed = remember { motionAllowed(context) }
     val moving = allowed && LocalLook.current.animatedBackdrop
-    val t = if (moving) {
-        rememberInfiniteTransition(label = "mesh")
-            .animateFloat(0f, 1f, infiniteRepeatable(tween(36_000, easing = LinearEasing)), label = "t")
-    } else {
-        null
-    }
+    // A 36 s orbit, on the ambient clock: 30 frames a second, not 120.
+    val clock = if (moving) ambientClock() else null
     // Drawn into a quarter-size layer and scaled up: the soft gradients look
     // the same and each frame fills a sixteenth of the pixels.
     Box(modifier.fillMaxSize()) {
@@ -204,7 +197,7 @@ fun LivingArtwork(art: String?, modifier: Modifier = Modifier, dim: Float = .25f
             scaleY = 4f
         },
     ) {
-        val phase = t?.value ?: .3f
+        val phase = clock?.let { (it.value % 36_000) / 36_000f } ?: .3f
         drawRect(animated[3].value)
         val w = size.width
         val h = size.height
@@ -240,9 +233,10 @@ fun Modifier.kenBurns(enabled: Boolean): Modifier {
     val context = LocalContext.current
     val on = enabled && !Motion.reduced && remember { motionAllowed(context) }
     if (!on) return this
-    val t by rememberInfiniteTransition(label = "kenburns")
-        .animateFloat(0f, 1f, infiniteRepeatable(tween(24_000, easing = LinearEasing)), label = "kb")
+    // On the ambient clock: a drift this slow looks the same at 30 fps.
+    val clock = ambientClock()
     return graphicsLayer {
+        val t = (clock.value % 24_000) / 24_000f
         val e = (1 - cos(t * 2 * Math.PI).toFloat()) / 2
         // Pan reaches 2.5 % per side; 1.06 leaves 3 % of margin on each side.
         val s = 1.06f + .06f * e
