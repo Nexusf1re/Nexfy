@@ -211,10 +211,13 @@ fun CollectionScreen(
     val shownTracks = remember(shown) { shown.map { it.value } }
     // A filtered or re-sorted view plays as an explicit list, not as the context.
     val rowContext = contextUri.takeIf { query.isBlank() && sort == TrackSort.Original }
-    val shuffleOn by library.shuffle.collectAsState()
+    val shuffleSaved by library.shuffle.collectAsState()
     val playingHere by remember(contextUri) {
         derivedStateOf { contextUri != null && playbackState.value.queue.contextUri == contextUri }
     }
+    // While this list plays, the button shows what the player does, whoever changed it.
+    val playerShuffle by remember { derivedStateOf { playbackState.value.queue.shuffle } }
+    val shuffleOn = if (playingHere) playerShuffle else shuffleSaved
     // Shuffled, a new random first song each time; the player shuffles the rest.
     val playAll = {
         actions.play(all, if (shuffleOn) all.indices.random() else 0, shuffle = shuffleOn, source = source, contextUri = contextUri)

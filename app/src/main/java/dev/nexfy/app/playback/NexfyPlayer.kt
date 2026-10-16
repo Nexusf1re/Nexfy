@@ -198,7 +198,7 @@ class NexfyPlayer(
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
         if (remote != null) return onRemote {
-            commands.remote(if (playWhenReady) RemoteCommand.Play else RemoteCommand.Pause) { it.copy(playing = playWhenReady) }
+            commands.remote(if (playWhenReady) RemoteCommand.Play else RemoteCommand.Pause, hold = true) { it.copy(playing = playWhenReady) }
         }
         this.playWhenReady = playWhenReady
         val s = bridge.local.value
@@ -255,7 +255,7 @@ class NexfyPlayer(
 
     override fun handleSetShuffleModeEnabled(shuffleModeEnabled: Boolean): ListenableFuture<*> {
         if (remote != null) return onRemote {
-            commands.remote(RemoteCommand.Shuffle(shuffleModeEnabled)) { it.copy(shuffle = shuffleModeEnabled) }
+            commands.remote(RemoteCommand.Shuffle(shuffleModeEnabled), hold = true) { it.copy(shuffle = shuffleModeEnabled) }
         }
         return runCore { core.setShuffle(shuffleModeEnabled) }
     }
@@ -266,7 +266,7 @@ class NexfyPlayer(
             REPEAT_MODE_ONE -> RepeatMode.ONE
             else -> RepeatMode.OFF
         }
-        if (remote != null) return onRemote { commands.remote(RemoteCommand.Repeat(mode)) { it.copy(repeat = mode) } }
+        if (remote != null) return onRemote { commands.remote(RemoteCommand.Repeat(mode), hold = true) { it.copy(repeat = mode) } }
         return runCore { core.setRepeat(mode) }
     }
 

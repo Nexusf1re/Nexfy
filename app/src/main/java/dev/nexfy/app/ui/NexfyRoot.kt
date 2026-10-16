@@ -300,7 +300,7 @@ class AppActions(
     private val remote get() = app.commands.remote
 
     /** Send a command to the remote device, showing its effect at once. */
-    private fun remoteCommand(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) = app.commands.remote(cmd, show)
+    private fun remoteCommand(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) = app.commands.remote(cmd, show = show)
 
     override fun playPause() = app.commands.playPause()
 

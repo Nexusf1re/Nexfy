@@ -25,6 +25,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -144,6 +145,12 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                         .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
                 }
             }
+        }
+        // One shuffle mode: when the player's changes (here, on another device, from
+        // the notification), the pages' shuffle buttons follow it.
+        scope.launch {
+            bridge.state.filter { it.track != null }.map { it.queue.shuffle }.distinctUntilChanged()
+                .collect { library.setShuffle(it) }
         }
         // Keep the home-screen widgets in step with what plays (here or elsewhere).
         NexfyWidgets.follow(this, scope)

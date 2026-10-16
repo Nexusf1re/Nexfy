@@ -18,6 +18,9 @@ import uniffi.nexfy_core.TrackInfo
 /** How long a remote skip shown ahead outlasts polls still naming the old song. */
 private const val REMOTE_SKIP_HOLD_MS = 4000L
 
+/** How long a toggle shown ahead waits for the player to confirm it. */
+private const val EXPECT_MS = 4000L
+
 val EmptyQueue = QueueState(null, emptyList(), null, emptyList(), false, RepeatMode.OFF)
 
 /** What the core last reported. Positions are extrapolated while playing. */
@@ -92,7 +95,7 @@ class CoreBridge(core: NexfyCore) : CoreListener {
         if (now < holdUntil) return
         // This phone playing means it is the active device, whatever a late
         // report about another device says.
-        val r = report.takeUnless { _local.value.playing }
+        val r = report.takeUnless { _local.value.playing }?.let { heldRemote(it, now) }
         // After a skip shown ahead, a late poll may still name the old song:
         // keep the new one until the device confirms or the hold runs out.
         skipShown?.let { (oldUri, until) ->
@@ -117,6 +120,49 @@ class CoreBridge(core: NexfyCore) : CoreListener {
         holdUntil = SystemClock.elapsedRealtime() + 6000
         remote = null
         publish()
+    }
+
+    /**
+     * A toggle shown ahead (shuffle, repeat, play/pause), and until when it
+     * overrides reports that do not have it yet: the first report after a
+     * command often still carries the old state, which made the toggle bounce.
+     */
+    private var expectedRemote: Pair<(RemoteState) -> RemoteState, Long>? = null
+    private var expectedQueue: Pair<(QueueState) -> QueueState, Long>? = null
+
+    /** Hold [change] over remote reports until one has it, or [EXPECT_MS] passes. */
+    @Synchronized
+    fun expectRemote(change: (RemoteState) -> RemoteState) {
+        expectedRemote = change to SystemClock.elapsedRealtime() + EXPECT_MS
+    }
+
+    /** The same for this phone's queue (shuffle, repeat). */
+    @Synchronized
+    fun expectQueue(change: (QueueState) -> QueueState) {
+        expectedQueue = change to SystemClock.elapsedRealtime() + EXPECT_MS
+    }
+
+    /** A report with the change still expected applied, clearing it once the report has it. */
+    private fun heldRemote(r: RemoteState, now: Long): RemoteState {
+        val (change, until) = expectedRemote ?: return r
+        if (now >= until) {
+            expectedRemote = null
+            return r
+        }
+        val held = change(r)
+        if (held == r) expectedRemote = null
+        return held
+    }
+
+    private fun heldQueue(q: QueueState, now: Long): QueueState {
+        val (change, until) = expectedQueue ?: return q
+        if (now >= until) {
+            expectedQueue = null
+            return q
+        }
+        val held = change(q)
+        if (held == q) expectedQueue = null
+        return held
     }
 
     /** Apply a command to the remote view right away; the next poll confirms it. */
@@ -180,7 +226,7 @@ class CoreBridge(core: NexfyCore) : CoreListener {
                     playing = false, loading = false, stopped = true,
                     positionMs = s.currentPositionMs(now), positionAt = now,
                 )
-                is CoreEvent.QueueChanged -> s.copy(queue = event.queue)
+                is CoreEvent.QueueChanged -> s.copy(queue = heldQueue(event.queue, now))
                 is CoreEvent.Error -> s.copy(error = event.message)
             }
         }

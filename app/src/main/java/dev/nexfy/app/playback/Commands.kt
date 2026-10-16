@@ -105,8 +105,10 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     }
 
     /** Send a command to the remote device, showing its effect at once. */
-    fun remote(cmd: RemoteCommand, show: ((RemoteState) -> RemoteState)? = null) {
+    fun remote(cmd: RemoteCommand, hold: Boolean = false, show: ((RemoteState) -> RemoteState)? = null) {
         show?.let(bridge::updateRemote)
+        // A toggle stays as shown until the device confirms it, not undone by a late report.
+        if (hold) show?.let(bridge::expectRemote)
         run { core.remoteCommand(cmd) }
         app.refreshRemoteSoon()
     }
@@ -152,7 +154,7 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     fun playPause() {
         val playing = bridge.state.value.playing
         if (remote != null) {
-            remote(if (playing) RemoteCommand.Pause else RemoteCommand.Play) { it.copy(playing = !playing) }
+            remote(if (playing) RemoteCommand.Pause else RemoteCommand.Play, hold = true) { it.copy(playing = !playing) }
             return
         }
         val undo = showPlaying(!playing)
@@ -188,14 +190,16 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
     }
 
     fun setShuffle(on: Boolean) {
-        if (remote != null) return remote(RemoteCommand.Shuffle(on)) { it.copy(shuffle = on) }
+        if (remote != null) return remote(RemoteCommand.Shuffle(on), hold = true) { it.copy(shuffle = on) }
         val undo = bridge.optimistic { it.copy(queue = it.queue.copy(shuffle = on)) }
+        bridge.expectQueue { it.copy(shuffle = on) }
         run(undo) { core.setShuffle(on) }
     }
 
     fun setRepeat(mode: RepeatMode) {
-        if (remote != null) return remote(RemoteCommand.Repeat(mode)) { it.copy(repeat = mode) }
+        if (remote != null) return remote(RemoteCommand.Repeat(mode), hold = true) { it.copy(repeat = mode) }
         val undo = bridge.optimistic { it.copy(queue = it.queue.copy(repeat = mode)) }
+        bridge.expectQueue { it.copy(repeat = mode) }
         run(undo) { core.setRepeat(mode) }
     }
 }
