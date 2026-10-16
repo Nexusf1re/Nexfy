@@ -129,9 +129,12 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val myPlaylists = playlists.state.value?.let { all ->
         pinnedFirst(PlaylistSort.MostPlayed.apply(all, scores), pinned) { "pl:${it.id}" }
     }
-    // Held down, a song card opens the same menu as its three dots in a list.
+    // Held down, a card opens the menu its row in the library has.
+    val me = remember { core.username() }
     var menuFor by remember { mutableStateOf<Track?>(null) }
     menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
+    var shelfFor by remember { mutableStateOf<Shelved?>(null) }
+    shelfFor?.let { ShelfMenu(it, actions) { shelfFor = null } }
 
     Column(Modifier.fillMaxSize()) {
         RootHeader("Início", collapse, actions)
@@ -186,9 +189,16 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("playlists", "Tuas playlists", playlists.state.pending(), myPlaylists?.takeIf { it.isNotEmpty() }) { items ->
                 Carousel(actions.nav.list("row:home-pl"), items.first().id) {
                     items(items.take(20), key = { it.id }) { p ->
-                        CoverCard(p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}", shared = "home-pl/${p.id}") {
-                            actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "home-pl/${p.id}")
-                        }
+                        val peek = Peek(p.name, p.owner, p.imageUrl)
+                        CoverCard(
+                            p.imageUrl, p.name, "${p.trackCount} faixas", "pl-${p.id}", shared = "home-pl/${p.id}",
+                            onLongClick = {
+                                shelfFor = Shelved(
+                                    "pl:${p.id}", p.name, "Playlist · ${p.owner}", p.imageUrl,
+                                    Route.Playlist(p.id), peek, p.uri, own = p.ownerId == me,
+                                )
+                            },
+                        ) { actions.open(Route.Playlist(p.id), peek, "home-pl/${p.id}") }
                     }
                 }
             }
@@ -204,9 +214,13 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("albums", "Álbuns salvos", albums.state.pending(), albums.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "al:${it.id}" } }) { items ->
                 Carousel(actions.nav.list("row:home-al"), items.first().id) {
                     items(items.take(20), key = { it.id }) { a ->
-                        CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "home-al/${a.id}") {
-                            actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "home-al/${a.id}")
-                        }
+                        val peek = Peek(a.name, a.artists, a.imageUrl)
+                        CoverCard(
+                            a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "home-al/${a.id}",
+                            onLongClick = {
+                                shelfFor = Shelved("al:${a.id}", a.name, "Álbum · ${a.artists}", a.imageUrl, Route.Album(a.id), peek, a.uri)
+                            },
+                        ) { actions.open(Route.Album(a.id), peek, "home-al/${a.id}") }
                     }
                 }
             }
@@ -214,9 +228,13 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("shows", "Teus podcasts", false, shows.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "sh:${it.id}" } }) { items ->
                 Carousel(actions.nav.list("row:home-sh"), items.first().id) {
                     items(items.take(20), key = { it.id }) { s ->
-                        CoverCard(s.imageUrl, s.name, s.publisher.ifEmpty { "Podcast" }, "sh-${s.id}", shared = "home-sh/${s.id}") {
-                            actions.open(Route.Show(s.id), Peek(s.name, s.publisher.ifEmpty { null }, s.imageUrl), "home-sh/${s.id}")
-                        }
+                        val peek = Peek(s.name, s.publisher.ifEmpty { null }, s.imageUrl)
+                        CoverCard(
+                            s.imageUrl, s.name, s.publisher.ifEmpty { "Podcast" }, "sh-${s.id}", shared = "home-sh/${s.id}",
+                            onLongClick = {
+                                shelfFor = Shelved("sh:${s.id}", s.name, "Podcast", s.imageUrl, Route.Show(s.id), peek, s.uri)
+                            },
+                        ) { actions.open(Route.Show(s.id), peek, "home-sh/${s.id}") }
                     }
                 }
             }

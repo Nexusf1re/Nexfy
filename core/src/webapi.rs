@@ -419,10 +419,13 @@ struct RawSearch {
 
 /// A medium image for lists: the smallest at least 250 px wide, else the
 /// largest. Spotify lists images largest first.
+/// Spotify lists images largest first: take the smallest that is still big
+/// enough for a card. A missing width counts as too small, so payloads that
+/// give none (its show responses) fall through to the first, the largest.
 fn pick_image(images: &[RawImage]) -> Option<String> {
     images
         .iter()
-        .filter(|image| image.width.is_none_or(|width| width >= 250))
+        .filter(|image| image.width.unwrap_or(0) >= 250)
         .last()
         .or(images.first())
         .map(|image| image.url.clone())

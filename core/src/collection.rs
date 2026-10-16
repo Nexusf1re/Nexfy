@@ -283,7 +283,8 @@ pub async fn saved_albums(web: &WebApi, session: &Session, refresh: bool) -> Res
 /// Saved podcasts, newest first.
 pub async fn saved_shows(web: &WebApi, session: &Session, refresh: bool) -> Result<Vec<Show>> {
     let uris: Vec<String> = items(web, session, SHOWS, refresh).await?.into_iter().map(|item| item.uri).collect();
-    let key = format!("session:shows:{}", session.username());
+    // v2: the cover choice below changed, so the old entries must be read again.
+    let key = format!("session:shows:v2:{}", session.username());
     Ok(resolve(web, &key, &uris, |s: &Show| s.uri.as_str(), |missing| async move {
         stream::iter(missing)
             .map(|uri| async move {
@@ -294,7 +295,16 @@ pub async fn saved_shows(web: &WebApi, session: &Session, refresh: bool) -> Resu
                     uri: show.id.to_uri(),
                     name: show.name.clone(),
                     publisher: show.publisher.clone(),
-                    image_url: show.covers.first().map(|image| cover_url(&image.id)),
+                    // Shows do not list their covers smallest-last as albums
+                    // do, so taking the first gave a 64 px thumbnail: pick
+                    // the smallest that still fills a card.
+                    image_url: show
+                        .covers
+                        .iter()
+                        .filter(|image| image.width >= 300)
+                        .min_by_key(|image| image.width)
+                        .or_else(|| show.covers.iter().max_by_key(|image| image.width))
+                        .map(|image| cover_url(&image.id)),
                     episode_count: show.episodes.len() as u32,
                 })
             })

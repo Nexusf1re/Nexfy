@@ -1,5 +1,13 @@
 package dev.nexfy.app.ui.screens
 
+import dev.nexfy.app.ui.Route
+import dev.nexfy.app.ui.Peek
+import dev.nexfy.app.ui.AppActions
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.rounded.RemoveCircleOutline
+import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -211,3 +219,66 @@ fun ConfirmDialog(title: String, body: String, confirm: String, onDismiss: () ->
     confirmButton = { TextButton(onConfirm) { Text(confirm, color = MaterialTheme.colorScheme.error) } },
     dismissButton = { TextButton(onDismiss) { Text("Cancelar") } },
 )
+
+/**
+ * A playlist, album or podcast of the library, as its menu needs it.
+ * [key] is the pinning key ("pl:id"); [own] marks a playlist the user made,
+ * which is deleted rather than removed.
+ */
+data class Shelved(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val route: Route,
+    val peek: Peek,
+    val uri: String,
+    val own: Boolean = false,
+)
+
+/**
+ * What holding a library item offers: pin it to the top, open it, and take
+ * it out of the library (deleting an own playlist, after a confirmation).
+ */
+@Composable
+fun ShelfMenu(item: Shelved, actions: AppActions, onDismiss: () -> Unit) {
+    val library = actions.app.library
+    val pinned by library.pinned.collectAsState()
+    var deleting by remember { mutableStateOf(false) }
+    if (deleting) {
+        ConfirmDialog("Excluir playlist?", "“${item.title}” sai da tua biblioteca no Spotify.", "Excluir", { deleting = false }) {
+            deleting = false
+            onDismiss()
+            actions.app.edits.setSaved(item.uri, false, "Playlist excluída")
+        }
+        return
+    }
+    GlassSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
+            Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Cover(item.imageUrl, Modifier.size(52.dp), 10.dp)
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(item.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(item.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                }
+            }
+            SheetAction(Icons.Rounded.PushPin, if (item.key in pinned) "Desafixar" else "Fixar no topo") {
+                library.togglePin(item.key)
+                onDismiss()
+            }
+            SheetAction(Icons.Rounded.OpenInNew, "Abrir") {
+                onDismiss()
+                actions.open(item.route, item.peek)
+            }
+            if (item.own) {
+                SheetAction(Icons.Rounded.DeleteOutline, "Excluir playlist") { deleting = true }
+            } else {
+                SheetAction(Icons.Rounded.RemoveCircleOutline, "Remover da biblioteca") {
+                    onDismiss()
+                    actions.app.edits.setSaved(item.uri, false, "Removida da biblioteca")
+                }
+            }
+        }
+    }
+}

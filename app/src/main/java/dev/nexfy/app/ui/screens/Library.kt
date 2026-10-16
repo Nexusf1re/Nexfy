@@ -331,7 +331,7 @@ private fun <T> SortButton(options: List<T>, selected: T, label: (T) -> String, 
 }
 
 @Composable
-private fun SheetAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun SheetAction(icon: ImageVector, label: String, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
