@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import dev.nexfy.app.ui.design.awaitShown
 
 import androidx.activity.compose.BackHandler
@@ -768,15 +770,15 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                SideButton(Icons.Rounded.SkipPrevious, "Anterior", Modifier.weight(1f), true, controls::previous)
+                                SideButton(Icons.Rounded.SkipPrevious, "Anterior", Modifier.weight(1f), true, -1, controls::previous)
                                 PlayButton(s, controls, 84.dp, Color.White, Color.White, Modifier.weight(2f), pill = true, glass = true)
-                                SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, controls::next)
+                                SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, 1, controls::next)
                             }
                             Spacer(Modifier.height(18.dp))
                             // Evenly spread: how it plays (shuffle, repeat), what goes with it
                             // (lyrics, queue), where it sounds (equalizer, devices).
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                ToggleIcon(Icons.Rounded.Shuffle, "Aleatório", s.queue.shuffle) { controls.setShuffle(!s.queue.shuffle) }
+                                ToggleIcon(Icons.Rounded.Shuffle, "Aleatório", s.queue.shuffle, ToggleMotion.Wiggle) { controls.setShuffle(!s.queue.shuffle) }
                                 ToggleIcon(
                                     if (s.queue.repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
                                     when (s.queue.repeat) {
@@ -785,6 +787,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                         RepeatMode.OFF -> "Repetição desligada"
                                     },
                                     s.queue.repeat != RepeatMode.OFF,
+                                    ToggleMotion.Spin,
                                 ) {
                                     controls.setRepeat(
                                         when (s.queue.repeat) {
@@ -855,11 +858,14 @@ private fun PlayButton(
 ) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
+    val wave = rememberKick(520)
     Box(
         modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).refusalShake().springPress(source)
+            .pressWave(wave, if (glass) fg else bg)
             .then(if (glass) Modifier.liquidGlass(CircleShape, true, GlassLevel.Strong) else Modifier.clip(CircleShape).background(bg))
             .clickable(source, null) {
                 haptics.press()
+                wave.play()
                 controls.playPause()
             },
         contentAlignment = Alignment.Center,
@@ -867,39 +873,57 @@ private fun PlayButton(
         if (s.loading) {
             CircularProgressIndicator(Modifier.size(size * .4f), color = fg, strokeWidth = 2.dp)
         } else {
-            AnimatedContent(s.playing, label = "pp") { playing ->
-                Icon(
-                    if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    if (playing) "Pausar" else "Tocar",
-                    tint = fg,
-                    modifier = Modifier.size(size * .45f),
-                )
-            }
+            // One shape that folds between pause and play.
+            val label = if (s.playing) "Pausar" else "Tocar"
+            PlayPauseGlyph(s.playing, fg, Modifier.size(size * .4f).semantics { contentDescription = label })
         }
     }
 }
 
 @Composable
-private fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, onClick: () -> Unit) {
+private fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, dir: Int, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
+    // The arrow pushes the way of the skip and leaves a fading trace behind it.
+    val nudge = rememberKick(380)
     Box(
         modifier.height(84.dp).alpha(if (enabled) 1f else .35f).refusalShake().springPress(source)
             .liquidGlass(CircleShape, true, GlassLevel.Regular)
             .clickable(source, null, enabled = enabled) {
                 haptics.press()
+                nudge.play()
                 onClick()
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, description, tint = Color.White, modifier = Modifier.size(32.dp))
+        if (nudge.running) {
+            Icon(
+                icon, null, tint = Color.White,
+                modifier = Modifier.size(32.dp).graphicsLayer {
+                    val k = nudge.value.value
+                    alpha = .45f * (1f - k)
+                    translationX = dir * (6.dp.toPx() + 18.dp.toPx() * k)
+                },
+            )
+        }
+        Icon(
+            icon, description, tint = Color.White,
+            modifier = Modifier.size(32.dp).graphicsLayer { translationX = dir * 7.dp.toPx() * nudge.bump() },
+        )
     }
 }
 
+/** How a row button answers a tap, beyond filling in. */
+private enum class ToggleMotion { Bounce, Spin, Wiggle }
+
 @Composable
-private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, onClick: () -> Unit) {
+private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, motion: ToggleMotion = ToggleMotion.Bounce, onClick: () -> Unit) {
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
+    val kick = rememberKick(if (motion == ToggleMotion.Wiggle) 420 else 340)
+    // Repeat turns half a circle on every tap, landing on its next mode.
+    var turns by remember { mutableFloatStateOf(0f) }
+    val turn by animateFloatAsState(turns, Motion.settle(300f), label = "turn")
     // On: a solid white disc that fills in; off: just the icon, so six of them
     // read as one quiet row (and draw no glass).
     val fill by animateFloatAsState(if (on) 1f else 0f, Motion.settle(400f), label = "toggle")
@@ -908,11 +932,36 @@ private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, onCl
             .drawBehind { if (fill > 0f) drawCircle(Color.White.copy(.92f * fill), size.minDimension / 2 * (.6f + .26f * fill)) }
             .clickable(source, null) {
                 haptics.tick()
+                // Shuffle's arrows cross only as it turns on.
+                if (motion != ToggleMotion.Wiggle || !on) kick.play()
+                if (motion == ToggleMotion.Spin && !Motion.reduced) turns += 180f
                 onClick()
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, description, tint = androidx.compose.ui.graphics.lerp(Color.White.copy(.78f), Color.Black, fill), modifier = Modifier.size(22.dp))
+        Icon(
+            icon, description, tint = androidx.compose.ui.graphics.lerp(Color.White.copy(.78f), Color.Black, fill),
+            modifier = Modifier.size(22.dp).graphicsLayer {
+                val b = kick.bump()
+                when (motion) {
+                    ToggleMotion.Bounce -> {
+                        scaleX = 1f + .2f * b
+                        scaleY = 1f + .2f * b
+                    }
+                    ToggleMotion.Spin -> {
+                        rotationZ = turn
+                        scaleX = 1f + .1f * b
+                        scaleY = 1f + .1f * b
+                    }
+                    ToggleMotion.Wiggle -> {
+                        val k = kick.value.value
+                        rotationZ = if (kick.running) 16f * kotlin.math.sin(k * 2f * kotlin.math.PI.toFloat()) * (1f - k) else 0f
+                        scaleX = 1f + .12f * b
+                        scaleY = 1f + .12f * b
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -924,15 +973,20 @@ private fun LikeButton(uri: String) {
     LaunchedEffect(uri) { edits.load(listOf(uri)) }
     val liked = edits.saved[uri] == true
     val pop = remember { Animatable(1f) }
+    val burst = rememberKick(480)
+    val accent = accentColor()
     val scope = rememberCoroutineScope()
     IconButton({
         haptics.press()
         edits.setSaved(uri, !liked, if (liked) "Removida das curtidas" else "Adicionada às curtidas")
-        if (!liked) scope.launch {
-            pop.snapTo(.7f)
-            pop.animateTo(1f, Motion.settle(300f))
+        if (!liked) {
+            burst.play()
+            if (!Motion.reduced) scope.launch {
+                pop.snapTo(.7f)
+                pop.animateTo(1f, Motion.settle(300f))
+            }
         }
-    }) {
+    }, Modifier.likeBurst(burst, accent)) {
         Icon(
             if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             if (liked) "Descurtir" else "Curtir",
