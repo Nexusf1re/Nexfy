@@ -359,6 +359,9 @@ class AppActions(
         if (ahead < 10) repeat(ahead + 1) { core.next() } else core.skipTo(entry.uri)
     }
 
+    override suspend fun translateLyrics(trackUri: String, lines: List<String>, target: String, email: String?) =
+        core.lyricsTranslation(trackUri, lines, target, email)
+
     override suspend fun lyrics(track: TrackInfo): Lyrics? =
         core.lyrics(track.uri, track.title, track.artists, track.album, track.durationMs)
 

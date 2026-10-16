@@ -209,6 +209,16 @@ class LibraryPrefs(context: Context) {
         prefs.edit { putBoolean(HAPTICS, on) }
     }
 
+    private val _translateEmail = MutableStateFlow(prefs.getString(TRANSLATE_EMAIL, "").orEmpty())
+
+    /** Sent with each lyric translation, which raises the free service's daily allowance. */
+    val translateEmail: StateFlow<String> = _translateEmail
+
+    fun setTranslateEmail(email: String) {
+        _translateEmail.value = email.trim()
+        prefs.edit { putString(TRANSLATE_EMAIL, email.trim()) }
+    }
+
     private val _swipeBack = MutableStateFlow(prefs.getBoolean(SWIPE_BACK, true))
 
     /** A sideways drag anywhere on a page goes back, as in Telegram. */
@@ -311,5 +321,6 @@ class LibraryPrefs(context: Context) {
         const val SHOW_ADDED_BY = "show_added_by"
         const val HAPTICS = "haptics"
         const val SWIPE_BACK = "swipe_back"
+        const val TRANSLATE_EMAIL = "translate_email"
     }
 }

@@ -394,6 +394,27 @@ fun ThinSlider(
             thickness,
             StrokeCap.Round,
         )
+        // A sheen drifting along the track, as light crosses glass. It shows
+        // only over the played part, and only while the song runs.
+        if (bloom > 0f && !waiting()) {
+            val at = from + (to - from) * ((now() % SHEEN_MS) / SHEEN_MS.toFloat())
+            val reach = 70.dp.toPx()
+            if (at - reach < head) {
+                drawLine(
+                    Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        .5f to Color.White.copy(alpha = .40f * bloom),
+                        1f to Color.Transparent,
+                        startX = at - reach,
+                        endX = at + reach,
+                    ),
+                    Offset(from, y),
+                    Offset(head, y),
+                    thickness,
+                    StrokeCap.Round,
+                )
+            }
+        }
         // The bloom under the head, and the wider halo while it is held.
         if (bloom > 0f) drawCircle(Color.White.copy(alpha = .13f * bloom), knob + 9.dp.toPx(), Offset(head, y))
         if (grab > 0f) drawCircle(Color.White.copy(alpha = .18f * grab), knob + 10.dp.toPx() * grab, Offset(head, y))
@@ -847,6 +868,9 @@ fun Modifier.dragToDismiss(dismiss: Animatable<Float, AnimationVector1D>, onBack
             alpha = 1f - .4f * d
         }
 }
+
+/** How long the sheen takes to cross the bar. */
+private const val SHEEN_MS = 3800L
 
 /** Milliseconds for the draw-time animations above; the same clock everywhere. */
 private fun now() = android.os.SystemClock.elapsedRealtime()

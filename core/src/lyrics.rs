@@ -449,7 +449,7 @@ fn leading_stamp(text: &str, open: char, close: char) -> Option<(u32, usize)> {
 
 // ------------------------------------------------------------------ cache --
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
 }
 

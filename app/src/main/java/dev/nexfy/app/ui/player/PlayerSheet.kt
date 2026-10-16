@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.player
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import dev.nexfy.app.ui.design.awaitShown
@@ -169,6 +171,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Device
 import uniffi.nexfy_core.Lyrics
+import uniffi.nexfy_core.LyricsTranslation
 import uniffi.nexfy_core.LyricsLine
 import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -191,6 +194,9 @@ interface PlayerControls {
     fun seek(positionMs: Long)
     fun setShuffle(on: Boolean)
     fun setRepeat(mode: RepeatMode)
+
+    /** The lyric lines in [target], or null when the song is already in it. */
+    suspend fun translateLyrics(trackUri: String, lines: List<String>, target: String, email: String?): LyricsTranslation?
 
     /** Lyrics for [track], or null when nobody has them. */
     suspend fun lyrics(track: TrackInfo): Lyrics?
@@ -494,6 +500,28 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     LyricsState.Failed
                 }
             }
+            // The lyric in the phone's language, fetched once a song and kept
+            // on disk. Off by default: it spends a free daily allowance.
+            var translating by rememberSaveable { mutableStateOf(false) }
+            var translation by remember(track.uri) { mutableStateOf<TranslationState>(TranslationState.Off) }
+            val email by library.translateEmail.collectAsState()
+            LaunchedEffect(track.uri, translating, lyrics) {
+                val found = (lyrics as? LyricsState.Found)?.lyrics
+                if (!translating || found == null || found.instrumental) return@LaunchedEffect
+                if (translation is TranslationState.Done || translation is TranslationState.Same) return@LaunchedEffect
+                translation = TranslationState.Working
+                translation = try {
+                    // The app speaks Brazilian Portuguese, whatever the phone is set to.
+                    val got = controls.translateLyrics(track.uri, found.lines.map { it.text }, "pt-BR", email.takeIf { it.isNotBlank() })
+                    if (got == null) TranslationState.Same else TranslationState.Done(got.lines)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    TranslationState.Failed(e.message ?: "A tradução não veio")
+                }
+            }
+            val meaning = (translation as? TranslationState.Done)?.lines.takeIf { translating }
+
             // 0 to 1 as lyrics come in: the cover blurs and darkens behind them.
             val lyricsIn = animateFloatAsState(if (showLyrics && settled) 1f else 0f, Motion.settle(169f), label = "lyrics")
             // 0 to 1 into full-screen lyrics.
@@ -706,9 +734,12 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         if (showLyrics) {
                             Box(Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value * (1f - fullIn.value) }) {
                                 // Hidden under full-screen lyrics: its sweep holds still.
-                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), playback = s.takeUnless { lyricsFull })
-                                IconButton({ lyricsFull = true }, Modifier.align(Alignment.TopEnd)) {
-                                    Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = Color.White.copy(.8f), modifier = Modifier.size(20.dp))
+                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), playback = s.takeUnless { lyricsFull }, translated = meaning)
+                                Row(Modifier.align(Alignment.TopEnd)) {
+                                    TranslateButton(translation, translating) { translating = !translating }
+                                    IconButton({ lyricsFull = true }) {
+                                        Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = Color.White.copy(.8f), modifier = Modifier.size(20.dp))
+                                    }
                                 }
                             }
                         }
@@ -1276,6 +1307,8 @@ private fun LyricsView(
     modifier: Modifier,
     large: Boolean = false,
     playback: PlaybackSnapshot? = null,
+    /** The same lines in another language, under each; null while off. */
+    translated: List<String>? = null,
 ) {
     if (state == LyricsState.Loading) {
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
@@ -1360,8 +1393,8 @@ private fun LyricsView(
                     val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.8f).dp else 0.dp
                     val sweep = if (i == current) remember(line) { wordSweep(line, lines.getOrNull(i + 1)?.atMs?.toLong()) } else null
                     val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
-                    Text(
-                        line.text,
+                    // The line and its translation fade, blur and scale as one.
+                    Column(
                         Modifier.fillMaxWidth()
                             .graphicsLayer {
                                 val sc = .88f + .12f * focus
@@ -1375,8 +1408,11 @@ private fun LyricsView(
                                 enabled = line.atMs != null,
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() },
-                            ) { line.atMs?.let { controls.seek(it.toLong()) } }
-                            .then(
+                            ) { line.atMs?.let { controls.seek(it.toLong()) } },
+                    ) {
+                        Text(
+                            line.text,
+                            Modifier.fillMaxWidth().then(
                                 if (sweep == null) {
                                     Modifier
                                 } else {
@@ -1389,17 +1425,27 @@ private fun LyricsView(
                                     }
                                 },
                             ),
-                        onTextLayout = { layout[0] = it },
-                        color = Color.White,
-                        fontSize = (scale * when { large && lyrics.synced -> 30; large -> 22; lyrics.synced -> 24; else -> 19 }).sp,
-                        fontWeight = FontWeight.Bold,
-                        lineHeight = (scale * when { large && lyrics.synced -> 36; large -> 28; lyrics.synced -> 30; else -> 25 }).sp,
-                    )
+                            onTextLayout = { layout[0] = it },
+                            color = Color.White,
+                            fontSize = (scale * when { large && lyrics.synced -> 30; large -> 22; lyrics.synced -> 24; else -> 19 }).sp,
+                            fontWeight = FontWeight.Bold,
+                            lineHeight = (scale * when { large && lyrics.synced -> 36; large -> 28; lyrics.synced -> 30; else -> 25 }).sp,
+                        )
+                        translated?.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { meaning ->
+                            Text(
+                                meaning,
+                                Modifier.fillMaxWidth().padding(top = 3.dp),
+                                color = Color.White.copy(.58f),
+                                fontSize = (scale * if (large) 17 else 15).sp,
+                                lineHeight = (scale * if (large) 22 else 19).sp,
+                            )
+                        }
+                    }
                 }
             }
         }
         Text(
-            "Letra: ${lyrics.source}",
+            if (translated == null) "Letra: ${lyrics.source}" else "Letra: ${lyrics.source} · tradução: MyMemory",
             color = Color.White.copy(.4f),
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 6.dp),
@@ -1569,6 +1615,41 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
                     repeat(6) { i -> Bone(Modifier.fillMaxWidth(.5f + (i * 37 % 40) / 100f).height(12.dp), light = true) }
                 }
             }
+        }
+    }
+}
+
+/** Where the translation of the current lyric stands. */
+sealed interface TranslationState {
+    data object Off : TranslationState
+    data object Working : TranslationState
+    /** The song is already in the phone's language. */
+    data object Same : TranslationState
+    data class Done(val lines: List<String>) : TranslationState
+    data class Failed(val why: String) : TranslationState
+}
+
+/** Turns the translation on and off, and says when it is coming or refused. */
+@Composable
+private fun TranslateButton(state: TranslationState, on: Boolean, onToggle: () -> Unit) {
+    val haptics = rememberHaptics()
+    val accent = accentColor()
+    val tint = when {
+        state is TranslationState.Failed -> Color.White.copy(.35f)
+        on -> accent
+        else -> Color.White.copy(.8f)
+    }
+    val label = when {
+        state is TranslationState.Same -> "A letra já está no teu idioma"
+        state is TranslationState.Failed -> state.why
+        on -> "Esconder a tradução"
+        else -> "Traduzir a letra"
+    }
+    IconButton({ haptics.tick(); onToggle() }) {
+        if (on && state is TranslationState.Working) {
+            CircularProgressIndicator(Modifier.size(18.dp), color = accent, strokeWidth = 2.dp)
+        } else {
+            Icon(Icons.Rounded.Translate, label, tint = tint, modifier = Modifier.size(20.dp))
         }
     }
 }

@@ -15,6 +15,7 @@ mod offline;
 mod playlist_edit;
 mod remote;
 mod session_reads;
+mod translate;
 mod social;
 mod sound;
 mod webapi;
@@ -41,6 +42,7 @@ use librespot_playback::player::{Player, PlayerEvent, PlayerEventChannel, QueueT
 use tokio::net::TcpListener;
 
 pub use lyrics::{Lyrics, LyricsLine, LyricsWord};
+pub use translate::LyricsTranslation;
 pub use webapi::{
     Album, AlbumDetail, Artist, ArtistDetail, Episode, Playlist, PlaylistDetail, Profile, RecentPlay,
     SearchResults, Show, ShowDetail, Track, TrackPage, WebApp, WebStatus,
@@ -1003,6 +1005,22 @@ impl NexfyCore {
             duration_ms,
         };
         lyrics::fetch(session.as_ref(), &self.inner.cache_dir, &query)
+            .await
+            .map_err(web_error)
+    }
+
+    /// The same lines in `target` ("pt-BR"), kept on disk for a year. None
+    /// when the song is already in that language. `email`, when given,
+    /// raises the free service's daily allowance for whoever set it.
+    pub async fn lyrics_translation(
+        &self,
+        track_uri: String,
+        lines: Vec<String>,
+        target: String,
+        email: Option<String>,
+    ) -> Result<Option<LyricsTranslation>, CoreError> {
+        let id = track_uri.rsplit(':').next().unwrap_or(&track_uri);
+        translate::translate(&self.inner.cache_dir, id, &lines, &target, email.as_deref())
             .await
             .map_err(web_error)
     }

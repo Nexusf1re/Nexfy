@@ -324,6 +324,7 @@ private fun BehaviourSection(actions: AppActions) {
         Toggle("Mostrar quem adicionou", "A foto de quem pôs cada música, em playlists compartilhadas e na fila.", addedBy, library::setShowAddedBy)
         Toggle("Vibração", "Uma vibração leve nos toques e gestos.", haptics, library::setHaptics)
         Toggle("Voltar arrastando", "Arraste uma página para o lado, de qualquer ponto, para voltar.", swipeBack, library::setSwipeBack)
+        TranslatorEmail(library)
     }
 }
 
@@ -504,5 +505,36 @@ private fun StorageSection(actions: AppActions) {
             },
             dismissButton = { TextButton({ confirmClear = false }) { Text("Cancelar") } },
         )
+    }
+}
+
+/**
+ * The translator's free allowance is counted per person: 5 000 characters a
+ * day for anyone, ten times that for whoever gives an email. It is sent to
+ * the translation service and nowhere else, and a song is translated once.
+ */
+@Composable
+private fun TranslatorEmail(library: dev.nexfy.app.LibraryPrefs) {
+    val c = MaterialTheme.colorScheme
+    val saved by library.translateEmail.collectAsState()
+    var email by remember(saved) { mutableStateOf(saved) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Tradução da letra", fontSize = 14.sp)
+        Text(
+            "Sem email dá umas 3 letras por dia. Com um email, umas 30.",
+            color = c.onSurfaceVariant, fontSize = 13.sp,
+        )
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email (opcional)") },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = c.primary, unfocusedBorderColor = c.outline, focusedLabelColor = c.onSurface),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (email.trim() != saved) {
+            PillButton("Salvar email", { library.setTranslateEmail(email) }, filled = false)
+        }
     }
 }
