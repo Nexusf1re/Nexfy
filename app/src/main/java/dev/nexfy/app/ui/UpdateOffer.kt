@@ -141,12 +141,15 @@ fun UpdateSheet(release: Release, updates: Updates, onBrowser: (String) -> Unit,
                     }
                 }
                 UpdateDownload.Idle -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Instala por cima da versão atual, sem perder nada.", color = c.onSurfaceVariant, fontSize = 12.sp)
+                    Text(
+                        "Instala por cima da versão atual, sem perder nada. Ou baixe pela página da versão, no navegador.",
+                        color = c.onSurfaceVariant, fontSize = 12.sp,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         PillButton("Baixar e instalar", {
                             if (release.apkUrl != null) updates.download(release) else onBrowser(release.pageUrl)
                         }, icon = Icons.Rounded.Download)
-                        PillButton("Agora não", onDismiss, filled = false)
+                        PillButton("Página da versão", { onBrowser(release.pageUrl) }, filled = false)
                     }
                 }
             }
