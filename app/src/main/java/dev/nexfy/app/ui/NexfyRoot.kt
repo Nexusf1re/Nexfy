@@ -543,9 +543,11 @@ fun NexfyRoot(
                 val release by app.updates.offer.collectAsState()
                 val r = release
                 if (r != null) {
-                    UpdateSheet(r, app.updates.installed, onDownload = {
-                        actions.showUpdate.value = false
-                        actions.openBrowser(r.apkUrl ?: r.pageUrl)
+                    UpdateSheet(r, app.updates, onBrowser = { url ->
+                        // The full browser, not a Custom Tab: a tab hangs on the APK download's redirect.
+                        val open = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        runCatching { app.startActivity(open) }.onFailure { actions.openBrowser(url) }
                     }) { actions.showUpdate.value = false }
                 } else {
                     LaunchedEffect(Unit) { actions.showUpdate.value = false }

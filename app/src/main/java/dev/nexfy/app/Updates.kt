@@ -4,7 +4,16 @@ import android.content.Context
 import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import android.app.DownloadManager
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.core.content.FileProvider
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
@@ -13,12 +22,21 @@ import org.json.JSONObject
 /** A Nexfy release on GitHub. */
 data class Release(val version: String, val notes: String, val apkUrl: String?, val pageUrl: String)
 
+/** Where the update's APK is: not asked for, coming in ([fraction] once its size is known), in, or failed. */
+sealed interface UpdateDownload {
+    data object Idle : UpdateDownload
+    data class Running(val fraction: Float?) : UpdateDownload
+    data class Ready(val file: File) : UpdateDownload
+    data object Failed : UpdateDownload
+}
+
 /**
  * New versions: asks GitHub for the latest release, at most once a day or
  * when asked, and offers it for as long as it is newer than this install.
  * The last answer is kept, so the offer survives a day without asking again.
  */
-class Updates(context: Context) {
+class Updates(context: Context, private val scope: CoroutineScope) {
+    private val app = context.applicationContext
     private val prefs = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
 
     /** This install's version, as GitHub names it ("0.2.5"). */
@@ -68,6 +86,76 @@ class Updates(context: Context) {
         release.takeIf { newer(it.version, installed) }
     }
 
+    private val _download = MutableStateFlow<UpdateDownload>(UpdateDownload.Idle)
+
+    /** The update's APK coming in, in the app: what the sheet shows. */
+    val download: StateFlow<UpdateDownload> = _download
+
+    /**
+     * Download [release]'s APK with the system's download manager (it shows
+     * its own notification too), then hand it to the installer. A browser
+     * was not reliable: some park the download behind a folder prompt.
+     */
+    fun download(release: Release) {
+        val url = release.apkUrl ?: return
+        if (_download.value is UpdateDownload.Running) return
+        val dir = File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val file = File(dir, "nexfy-${release.version}.apk")
+        val manager = app.getSystemService(DownloadManager::class.java)
+        val id = manager.enqueue(
+            DownloadManager.Request(Uri.parse(url))
+                .setTitle("Nexfy ${release.version}")
+                .setMimeType(APK)
+                .setDestinationUri(Uri.fromFile(file))
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE),
+        )
+        _download.value = UpdateDownload.Running(null)
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(300)
+                val row = manager.query(DownloadManager.Query().setFilterById(id))
+                val (status, done, total) = row.use {
+                    if (!it.moveToFirst()) Triple(DownloadManager.STATUS_FAILED, 0L, 0L)
+                    else Triple(
+                        it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
+                        it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                        it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
+                    )
+                }
+                when (status) {
+                    DownloadManager.STATUS_SUCCESSFUL -> {
+                        _download.value = UpdateDownload.Ready(file)
+                        install(file)
+                        return@launch
+                    }
+                    DownloadManager.STATUS_FAILED -> {
+                        _download.value = UpdateDownload.Failed
+                        return@launch
+                    }
+                    else -> _download.value = UpdateDownload.Running(if (total > 0) done.toFloat() / total else null)
+                }
+            }
+        }
+    }
+
+    /**
+     * Open the installer on a downloaded APK. Until the user allows Nexfy to
+     * install apps, it opens that setting instead; back from it, "Instalar"
+     * tries again.
+     */
+    fun install(file: File) {
+        val intent = if (!app.packageManager.canRequestPackageInstalls()) {
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${app.packageName}"))
+        } else {
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(FileProvider.getUriForFile(app, "${app.packageName}.files", file), APK)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { app.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            .onFailure { Log.d("Nexfy", "install: ${it.message}") }
+    }
+
     /** Close the floating banner for now; the settings keep the update pending. */
     fun hideBanner() {
         _bannerHidden.value = true
@@ -93,6 +181,7 @@ class Updates(context: Context) {
         const val CHECKED = "checked"
         const val LATEST = "latest"
         const val DAY_MS = 86_400_000L
+        const val APK = "application/vnd.android.package-archive"
     }
 }
 

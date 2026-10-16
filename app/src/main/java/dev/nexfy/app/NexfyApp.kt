@@ -59,7 +59,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     val commands: Commands by lazy { Commands(this, scope) }
     val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
     val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
-    val updates: Updates by lazy { Updates(this) }
+    val updates: Updates by lazy { Updates(this, scope) }
 
     /** Songs played here, for the listening stats. */
     val playLog: PlayLog by lazy { PlayLog(this, scope) { core } }

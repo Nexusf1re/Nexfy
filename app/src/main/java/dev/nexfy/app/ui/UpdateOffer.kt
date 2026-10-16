@@ -39,6 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nexfy.app.Release
 import dev.nexfy.app.Updates
+import dev.nexfy.app.UpdateDownload
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.animation.core.animateFloatAsState
 import dev.nexfy.app.ui.design.GlassSheet
 import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.rememberHaptics
@@ -82,7 +85,7 @@ fun UpdateBanner(updates: Updates, onOpen: () -> Unit, modifier: Modifier) {
 
 /** What a release brings, and the way to get it. */
 @Composable
-fun UpdateSheet(release: Release, installed: String, onDownload: () -> Unit, onDismiss: () -> Unit) {
+fun UpdateSheet(release: Release, updates: Updates, onBrowser: (String) -> Unit, onDismiss: () -> Unit) {
     val c = MaterialTheme.colorScheme
     GlassSheet(onDismissRequest = onDismiss) {
         Column(
@@ -91,7 +94,7 @@ fun UpdateSheet(release: Release, installed: String, onDownload: () -> Unit, onD
         ) {
             Column {
                 Text("Nexfy ${release.version}", style = MaterialTheme.typography.headlineSmall)
-                Text("Você tem a $installed", color = c.onSurfaceVariant, fontSize = 13.sp)
+                Text("Você tem a ${updates.installed}", color = c.onSurfaceVariant, fontSize = 13.sp)
             }
             Column(
                 Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
@@ -108,13 +111,44 @@ fun UpdateSheet(release: Release, installed: String, onDownload: () -> Unit, onD
                     }
                 }
             }
-            Text(
-                "O download abre no navegador; instale por cima, sem desinstalar.",
-                color = c.onSurfaceVariant, fontSize = 12.sp,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PillButton("Baixar", onDownload, icon = Icons.Rounded.Download)
-                PillButton("Agora não", onDismiss, filled = false)
+            val download by updates.download.collectAsState()
+            when (val d = download) {
+                is UpdateDownload.Running -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val fraction = d.fraction
+                    if (fraction == null) {
+                        LinearProgressIndicator(Modifier.fillMaxWidth().clip(CircleShape), color = accentColor())
+                    } else {
+                        val shown by animateFloatAsState(fraction, label = "download")
+                        LinearProgressIndicator({ shown }, Modifier.fillMaxWidth().clip(CircleShape), color = accentColor())
+                    }
+                    Text(
+                        if (fraction == null) "Baixando…" else "Baixando… ${(fraction * 100).toInt()}%",
+                        color = c.onSurfaceVariant, fontSize = 13.sp,
+                    )
+                }
+                is UpdateDownload.Ready -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Baixada. Se o Android pedir, permita que o Nexfy instale apps e toque em Instalar de novo.",
+                        color = c.onSurfaceVariant, fontSize = 12.sp,
+                    )
+                    PillButton("Instalar", { updates.install(d.file) }, icon = Icons.Rounded.Download)
+                }
+                UpdateDownload.Failed -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("O download não terminou.", color = c.onSurfaceVariant, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PillButton("Tentar de novo", { updates.download(release) })
+                        PillButton("Abrir no navegador", { onBrowser(release.apkUrl ?: release.pageUrl) }, filled = false)
+                    }
+                }
+                UpdateDownload.Idle -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Instala por cima da versão atual, sem perder nada.", color = c.onSurfaceVariant, fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        PillButton("Baixar e instalar", {
+                            if (release.apkUrl != null) updates.download(release) else onBrowser(release.pageUrl)
+                        }, icon = Icons.Rounded.Download)
+                        PillButton("Agora não", onDismiss, filled = false)
+                    }
+                }
             }
         }
     }
