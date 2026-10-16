@@ -883,16 +883,23 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         .pointerInput(Unit) { detectTapGestures { } }
                         .padding(horizontal = 28.dp),
                 ) {
-                    LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true, playback = s)
+                    // Translating and leaving sit up top, out of the way of the
+                    // thumb; the song's own controls stay at the bottom.
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        TranslateButton(translation, translating) { translating = !translating }
+                        IconButton({ lyricsFull = false }) {
+                            Icon(Icons.Rounded.CloseFullscreen, "Sair da tela cheia", tint = Color.White)
+                        }
+                    }
+                    LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true, playback = s, translated = meaning)
                     Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(track.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(track.artists, color = Color.White.copy(.62f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
+                        LyricsSkip(Icons.Rounded.SkipPrevious, "Anterior", true, -1, controls::previous)
                         PlayButton(s, controls, 52.dp, Color.White, Color.Black)
-                        IconButton({ lyricsFull = false }) {
-                            Icon(Icons.Rounded.CloseFullscreen, "Sair da tela cheia", tint = Color.White)
-                        }
+                        LyricsSkip(Icons.Rounded.SkipNext, "Próxima", hasNext, 1, controls::next)
                     }
                 }
             }
@@ -1651,5 +1658,18 @@ private fun TranslateButton(state: TranslationState, on: Boolean, onToggle: () -
         } else {
             Icon(Icons.Rounded.Translate, label, tint = tint, modifier = Modifier.size(20.dp))
         }
+    }
+}
+
+/** A plain skip for the full-screen lyrics, with the same push as the player's. */
+@Composable
+private fun LyricsSkip(icon: ImageVector, description: String, enabled: Boolean, dir: Int, onClick: () -> Unit) {
+    val haptics = rememberHaptics()
+    val nudge = rememberKick(380)
+    IconButton({ haptics.press(); nudge.play(); onClick() }, Modifier.alpha(if (enabled) 1f else .35f), enabled = enabled) {
+        Icon(
+            icon, description, tint = Color.White,
+            modifier = Modifier.size(28.dp).graphicsLayer { translationX = dir * 7.dp.toPx() * nudge.bump() },
+        )
     }
 }
