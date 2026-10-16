@@ -385,6 +385,7 @@ fun Cover(url: String?, modifier: Modifier, radius: Dp = 14.dp, motion: Boolean 
 }
 
 /** Cover card on a pane of glass tinted by its cover, with a weighted press. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverCard(
     imageUrl: String?,
@@ -394,6 +395,8 @@ fun CoverCard(
     circle: Boolean = false,
     /** Shared-element key of the cover, so it travels to the page it opens. */
     shared: String? = null,
+    /** Held down: the card's menu, as the rows in the lists have. */
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -405,10 +408,19 @@ fun CoverCard(
     Column(
         Modifier.carouselDepth().width(156.dp).weightedPress(source, 16.dp)
             .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
-            .clickable(source, null) {
-                haptics.tick()
-                onClick()
-            }
+            .combinedClickable(
+                source, null,
+                onClick = {
+                    haptics.tick()
+                    onClick()
+                },
+                onLongClick = onLongClick?.let {
+                    {
+                        haptics.press()
+                        it()
+                    }
+                },
+            )
             .padding(bottom = if (circle) 0.dp else 10.dp),
     ) {
         Cover(imageUrl, Modifier.size(156.dp), if (circle) 78.dp else 14.dp, sharedKey = shared)

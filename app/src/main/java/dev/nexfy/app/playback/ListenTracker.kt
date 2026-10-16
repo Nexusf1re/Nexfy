@@ -20,6 +20,9 @@ class ListenTracker {
     private var listened = 0L
     private var reported = 0L
 
+    /** The playlist or album it was played from, for the stats. */
+    private var context: String? = null
+
     /** [SystemClock.elapsedRealtime] since when the song has been playing; null while it is not. */
     private var since: Long? = null
 
@@ -31,6 +34,7 @@ class ListenTracker {
         if (s.track?.uri != track?.uri) {
             report()
             track = s.track
+            context = s.queue.contextUri
             startedAt = System.currentTimeMillis()
             listened = 0
             reported = 0
@@ -44,7 +48,12 @@ class ListenTracker {
         val t = track ?: return
         if (listened < MIN_MS || listened - reported < 1_000) return
         reported = listened
-        onListen?.invoke(Listen(t.uri, t.title, t.artists, emptyList(), t.album, t.coverUrl, startedAt, listened))
+        onListen?.invoke(
+            Listen(
+                t.uri, t.title, t.artists, emptyList(), t.album, t.coverUrl, startedAt, listened,
+                contextUri = context, durationMs = t.durationMs.toLong(),
+            ),
+        )
     }
 
     private companion object {

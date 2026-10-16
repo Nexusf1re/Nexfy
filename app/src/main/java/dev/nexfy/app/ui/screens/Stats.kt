@@ -1,5 +1,13 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.runtime.LaunchedEffect
+import dev.nexfy.app.ui.rememberLoaded
+import dev.nexfy.app.contextKey
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.EmojiEvents
+import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -71,15 +79,28 @@ private enum class Period(val label: String, val days: Long?) {
 
 private data class SongStat(val last: Listen, val plays: Int, val ms: Long)
 
-private data class ArtistStat(val name: String, val id: String?, val ms: Long)
+private data class ArtistStat(val name: String, val id: String?, val ms: Long, val plays: Int = 0)
+
+private data class AlbumStat(val name: String, val artists: String, val imageUrl: String?, val ms: Long, val plays: Int)
+
+/** A playlist, album or Liked Songs the music was played from. */
+private data class ContextStat(val key: String, val ms: Long, val plays: Int, val fallback: Listen)
 
 private data class Bar(val label: String, val ms: Long, val current: Boolean)
+
+/** The short lines above the charts: a streak, a best day, songs met for the first time. */
+private data class Highlights(val streak: Int, val bestDay: LocalDate?, val bestMs: Long, val fresh: Int)
 
 private data class Stats(
     val ms: Long,
     val songs: List<SongStat>,
     val artists: List<ArtistStat>,
+    val albums: List<AlbumStat>,
+    val contexts: List<ContextStat>,
     val bars: List<Bar>,
+    /** Listening by hour of the day, in pairs of hours. */
+    val hours: List<Bar>,
+    val highlights: Highlights,
     /** Days the period covers, for the daily average. */
     val days: Long,
 )
@@ -117,10 +138,29 @@ private fun stats(all: List<Listen>, period: Period, zone: ZoneId): Stats {
             val key = id ?: name.lowercase()
             val old = byArtist[key]
             // A song shared by several artists counts fully for each of them.
-            byArtist[key] = ArtistStat(old?.name ?: name, id ?: old?.id, (old?.ms ?: 0) + l.ms)
+            byArtist[key] = ArtistStat(old?.name ?: name, id ?: old?.id, (old?.ms ?: 0) + l.ms, (old?.plays ?: 0) + 1)
         }
     }
     val artists = byArtist.values.sortedByDescending { it.ms }
+
+    val albums = listens.filter { it.album.isNotBlank() }.groupBy { it.album }
+        .map { (name, plays) -> AlbumStat(name, plays.last().artists, plays.last().imageUrl, plays.sumOf { it.ms }, plays.size) }
+        .sortedByDescending { it.ms }
+
+    // Where the music came from. Only plays logged since the app started
+    // keeping it have one, so the section hides itself until there are some.
+    val contexts = listens.mapNotNull { l -> contextKey(l.contextUri)?.let { it to l } }
+        .groupBy({ it.first }, { it.second })
+        .map { (key, plays) -> ContextStat(key, plays.sumOf { it.ms }, plays.size, plays.last()) }
+        .sortedByDescending { it.ms }
+
+    // Two-hour buckets: 24 bars are too thin to read on a phone.
+    val perHour = listens.groupBy { Instant.ofEpochMilli(it.at).atZone(zone).hour / 2 }
+    val thisHour = Instant.now().atZone(zone).hour / 2
+    val hours = (0 until 12).map { h ->
+        // The hour alone: the column is too narrow for "12h" on one line.
+        Bar(if (h % 3 == 0) "${h * 2}" else "", perHour[h].orEmpty().sumOf { it.ms }, h == thisHour)
+    }
 
     val bars = when (period) {
         Period.All -> {
@@ -141,7 +181,28 @@ private fun stats(all: List<Listen>, period: Period, zone: ZoneId): Stats {
         }
     }
     val days = period.days ?: all.firstOrNull()?.let { today.toEpochDay() - dayOf(it).toEpochDay() + 1 } ?: 1L
-    return Stats(listens.sumOf { it.ms }, songs, artists, bars, days.coerceAtLeast(1L))
+    return Stats(listens.sumOf { it.ms }, songs, artists, albums, contexts, bars, hours, highlights(all, listens, dayOf, today), days.coerceAtLeast(1L))
+}
+
+/**
+ * The run of days up to today with something played, the day with the most
+ * minutes, and how many songs of the period were never heard before it.
+ * The streak looks at the whole log, not only the period.
+ */
+private fun highlights(all: List<Listen>, listens: List<Listen>, dayOf: (Listen) -> LocalDate, today: LocalDate): Highlights {
+    val heard = all.map(dayOf).toSet()
+    var streak = 0
+    // Yesterday still counts while today has nothing yet.
+    var day = if (today in heard) today else today.minusDays(1)
+    while (day in heard) {
+        streak++
+        day = day.minusDays(1)
+    }
+    val best = listens.groupBy(dayOf).maxByOrNull { (_, plays) -> plays.sumOf { it.ms } }
+    val firstHeard = HashMap<String, Long>()
+    for (l in all) firstHeard.merge(l.uri, l.at, ::minOf)
+    val fresh = listens.map { it.uri }.distinct().count { uri -> listens.any { it.uri == uri && it.at == firstHeard[uri] } }
+    return Highlights(streak, best?.key, best?.value?.sumOf { it.ms } ?: 0, fresh)
 }
 
 private fun minutes(ms: Long) = "%,d".format(ms / 60_000)
@@ -166,6 +227,25 @@ fun StatsScreen(actions: AppActions, list: LazyListState, modifier: Modifier = M
     val s = remember(listens, period) { stats(listens, period, zone) }
     var menuFor by remember { mutableStateOf<Track?>(null) }
     menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
+
+    // Names and covers for the playlists the music came from. The library
+    // answers for most; the rest (someone else's, Spotify's own) are read
+    // one by one from the disk cache.
+    val playlists = rememberLoaded("stats-pl") { actions.core.myPlaylists(it) }
+    var sources by remember { mutableStateOf<Map<String, Pair<String, String?>>>(emptyMap()) }
+    val mine = remember(playlists.state.value) {
+        playlists.state.value.orEmpty().associate { "pl:${it.id}" to (it.name to it.imageUrl) }
+    }
+    val wanted = remember(s.contexts, mine, sources) {
+        s.contexts.take(TOP).map { it.key }.filter { it.startsWith("pl:") && it !in mine && it !in sources }
+    }
+    LaunchedEffect(wanted) {
+        for (key in wanted) {
+            val found = runCatching { actions.core.playlist(key.substringAfter(':'), false) }.getOrNull() ?: continue
+            sources = sources + (key to (found.playlist.name to found.playlist.imageUrl))
+        }
+    }
+    val sourceInfo = mine + sources
 
     LazyColumn(
         modifier,
@@ -211,6 +291,20 @@ fun StatsScreen(actions: AppActions, list: LazyListState, modifier: Modifier = M
                 Bars(s.bars)
             }
         }
+        item(key = "highlights") { HighlightRow(s.highlights, period) }
+        if (s.hours.any { it.ms > 0 }) {
+            item(key = "hours") {
+                Column {
+                    SectionTitle("A que horas tu ouve")
+                    Text(
+                        busiestHours(s.hours),
+                        Modifier.padding(bottom = 14.dp),
+                        color = c.onSurfaceVariant, fontSize = 13.sp,
+                    )
+                    Bars(s.hours)
+                }
+            }
+        }
         item(key = "songs-title") { SectionTitle("Músicas mais ouvidas") }
         val top = s.songs.take(TOP)
         itemsIndexed(top, key = { _, song -> "song:${song.last.uri}" }) { i, song ->
@@ -243,6 +337,105 @@ fun StatsScreen(actions: AppActions, list: LazyListState, modifier: Modifier = M
                 a.id?.let { actions.open(Route.Artist(it), Peek(a.name)) }
             }
         }
+        // Only worth a section once more than one album shows up.
+        val albums = s.albums.take(TOP)
+        if (albums.size > 1) {
+            item(key = "albums-title") { SectionTitle("Álbuns mais ouvidos") }
+            itemsIndexed(albums, key = { _, a -> "album:${a.name}" }) { i, a ->
+                CountRow(i + 1, a.imageUrl, a.name, a.artists, "${minutes(a.ms)} min")
+            }
+        }
+        val from = s.contexts.take(TOP)
+        if (from.isNotEmpty()) {
+            item(key = "sources-title") { SectionTitle("De onde tu ouve") }
+            itemsIndexed(from, key = { _, ctx -> "ctx:${ctx.key}" }) { i, ctx ->
+                val known = sourceInfo[ctx.key]
+                val name = known?.first ?: sourceName(ctx)
+                // The cover of a playlist, or of the album the song is on.
+                val cover = known?.second ?: ctx.fallback.imageUrl.takeIf { !ctx.key.startsWith("pl:") }
+                CountRow(i + 1, cover, name, sourceKind(ctx.key), "${minutes(ctx.ms)} min") {
+                    when {
+                        ctx.key == "liked" -> actions.open(Route.Liked)
+                        ctx.key.startsWith("pl:") -> actions.open(Route.Playlist(ctx.key.substringAfter(':')), Peek(name, imageUrl = cover))
+                        ctx.key.startsWith("al:") -> actions.open(Route.Album(ctx.key.substringAfter(':')), Peek(name, ctx.fallback.artists, ctx.fallback.imageUrl))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "Mais entre 18h e 20h", from the fullest two-hour bucket. */
+private fun busiestHours(hours: List<Bar>): String {
+    val i = hours.indices.maxByOrNull { hours[it].ms } ?: return ""
+    return "Tu ouve mais entre ${i * 2}h e ${i * 2 + 2}h"
+}
+
+private fun sourceKind(key: String) = when {
+    key == "liked" -> "Músicas curtidas"
+    key.startsWith("al:") -> "Álbum"
+    key.startsWith("ar:") -> "Artista"
+    else -> "Playlist"
+}
+
+/** What to call a source while its real name is unknown. */
+private fun sourceName(ctx: ContextStat) = when {
+    ctx.key == "liked" -> "Músicas curtidas"
+    ctx.key.startsWith("al:") -> ctx.fallback.album.ifBlank { "Álbum" }
+    else -> "Uma playlist"
+}
+
+/** The period's three short facts, in a line that scrolls sideways if it must. */
+@Composable
+private fun HighlightRow(h: Highlights, period: Period) {
+    val c = MaterialTheme.colorScheme
+    val accent = accentColor()
+    val day = h.bestDay?.format(java.time.format.DateTimeFormatter.ofPattern("d 'de' MMMM", java.util.Locale.forLanguageTag("pt-BR")))
+    val facts = buildList {
+        if (h.streak > 1) add(Icons.Rounded.LocalFireDepartment to "${h.streak} dias seguidos")
+        if (day != null && h.bestMs > 0) add(Icons.Rounded.EmojiEvents to "$day: ${minutes(h.bestMs)} min")
+        if (h.fresh > 0) add(Icons.Rounded.AutoAwesome to if (h.fresh == 1) "1 música nova" else "${h.fresh} músicas novas")
+    }
+    if (facts.isEmpty()) return
+    Row(
+        Modifier.padding(top = 16.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        facts.forEach { (icon, text) ->
+            Row(
+                Modifier.clip(CircleShape).background(accent.copy(alpha = .13f)).padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, null, tint = accent, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(text, color = c.onSurface, fontSize = 13.sp, maxLines = 1)
+            }
+        }
+    }
+    if (period == Period.Week && facts.isNotEmpty()) Spacer(Modifier.height(4.dp))
+}
+
+
+/** A ranked row with a cover, two lines and a figure: albums, and where the music came from. */
+@Composable
+private fun CountRow(rank: Int, imageUrl: String?, title: String, subtitle: String, value: String, onClick: (() -> Unit)? = null) {
+    val c = MaterialTheme.colorScheme
+    val haptics = rememberHaptics()
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .then(if (onClick == null) Modifier else Modifier.clickable { haptics.tick(); onClick() })
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Rank(rank)
+        Cover(imageUrl, Modifier.size(48.dp), 10.dp)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.width(10.dp))
+        Text(value, color = c.onSurfaceVariant, fontSize = 13.sp)
     }
 }
 

@@ -30,6 +30,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +65,7 @@ import dev.nexfy.app.ui.rememberLoaded
 import dev.nexfy.app.ui.theme.accentColor
 import uniffi.nexfy_core.Playlist
 import uniffi.nexfy_core.RecentPlay
+import uniffi.nexfy_core.Track
 
 /** A playlist or album the user played recently, ready to show as a card. */
 private data class RecentContext(
@@ -126,6 +129,9 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val myPlaylists = playlists.state.value?.let { all ->
         pinnedFirst(PlaylistSort.MostPlayed.apply(all, scores), pinned) { "pl:${it.id}" }
     }
+    // Held down, a song card opens the same menu as its three dots in a list.
+    var menuFor by remember { mutableStateOf<Track?>(null) }
+    menuFor?.let { TrackMenu(it, actions) { menuFor = null } }
 
     Column(Modifier.fillMaxSize()) {
         RootHeader("Início", collapse, actions)
@@ -173,7 +179,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("top-tracks", "Tuas mais ouvidas", topTracks.state.pending(), topTracks.state.value?.takeIf { it.isNotEmpty() }) { tracks ->
                 Carousel(actions.nav.list("row:home-top"), tracks.first().uri) {
                     itemsIndexed(tracks, key = { _, t -> t.uri }) { i, t ->
-                        CoverCard(t.imageUrl, t.title, t.artists, "tt-${t.uri}") { actions.play(tracks, i) }
+                        CoverCard(t.imageUrl, t.title, t.artists, "tt-${t.uri}", onLongClick = { menuFor = t }) { actions.play(tracks, i) }
                     }
                 }
             }

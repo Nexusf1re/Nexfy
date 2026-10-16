@@ -24,6 +24,10 @@ data class Listen(
     /** Wall-clock start, ms; also the entry's key. */
     val at: Long,
     val ms: Long,
+    /** The playlist or album it played from, when known; entries from before this is null. */
+    val contextUri: String? = null,
+    /** How long the song is, for telling a song heard through from one skipped; 0 when unknown. */
+    val durationMs: Long = 0,
 )
 
 /**
@@ -97,7 +101,10 @@ class PlayLog(context: Context, private val scope: CoroutineScope, private val c
                 if (near.any { it.uri == t.uri && kotlin.math.abs(it.at - start) < ms + SAME_PLAY_SLACK_MS }) continue
                 var key = start
                 while (entries.containsKey(key)) key++
-                val listen = Listen(t.uri, t.title, t.artists, t.artistIds, t.album, t.imageUrl, key, ms)
+                val listen = Listen(
+                    t.uri, t.title, t.artists, t.artistIds, t.album, t.imageUrl, key, ms,
+                    contextUri = play.contextUri, durationMs = ms,
+                )
                 entries[key] = listen
                 runCatching { file.appendText(encode(listen).toString() + "\n") }
                 added++
@@ -146,6 +153,8 @@ class PlayLog(context: Context, private val scope: CoroutineScope, private val c
         .put("image", l.imageUrl ?: JSONObject.NULL)
         .put("at", l.at)
         .put("ms", l.ms)
+        .put("ctx", l.contextUri ?: JSONObject.NULL)
+        .put("dur", l.durationMs)
 
     private fun decode(o: JSONObject): Listen {
         val ids = o.optJSONArray("artistIds")
@@ -158,6 +167,8 @@ class PlayLog(context: Context, private val scope: CoroutineScope, private val c
             imageUrl = if (o.isNull("image")) null else o.optString("image"),
             at = o.getLong("at"),
             ms = o.getLong("ms"),
+            contextUri = if (o.isNull("ctx")) null else o.optString("ctx").ifEmpty { null },
+            durationMs = o.optLong("dur"),
         )
     }
 
