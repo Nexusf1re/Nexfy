@@ -107,6 +107,7 @@ import dev.nexfy.app.ui.player.PlayerSheet
 import dev.nexfy.app.ui.screens.AlbumScreen
 import dev.nexfy.app.ui.screens.EqualizerScreen
 import dev.nexfy.app.ui.screens.FriendsScreen
+import dev.nexfy.app.ui.screens.DownloadsScreen
 import dev.nexfy.app.ui.screens.GuideScreen
 import dev.nexfy.app.ui.screens.ArtistScreen
 import dev.nexfy.app.ui.screens.HomeScreen
@@ -152,6 +153,7 @@ sealed interface Route {
     data object Stats : Route { override val key get() = "stats" }
     data object Friends : Route { override val key get() = "friends" }
     data object Guide : Route { override val key get() = "guide" }
+    data object Downloads : Route { override val key get() = "downloads" }
 }
 
 /** What the tapped card already showed, drawn while the full page loads. */
@@ -571,6 +573,7 @@ private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifie
         Route.Stats -> StatsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         Route.Friends -> FriendsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         Route.Guide -> GuideScreen(actions, modifier.safeDrawingPadding())
+        Route.Downloads -> DownloadsScreen(actions, nav.list(route.key), modifier.safeDrawingPadding())
         null -> {
             val list = nav.list("root:${screen.tab.name}")
             Box(modifier.safeDrawingPadding()) {
