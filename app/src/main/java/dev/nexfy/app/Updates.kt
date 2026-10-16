@@ -6,9 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import android.app.DownloadManager
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -92,50 +90,58 @@ class Updates(context: Context, private val scope: CoroutineScope) {
     val download: StateFlow<UpdateDownload> = _download
 
     /**
-     * Download [release]'s APK with the system's download manager (it shows
-     * its own notification too), then hand it to the installer. A browser
-     * was not reliable: some park the download behind a folder prompt.
+     * Download [release]'s APK and hand it to the installer. Neither a
+     * browser nor the system download manager was reliable: one parks the
+     * download behind a folder prompt, the other left it pending.
      */
     fun download(release: Release) {
         val url = release.apkUrl ?: return
         if (_download.value is UpdateDownload.Running) return
-        val dir = File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
-        val file = File(dir, "nexfy-${release.version}.apk")
-        val manager = app.getSystemService(DownloadManager::class.java)
-        val id = manager.enqueue(
-            DownloadManager.Request(Uri.parse(url))
-                .setTitle("Nexfy ${release.version}")
-                .setMimeType(APK)
-                .setDestinationUri(Uri.fromFile(file))
-                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE),
-        )
         _download.value = UpdateDownload.Running(null)
         scope.launch(Dispatchers.IO) {
-            while (true) {
-                delay(300)
-                val row = manager.query(DownloadManager.Query().setFilterById(id))
-                val (status, done, total) = row.use {
-                    if (!it.moveToFirst()) Triple(DownloadManager.STATUS_FAILED, 0L, 0L)
-                    else Triple(
-                        it.getInt(it.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
-                        it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
-                        it.getLong(it.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
-                    )
-                }
-                when (status) {
-                    DownloadManager.STATUS_SUCCESSFUL -> {
-                        _download.value = UpdateDownload.Ready(file)
-                        install(file)
-                        return@launch
+            val dir = File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
+            dir.listFiles()?.forEach { it.delete() }
+            val file = File(dir, "nexfy-${release.version}.apk")
+            // Fetched here rather than through the system download manager,
+            // which left the request pending for minutes on this phone.
+            val got = runCatching { fetch(url, file) }
+                .onFailure { Log.d("Nexfy", "update download: ${it.message}") }
+                .getOrDefault(false)
+            if (got) {
+                _download.value = UpdateDownload.Ready(file)
+                install(file)
+            } else {
+                file.delete()
+                _download.value = UpdateDownload.Failed
+            }
+        }
+    }
+
+    /** Writes [url] to [file], reporting how far it got; false when it did not finish. */
+    private fun fetch(url: String, file: File): Boolean {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        connection.setRequestProperty("User-Agent", "Nexfy")
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 30_000
+        try {
+            if (connection.responseCode != 200) return false
+            val total = connection.contentLengthLong
+            var done = 0L
+            connection.inputStream.use { source ->
+                file.outputStream().use { sink ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        sink.write(buffer, 0, read)
+                        done += read
+                        _download.value = UpdateDownload.Running(if (total > 0) done.toFloat() / total else null)
                     }
-                    DownloadManager.STATUS_FAILED -> {
-                        _download.value = UpdateDownload.Failed
-                        return@launch
-                    }
-                    else -> _download.value = UpdateDownload.Running(if (total > 0) done.toFloat() / total else null)
                 }
             }
+            return total <= 0 || done == total
+        } finally {
+            connection.disconnect()
         }
     }
 
