@@ -4,6 +4,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import dev.nexfy.app.ui.design.artInk
+import dev.nexfy.app.ui.design.artWash
 import dev.nexfy.app.ui.design.awaitShown
 
 import androidx.activity.compose.BackHandler
@@ -321,6 +323,12 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
     dev.nexfy.app.ui.MetricsState("player", if (!playerOpen) null else if (lyricsFull) "lyrics-full" else if (showLyrics) "lyrics" else "open")
     val track = s.track ?: lastTrack[0] ?: return
     val c = MaterialTheme.colorScheme
+    // The player follows the theme, as the collection headers do: white over
+    // the dark art, the theme's ink over the pale wash of a light theme.
+    val ink = artInk()
+    val wash = artWash()
+    // A photo under words needs more covering on a pale wash than on a dark one.
+    val veilAt = if (c.isDark) .46f else .60f
     val scope = rememberCoroutineScope()
     val f = remember { Animatable(0f).apply { updateBounds(0f, 1f) } }
     var back by remember { mutableFloatStateOf(0f) }
@@ -348,15 +356,15 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
         playerOpen = expanded
         if (!expanded) flipped = false
     }
-    // The open player is dark on any theme (white over the art): light
-    // system bar icons there, the theme's own again once it is collapsed.
+    // The player follows the theme now, so the system bar icons are the
+    // theme's throughout, open or collapsed.
     val view = LocalView.current
     val lightTheme = !c.isDark
     DisposableEffect(expanded, lightTheme) {
         (view.context as? android.app.Activity)?.window?.let { window ->
             WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = lightTheme && !expanded
-                isAppearanceLightNavigationBars = lightTheme && !expanded
+                isAppearanceLightStatusBars = lightTheme
+                isAppearanceLightNavigationBars = lightTheme
             }
         }
         onDispose { }
@@ -462,8 +470,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             // Living backdrop: a slow mesh gradient in the cover's colours.
             if (showBg) {
                 Box(Modifier.fillMaxSize().graphicsLayer { alpha = pf() }.glassSource(playerGlass)) {
-                    LivingArtwork(track.coverUrl, Modifier.fillMaxSize(), dim = .2f)
-                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(.15f), Color.Black.copy(.55f)))))
+                    LivingArtwork(track.coverUrl, Modifier.fillMaxSize(), dim = .2f, pale = !c.isDark)
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, wash.copy(.15f), wash.copy(.55f)))))
                 }
             }
 
@@ -758,7 +766,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     Modifier.fillMaxSize().drawBehind {
                         val p = lyricsIn.value.coerceIn(0f, 1f)
                         if (p <= 0f) return@drawBehind
-                        val veil = Color.Black.copy(alpha = .46f * (.35f + .65f * p))
+                        val veil = wash.copy(alpha = veilAt * (.35f + .65f * p))
                         val edge = (p * 1.6f).coerceIn(.001f, 1f)
                         val solid = (edge - .55f).coerceIn(0f, edge - .001f)
                         drawRect(
@@ -828,14 +836,14 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 ) {
                     Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically) {
                         IconButton({ scope.launch { f.animateTo(0f, settle) } }) {
-                            Icon(Icons.Rounded.KeyboardArrowDown, "Recolher", tint = Color.White)
+                            Icon(Icons.Rounded.KeyboardArrowDown, "Recolher", tint = ink)
                         }
                         // One button a side keeps the handle centred; devices moved to the row below.
                         Spacer(Modifier.weight(1f))
-                        Box(Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape).background(Color.White.copy(.35f)))
+                        Box(Modifier.size(width = 36.dp, height = 5.dp).clip(CircleShape).background(ink.copy(.35f)))
                         Spacer(Modifier.weight(1f))
                         IconButton({ showActions = true }) {
-                            Icon(Icons.Rounded.MoreVert, "Mais opções", tint = Color.White)
+                            Icon(Icons.Rounded.MoreVert, "Mais opções", tint = ink)
                         }
                     }
                     // Lyrics sit inside the cover's square, over the blurred art.
@@ -877,7 +885,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 Row(Modifier.align(Alignment.TopEnd)) {
                                     TranslateButton(translation, translating) { translating = !translating }
                                     IconButton({ lyricsFull = true }) {
-                                        Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = Color.White.copy(.8f), modifier = Modifier.size(20.dp))
+                                        Icon(Icons.Rounded.OpenInFull, "Letra em tela cheia", tint = ink.copy(.8f), modifier = Modifier.size(20.dp))
                                     }
                                 }
                             }
@@ -894,11 +902,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             AnimatedContent(track, Modifier.weight(1f), transitionSpec = { songChange() }, label = "title") { t ->
                                 Column {
                                     Text(
-                                        t.title, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
+                                        t.title, color = ink, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 32.sp,
                                         letterSpacing = (-.5f).sp, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                     )
                                     Text(
-                                        t.artists, color = Color.White.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
+                                        t.artists, color = ink.copy(.62f), fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     )
                                 }
@@ -940,11 +948,11 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                     scaleY = s
                                     transformOrigin = TransformOrigin(0f, .5f)
                                 },
-                                color = androidx.compose.ui.graphics.lerp(Color.White.copy(.66f), accentColor(), lift),
+                                color = androidx.compose.ui.graphics.lerp(ink.copy(.66f), accentColor(), lift),
                                 style = time,
                             )
                             Spacer(Modifier.weight(1f))
-                            Text("-" + fmt(duration - shown), color = Color.White.copy(.66f), style = time)
+                            Text("-" + fmt(duration - shown), color = ink.copy(.66f), style = time)
                         }
                         s.remote?.let { d ->
                             // Playing on another device: say where, and tap to change it.
@@ -966,7 +974,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 SideButton(Icons.Rounded.SkipPrevious, "Anterior", Modifier.weight(1f), true, -1, controls::previous)
-                                PlayButton(s, controls, 84.dp, Color.White, Color.White, Modifier.weight(2f), pill = true, glass = true)
+                                PlayButton(s, controls, 84.dp, ink, ink, Modifier.weight(2f), pill = true, glass = true)
                                 SideButton(Icons.Rounded.SkipNext, "Próxima", Modifier.weight(1f), hasNext, 1, controls::next)
                             }
                             Spacer(Modifier.height(18.dp))
@@ -1027,17 +1035,17 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                         TranslateButton(translation, translating) { translating = !translating }
                         IconButton({ lyricsFull = false }) {
-                            Icon(Icons.Rounded.CloseFullscreen, "Sair da tela cheia", tint = Color.White)
+                            Icon(Icons.Rounded.CloseFullscreen, "Sair da tela cheia", tint = ink)
                         }
                     }
                     LyricsView(lyrics, position, controls, Modifier.weight(1f).fillMaxWidth(), large = true, playback = s, translated = meaning)
                     Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(track.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(track.artists, color = Color.White.copy(.62f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(track.title, color = ink, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(track.artists, color = ink.copy(.62f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         LyricsSkip(Icons.Rounded.SkipPrevious, "Anterior", true, -1, controls::previous)
-                        PlayButton(s, controls, 52.dp, Color.White, Color.Black)
+                        PlayButton(s, controls, 52.dp, ink, wash)
                         LyricsSkip(Icons.Rounded.SkipNext, "Próxima", hasNext, 1, controls::next)
                     }
                 }
@@ -1059,12 +1067,14 @@ private fun PlayButton(
     glass: Boolean = false,
 ) {
     val source = remember { MutableInteractionSource() }
+    // The glass is lit for the theme, not always for a dark one.
+    val dark = MaterialTheme.colorScheme.isDark
     val haptics = rememberHaptics()
     val wave = rememberKick(520)
     Box(
         modifier.then(if (pill) Modifier.height(size) else Modifier.size(size)).refusalShake().springPress(source)
             .pressWave(wave, if (glass) fg else bg)
-            .then(if (glass) Modifier.liquidGlass(CircleShape, true, GlassLevel.Strong) else Modifier.clip(CircleShape).background(bg))
+            .then(if (glass) Modifier.liquidGlass(CircleShape, dark, GlassLevel.Strong) else Modifier.clip(CircleShape).background(bg))
             .clickable(source, null) {
                 haptics.press()
                 wave.play()
@@ -1084,13 +1094,14 @@ private fun PlayButton(
 
 @Composable
 private fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, dir: Int, onClick: () -> Unit) {
+    val ink = artInk()
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     // The arrow pushes the way of the skip and leaves a fading trace behind it.
     val nudge = rememberKick(380)
     Box(
         modifier.height(84.dp).alpha(if (enabled) 1f else .35f).refusalShake().springPress(source)
-            .liquidGlass(CircleShape, true, GlassLevel.Regular)
+            .liquidGlass(CircleShape, MaterialTheme.colorScheme.isDark, GlassLevel.Regular)
             .clickable(source, null, enabled = enabled) {
                 haptics.press()
                 nudge.play()
@@ -1100,7 +1111,7 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
     ) {
         if (nudge.running) {
             Icon(
-                icon, null, tint = Color.White,
+                icon, null, tint = ink,
                 modifier = Modifier.size(32.dp).graphicsLayer {
                     val k = nudge.value.value
                     alpha = .45f * (1f - k)
@@ -1109,7 +1120,7 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
             )
         }
         Icon(
-            icon, description, tint = Color.White,
+            icon, description, tint = ink,
             modifier = Modifier.size(32.dp).graphicsLayer { translationX = dir * 7.dp.toPx() * nudge.bump() },
         )
     }
@@ -1120,6 +1131,8 @@ private enum class ToggleMotion { Bounce, Spin, Wiggle }
 
 @Composable
 private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, motion: ToggleMotion = ToggleMotion.Bounce, onClick: () -> Unit) {
+    val ink = artInk()
+    val wash = artWash()
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     val kick = rememberKick(if (motion == ToggleMotion.Wiggle) 420 else 340)
@@ -1131,7 +1144,7 @@ private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, moti
     val fill by animateFloatAsState(if (on) 1f else 0f, Motion.settle(400f), label = "toggle")
     Box(
         Modifier.size(46.dp).springPress(source)
-            .drawBehind { if (fill > 0f) drawCircle(Color.White.copy(.92f * fill), size.minDimension / 2 * (.6f + .26f * fill)) }
+            .drawBehind { if (fill > 0f) drawCircle(ink.copy(.92f * fill), size.minDimension / 2 * (.6f + .26f * fill)) }
             .clickable(source, null) {
                 haptics.tick()
                 // Shuffle's arrows cross only as it turns on.
@@ -1142,7 +1155,7 @@ private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, moti
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            icon, description, tint = androidx.compose.ui.graphics.lerp(Color.White.copy(.78f), Color.Black, fill),
+            icon, description, tint = androidx.compose.ui.graphics.lerp(ink.copy(.78f), wash, fill),
             modifier = Modifier.size(22.dp).graphicsLayer {
                 val b = kick.bump()
                 when (motion) {
@@ -1170,6 +1183,7 @@ private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, moti
 /** The song's heart, beside its title: fills and pops when liked. */
 @Composable
 private fun LikeButton(uri: String) {
+    val ink = artInk()
     val edits = (androidx.compose.ui.platform.LocalContext.current.applicationContext as dev.nexfy.app.NexfyApp).edits
     val haptics = rememberHaptics()
     LaunchedEffect(uri) { edits.load(listOf(uri)) }
@@ -1192,7 +1206,7 @@ private fun LikeButton(uri: String) {
         Icon(
             if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
             if (liked) "Descurtir" else "Curtir",
-            tint = if (liked) accentColor() else Color.White.copy(.8f),
+            tint = if (liked) accentColor() else ink.copy(.8f),
             modifier = Modifier.size(28.dp).graphicsLayer { scaleX = pop.value; scaleY = pop.value },
         )
     }
@@ -1201,6 +1215,7 @@ private fun LikeButton(uri: String) {
 /** A wash from the tapped side with "−10 s" or "+10 s". */
 @Composable
 private fun BoxScope.SeekRipple(id: Long, dir: Int) {
+    val ink = artInk()
     val v = remember(id) { Animatable(0f) }
     LaunchedEffect(id) { v.animateTo(1f, Motion.enter(Motion.ExtraLong)) }
     if (v.value >= 1f) return
@@ -1209,14 +1224,14 @@ private fun BoxScope.SeekRipple(id: Long, dir: Int) {
             .graphicsLayer { alpha = 1f - v.value }
             .background(
                 Brush.horizontalGradient(
-                    if (dir < 0) listOf(Color.White.copy(.35f), Color.Transparent) else listOf(Color.Transparent, Color.White.copy(.35f)),
+                    if (dir < 0) listOf(ink.copy(.35f), Color.Transparent) else listOf(Color.Transparent, ink.copy(.35f)),
                 ),
             ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             if (dir < 0) "−10 s" else "+10 s",
-            color = Color.White,
+            color = ink,
             fontSize = 20.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.graphicsLayer {
@@ -1461,6 +1476,7 @@ private fun LyricsView(
      */
     enter: (() -> Float)? = null,
 ) {
+    val ink = artInk()
     if (state == LyricsState.Loading) {
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
         Column(modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -1479,7 +1495,7 @@ private fun LyricsView(
                     state == LyricsState.Failed -> "Não deu para buscar a letra agora"
                     else -> "Letra não encontrada"
                 },
-                color = Color.White.copy(.6f),
+                color = ink.copy(.6f),
                 fontSize = 16.sp,
             )
         }
@@ -1581,12 +1597,12 @@ private fun LyricsView(
                                         // A hair early: the eye leads the ear.
                                         val t = (if (playback != null) clock.longValue else position) + 50
                                         // Unsung words settle dim as the line comes into focus.
-                                        drawSweep(text, sweep.reach(t), 16.dp.toPx(), Color.White, Color.White.copy(alpha = 1f - .62f * focus))
+                                        drawSweep(text, sweep.reach(t), 16.dp.toPx(), ink, ink.copy(alpha = 1f - .62f * focus))
                                     }
                                 },
                             ),
                             onTextLayout = { layout[0] = it },
-                            color = Color.White,
+                            color = ink,
                             fontSize = (scale * when { large && lyrics.synced -> 30; large -> 22; lyrics.synced -> 24; else -> 19 }).sp,
                             fontWeight = FontWeight.Bold,
                             lineHeight = (scale * when { large && lyrics.synced -> 36; large -> 28; lyrics.synced -> 30; else -> 25 }).sp,
@@ -1595,7 +1611,7 @@ private fun LyricsView(
                             Text(
                                 meaning,
                                 Modifier.fillMaxWidth().padding(top = 3.dp),
-                                color = Color.White.copy(.58f),
+                                color = ink.copy(.58f),
                                 fontSize = (scale * if (large) 17 else 15).sp,
                                 lineHeight = (scale * if (large) 22 else 19).sp,
                             )
@@ -1606,7 +1622,7 @@ private fun LyricsView(
         }
         Text(
             if (translated == null) "Letra: ${lyrics.source}" else "Letra: ${lyrics.source} · tradução: MyMemory",
-            color = Color.White.copy(.4f),
+            color = ink.copy(.4f),
             fontSize = 11.sp,
             modifier = Modifier.padding(top = 6.dp),
         )
@@ -1694,6 +1710,8 @@ private data class SheetShape(val inset: Float, val height: Float, val radius: F
  */
 @Composable
 private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modifier, onClose: () -> Unit) {
+    val ink = artInk()
+    val wash = artWash()
     var album by remember { mutableStateOf<AlbumDetail?>(null) }
     var failed by remember { mutableStateOf(false) }
     val isCurrent = { t: Track -> t.uri == track.uri || t.title == track.title }
@@ -1720,7 +1738,7 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
             },
             contentScale = ContentScale.Crop,
         )
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(.52f)))
+        Box(Modifier.fillMaxSize().background(wash.copy(.52f)))
         Column(Modifier.fillMaxSize().padding(14.dp)) {
             val a = album
             Row(
@@ -1730,11 +1748,11 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
                 Cover(a?.album?.imageUrl ?: track.coverUrl, Modifier.size(46.dp), 8.dp)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(a?.album?.name ?: track.album, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(a?.album?.name ?: track.album, color = ink, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val details = listOfNotNull(a?.album?.artists ?: track.artists, a?.album?.year, a?.let { if (it.tracks.size == 1) "1 faixa" else "${it.tracks.size} faixas" })
-                    Text(details.joinToString(" · "), color = Color.White.copy(.62f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(details.joinToString(" · "), color = ink.copy(.62f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Icon(Icons.Rounded.Close, "Virar a capa", tint = Color.White.copy(.7f), modifier = Modifier.padding(horizontal = 6.dp).size(20.dp))
+                Icon(Icons.Rounded.Close, "Virar a capa", tint = ink.copy(.7f), modifier = Modifier.padding(horizontal = 6.dp).size(20.dp))
             }
             Spacer(Modifier.height(8.dp))
             when {
@@ -1747,7 +1765,7 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
                             val current = i == here
                             Row(
                                 Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                                    .background(if (current) Color.White.copy(.1f) else Color.Transparent)
+                                    .background(if (current) ink.copy(.1f) else Color.Transparent)
                                     .clickable { controls.playAlbum(a, i) }
                                     .padding(horizontal = 8.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1756,21 +1774,21 @@ private fun AlbumBack(track: TrackInfo, controls: PlayerControls, modifier: Modi
                                     if (current) {
                                         PlayingBars(accent, Modifier.size(12.dp))
                                     } else {
-                                        Text("${i + 1}", color = Color.White.copy(.5f), fontSize = 13.sp)
+                                        Text("${i + 1}", color = ink.copy(.5f), fontSize = 13.sp)
                                     }
                                 }
                                 Spacer(Modifier.width(10.dp))
                                 Text(
-                                    t.title, Modifier.weight(1f), color = if (current) accent else Color.White, fontSize = 14.sp,
+                                    t.title, Modifier.weight(1f), color = if (current) accent else ink, fontSize = 14.sp,
                                     fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text(fmt(t.durationMs.toLong()), color = Color.White.copy(.5f), fontSize = 12.sp)
+                                Text(fmt(t.durationMs.toLong()), color = ink.copy(.5f), fontSize = 12.sp)
                             }
                         }
                     }
                 }
-                failed -> Text("Não deu para carregar o álbum.", Modifier.padding(8.dp), color = Color.White.copy(.6f), fontSize = 13.sp)
+                failed -> Text("Não deu para carregar o álbum.", Modifier.padding(8.dp), color = ink.copy(.6f), fontSize = 13.sp)
                 else -> Column(Modifier.padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     repeat(6) { i -> Bone(Modifier.fillMaxWidth(.5f + (i * 37 % 40) / 100f).height(12.dp), light = true) }
                 }
@@ -1792,12 +1810,13 @@ sealed interface TranslationState {
 /** Turns the translation on and off, and says when it is coming or refused. */
 @Composable
 private fun TranslateButton(state: TranslationState, on: Boolean, onToggle: () -> Unit) {
+    val ink = artInk()
     val haptics = rememberHaptics()
     val accent = accentColor()
     val tint = when {
-        state is TranslationState.Failed -> Color.White.copy(.35f)
+        state is TranslationState.Failed -> ink.copy(.35f)
         on -> accent
-        else -> Color.White.copy(.8f)
+        else -> ink.copy(.8f)
     }
     val label = when {
         state is TranslationState.Same -> "A letra já está no teu idioma"
@@ -1817,11 +1836,12 @@ private fun TranslateButton(state: TranslationState, on: Boolean, onToggle: () -
 /** A plain skip for the full-screen lyrics, with the same push as the player's. */
 @Composable
 private fun LyricsSkip(icon: ImageVector, description: String, enabled: Boolean, dir: Int, onClick: () -> Unit) {
+    val ink = artInk()
     val haptics = rememberHaptics()
     val nudge = rememberKick(380)
     IconButton({ haptics.press(); nudge.play(); onClick() }, Modifier.alpha(if (enabled) 1f else .35f), enabled = enabled) {
         Icon(
-            icon, description, tint = Color.White,
+            icon, description, tint = ink,
             modifier = Modifier.size(28.dp).graphicsLayer { translationX = dir * 7.dp.toPx() * nudge.bump() },
         )
     }

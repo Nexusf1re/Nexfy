@@ -58,7 +58,7 @@ import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.LoadError
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.CollectionBackdrop
-import dev.nexfy.app.ui.design.headerInk
+import dev.nexfy.app.ui.design.artInk
 import dev.nexfy.app.ui.theme.isDark
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.DetailTopBar
@@ -94,7 +94,7 @@ import uniffi.nexfy_core.RemoteCommand
 fun ShowScreen(actions: AppActions, id: String, list: LazyListState, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     val dark = c.isDark
-    val ink = headerInk()
+    val ink = artInk()
     val haptics = rememberHaptics()
     val detail = rememberLoaded(id) { refresh -> actions.core.show(id, refresh) }
     val d = detail.state.value

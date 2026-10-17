@@ -340,6 +340,9 @@ fun ThinSlider(
     lit: Boolean = false,
 ) {
     val haptics = rememberHaptics()
+    // It lies over living artwork: white on the dark art, the theme's ink
+    // on the pale wash of a light theme.
+    val ink = artInk()
     val bloom by animateFloatAsState(if (lit) 1f else 0f, Motion.standard(Motion.Medium), label = "bloom")
     var dragging by remember { mutableStateOf(false) }
     // Held: the track swells, the head grows into a knob and a halo opens under it.
@@ -381,11 +384,11 @@ fun ThinSlider(
         val head = from + (to - from) * progress().coerceIn(0f, 1f)
         // Waiting: the played part fades in and out, about once a second.
         val breath = if (waiting()) .55f + .37f * (1f + sin(now() / 1000f * PI.toFloat() * 2f)) / 2f else .92f
-        drawLine(Color.White.copy(alpha = .22f), Offset(from, y), Offset(to, y), thickness, StrokeCap.Round)
+        drawLine(ink.copy(alpha = .22f), Offset(from, y), Offset(to, y), thickness, StrokeCap.Round)
         // The played part gathers light toward the head instead of lying flat.
         drawLine(
             Brush.horizontalGradient(
-                listOf(Color.White.copy(alpha = breath * .62f), Color.White.copy(alpha = breath)),
+                listOf(ink.copy(alpha = breath * .62f), ink.copy(alpha = breath)),
                 startX = from,
                 endX = head,
             ),
@@ -403,7 +406,7 @@ fun ThinSlider(
                 drawLine(
                     Brush.horizontalGradient(
                         0f to Color.Transparent,
-                        .5f to Color.White.copy(alpha = .40f * bloom),
+                        .5f to ink.copy(alpha = .40f * bloom),
                         1f to Color.Transparent,
                         startX = at - reach,
                         endX = at + reach,
@@ -416,9 +419,9 @@ fun ThinSlider(
             }
         }
         // The bloom under the head, and the wider halo while it is held.
-        if (bloom > 0f) drawCircle(Color.White.copy(alpha = .13f * bloom), knob + 9.dp.toPx(), Offset(head, y))
-        if (grab > 0f) drawCircle(Color.White.copy(alpha = .18f * grab), knob + 10.dp.toPx() * grab, Offset(head, y))
-        drawCircle(Color.White.copy(alpha = breath), knob, Offset(head, y))
+        if (bloom > 0f) drawCircle(ink.copy(alpha = .13f * bloom), knob + 9.dp.toPx(), Offset(head, y))
+        if (grab > 0f) drawCircle(ink.copy(alpha = .18f * grab), knob + 10.dp.toPx() * grab, Offset(head, y))
+        drawCircle(ink.copy(alpha = breath), knob, Offset(head, y))
     }
 }
 
@@ -732,7 +735,7 @@ fun collapseOf(list: LazyListState): State<Float> {
 /**
  * Full-screen backdrop for collections: living artwork fading into the
  * background downwards and as the list scrolls. On a light theme it is a
- * pale wash, so the header reads in [headerInk].
+ * pale wash, so the header reads in [artInk].
  */
 @Composable
 fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier = Modifier) {
@@ -750,9 +753,16 @@ fun CollectionBackdrop(art: String?, collapse: State<Float>, modifier: Modifier 
     }
 }
 
-/** Text over a [CollectionBackdrop]: white on the dark art, the theme's ink on the pale wash. */
+/** Text over living artwork: white on the dark art, the theme's ink on the pale wash. */
 @Composable
-fun headerInk(): Color = if (MaterialTheme.colorScheme.isDark) Color.White else MaterialTheme.colorScheme.onBackground
+fun artInk(): Color = if (MaterialTheme.colorScheme.isDark) Color.White else MaterialTheme.colorScheme.onBackground
+
+/**
+ * What dims living artwork so [artInk] reads over it, and what fills a
+ * button drawn in [artInk]: black on a dark theme, white on a light one.
+ */
+@Composable
+fun artWash(): Color = if (MaterialTheme.colorScheme.isDark) Color.Black else Color.White
 
 /** Detail top bar: back always visible; title and play appear once the header scrolls away. */
 @Composable

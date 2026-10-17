@@ -81,7 +81,7 @@ import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.LoadError
 import dev.nexfy.app.ui.design.Bone
 import dev.nexfy.app.ui.design.CollectionBackdrop
-import dev.nexfy.app.ui.design.headerInk
+import dev.nexfy.app.ui.design.artInk
 import dev.nexfy.app.ui.theme.LocalLook
 import dev.nexfy.app.ui.theme.isDark
 import dev.nexfy.app.ui.design.Cover
@@ -185,7 +185,7 @@ fun CollectionScreen(
     val c = MaterialTheme.colorScheme
     // Header colours over the backdrop: white on dark art, ink on the light theme's pale wash.
     val dark = c.isDark
-    val ink = headerInk()
+    val ink = artInk()
     val haptics = rememberHaptics()
     val collapse = collapseOf(list)
     val dismiss = remember { Animatable(0f) }
