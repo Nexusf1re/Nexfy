@@ -67,8 +67,14 @@ jobs:
           NEXFY_KEY_PASSWORD: ${{ secrets.NEXFY_KEY_PASSWORD }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # The code grows with the version itself (0.2.13 -> 2013, 1.0.0 -> 1000000).
+          # The run number used to stand here, and it does not only grow: a
+          # newer release came out with a smaller code, and Android refused to
+          # install it over the older one ("App not installed").
+          IFS=. read -r MAJOR MINOR PATCH <<< "${VERSION%%-*}"
+          CODE=$(( 10#$MAJOR * 1000000 + 10#$MINOR * 1000 + 10#$PATCH ))
           chmod +x gradlew
-          ./gradlew :app:assembleRelease -PversionName="$VERSION" -PversionCode="$GITHUB_RUN_NUMBER"
+          ./gradlew :app:assembleRelease -PversionName="$VERSION" -PversionCode="$CODE"
           cp app/build/outputs/apk/release/app-release.apk "nexfy-$VERSION.apk"
 
       - name: Publish release
