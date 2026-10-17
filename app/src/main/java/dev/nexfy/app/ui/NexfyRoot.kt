@@ -403,17 +403,25 @@ fun NexfyRoot(
         dev.nexfy.app.ui.player.JamState.current.value = runCatching { app.core.jamCurrent() }.getOrNull()
     }
     // Screens move through a seekable transition: navigation animates it,
-    // the back gesture drags it (the page shrinks into a card over the one
-    // underneath) and letting go finishes or cancels it.
+    // a back gesture drags it (the page slides off and uncovers the one
+    // underneath) and letting go finishes or cancels it. A back that is not
+    // dragged, a tap on the arrow or the button, keeps the card animation.
     val target = nav.screen
     val screens = remember { SeekableTransitionState(target) }
     LaunchedEffect(target) { screens.animateTo(target) }
     MetricsState("screen", target.route?.key?.substringBefore(':') ?: "tab-${target.tab.name.lowercase()}")
     MetricsState("nav", if (screens.currentState != screens.targetState) "moving" else null)
+    // Whether the page underneath is being uncovered by a finger: the drag
+    // from the edge and the drag from anywhere both say so, and both get the
+    // slide. Set before the first seek, which is what starts the transition.
+    var swiping by remember { mutableStateOf(false) }
     PredictiveBackHandler(enabled = nav.stack().isNotEmpty()) { events ->
         val parent = nav.parentScreen()
         try {
-            events.collect { screens.seekTo(it.progress, parent) }
+            events.collect {
+                swiping = true
+                screens.seekTo(it.progress, parent)
+            }
             nav.pop()
         } catch (e: CancellationException) {
             scope.launch { screens.animateTo(screens.currentState) }
@@ -425,7 +433,6 @@ fun NexfyRoot(
     // Back by dragging the page sideways from anywhere: the same seekable
     // transition, with a slide that follows the finger instead of the card.
     val swipeBackOn by app.library.swipeBack.collectAsState()
-    var swiping by remember { mutableStateOf(false) }
     var swipe by remember { mutableFloatStateOf(-1f) }
     var swipeParent by remember { mutableStateOf<Screen?>(null) }
     LaunchedEffect(Unit) {
