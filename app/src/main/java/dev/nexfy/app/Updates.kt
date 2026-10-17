@@ -94,11 +94,20 @@ class Updates(context: Context, private val scope: CoroutineScope) {
      * browser nor the system download manager was reliable: one parks the
      * download behind a folder prompt, the other left it pending.
      */
-    fun download(release: Release) {
-        val url = release.apkUrl ?: return
+    fun download(offered: Release) {
+        if (offered.apkUrl == null) return
         if (_download.value is UpdateDownload.Running) return
         _download.value = UpdateDownload.Running(null)
         scope.launch(Dispatchers.IO) {
+            // What was offered can be a day old, and installing a release older
+            // than the newest one Android already refuses as a downgrade: ask
+            // again, and take whichever is newer.
+            val latest = runCatching { check() }.getOrNull()
+            val release = latest?.takeIf { newer(it.version, offered.version) && it.apkUrl != null } ?: offered
+            val url = release.apkUrl ?: run {
+                _download.value = UpdateDownload.Failed
+                return@launch
+            }
             val dir = File(app.getExternalFilesDir(null), "updates").apply { mkdirs() }
             dir.listFiles()?.forEach { it.delete() }
             val file = File(dir, "nexfy-${release.version}.apk")
