@@ -6,9 +6,9 @@ on:
   push:
     branches: [main]
     # Text alone (notes, docs) builds nothing new.
-    paths-ignore: ["**.md", "release-notes/**"]
+    paths-ignore: ["**.md", "release-notes/**", "docs/**"]
   pull_request:
-    paths-ignore: ["**.md", "release-notes/**"]
+    paths-ignore: ["**.md", "release-notes/**", "docs/**"]
 
 concurrency:
   group: ci-${{ github.ref }}

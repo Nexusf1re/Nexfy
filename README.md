@@ -4,6 +4,30 @@ Cliente de Spotify para Android, rápido e fluido: o áudio e o Spotify Connect 
 
 > O Nexfy não tem relação com o Spotify. É preciso uma conta **Spotify Premium**.
 
+## Como é
+
+<p align="center">
+  <img src="docs/media/player.gif" width="260" alt="Abrindo o player, a letra e a letra em tela cheia">
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/media/home.png" width="230" alt="Início"><br><sub>Início</sub></td>
+    <td align="center"><img src="docs/media/player.png" width="230" alt="Player"><br><sub>Player</sub></td>
+    <td align="center"><img src="docs/media/lyrics.png" width="230" alt="Letra traduzida"><br><sub>Letra, com tradução</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/media/library.png" width="230" alt="Biblioteca"><br><sub>Biblioteca</sub></td>
+    <td align="center"><img src="docs/media/playlist.png" width="230" alt="Playlist"><br><sub>Playlist</sub></td>
+    <td align="center"><img src="docs/media/devices.png" width="230" alt="Dispositivos"><br><sub>Spotify Connect e Jam</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/media/stats.png" width="230" alt="Estatísticas">
+  <br><sub>O que você ouviu, neste celular e nos outros aparelhos da conta</sub>
+</p>
+
 ## O que faz
 
 - Toca no próprio celular e aparece como dispositivo do Spotify Connect: dá para mandar música do PC, da TV ou da caixa de som para ele.
