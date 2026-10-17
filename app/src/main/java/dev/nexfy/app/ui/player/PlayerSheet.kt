@@ -407,6 +407,23 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 haptics.tick()
             }
         }
+        // Starting and ending a vertical drag on the player: the cover has a
+        // vertical gesture of its own and hands the ones it does not want here.
+        fun startSheetDrag() {
+            dragFrom[0] = f.value
+            committed[0] = false
+            haptics.tick()
+        }
+        // A short pull is enough either way; a flick wins over distance.
+        suspend fun settleSheet(v: Float) {
+            val target = when {
+                v < -Motion.FlingVelocity -> 1f
+                v > Motion.FlingVelocity -> 0f
+                commits(f.value) -> if (dragFrom[0] > .5f) 0f else 1f
+                else -> if (dragFrom[0] > .5f) 1f else 0f
+            }
+            f.animateTo(target, settle, initialVelocity = -v / (fullH - miniH))
+        }
         // Mini: a compact card with equal side margins, just above the dock and the gesture bar.
         val navBottom = WindowInsets.navigationBars.getBottom(density).toFloat()
         val dockH = with(density) { 82.dp.toPx() }
@@ -431,21 +448,8 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 .draggable(
                     dragState,
                     Orientation.Vertical,
-                    onDragStarted = {
-                        dragFrom[0] = f.value
-                        committed[0] = false
-                        haptics.tick()
-                    },
-                    onDragStopped = { v ->
-                        // A short pull is enough either way; a flick wins over distance.
-                        val target = when {
-                            v < -Motion.FlingVelocity -> 1f
-                            v > Motion.FlingVelocity -> 0f
-                            commits(f.value) -> if (dragFrom[0] > .5f) 0f else 1f
-                            else -> if (dragFrom[0] > .5f) 1f else 0f
-                        }
-                        f.animateTo(target, settle, initialVelocity = -v / (fullH - miniH))
-                    },
+                    onDragStarted = { startSheetDrag() },
+                    onDragStopped = { v -> settleSheet(v) },
                 ),
         ) {
             // Glass mini player: blurs what is behind it, only in the mini band.
@@ -495,9 +499,15 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val thrown = remember { booleanArrayOf(false) }
             var tapHint by remember { mutableStateOf<Pair<Long, Int>?>(null) }
 
+            // Halfway in, at the finger: on screen already, though letting go
+            // now would take them away again.
+            var lyricsPeek by remember { mutableStateOf(false) }
+            // On screen, whether they are in or still coming.
+            val lyricsShown = showLyrics || lyricsPeek
+
             var lyrics by remember(track.uri) { mutableStateOf<LyricsState>(LyricsState.Loading) }
-            LaunchedEffect(track.uri, showLyrics) {
-                if (!showLyrics || lyrics != LyricsState.Loading) return@LaunchedEffect
+            LaunchedEffect(track.uri, lyricsShown) {
+                if (!lyricsShown || lyrics != LyricsState.Loading) return@LaunchedEffect
                 lyrics = try {
                     controls.lyrics(track)?.let { LyricsState.Found(it) } ?: LyricsState.None
                 } catch (e: CancellationException) {
@@ -529,7 +539,22 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val meaning = (translation as? TranslationState.Done)?.lines.takeIf { translating }
 
             // 0 to 1 as lyrics come in: the cover blurs and darkens behind them.
-            val lyricsIn = animateFloatAsState(if (showLyrics && settled) 1f else 0f, Motion.settle(169f), label = "lyrics")
+            // Animated here rather than read from [showLyrics]: a pull up the
+            // cover brings them in with the finger, and only letting go settles it.
+            val lyricsIn = remember { Animatable(0f) }
+            // Set while the finger has them: the toggle's animation keeps away
+            // until the gesture has put the value where it belongs.
+            val lyricsDrag = remember { booleanArrayOf(false) }
+            // 0 undecided, 1 the lyrics, 2 the player: what a vertical drag on
+            // the cover turned out to be, decided by the first move.
+            val lift = remember { intArrayOf(0) }
+            LaunchedEffect(showLyrics, settled) {
+                if (lyricsDrag[0]) return@LaunchedEffect
+                lyricsIn.animateTo(if (showLyrics && settled) 1f else 0f, Motion.settle(169f))
+                // A drag of theirs that ended in something else (the player
+                // closing) leaves them on screen at nothing: take them off.
+                if (!showLyrics) lyricsPeek = false
+            }
             // 0 to 1 into full-screen lyrics.
             val fullIn = animateFloatAsState(if (showLyrics && lyricsFull && settled) 1f else 0f, Motion.settle(169f), label = "full")
             // 0 to 180 degrees as the cover turns over; past 90 the back shows.
@@ -631,6 +656,61 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                             }
                         },
                     )
+                    // Pulled up, the cover hands the song over to its lyrics,
+                    // which come in with the finger; pulled down, they go back.
+                    // With no lyrics in, a pull down is what it has always been:
+                    // the player collapsing, so that drag goes on to the sheet.
+                    .draggable(
+                        rememberDraggableState { d ->
+                            if (lift[0] == 0 && d != 0f) {
+                                lift[0] = if (settled && (if (showLyrics) d > 0f else d < 0f)) 1 else 2
+                                if (lift[0] == 1) {
+                                    lyricsDrag[0] = true
+                                    lyricsPeek = true
+                                }
+                            }
+                            if (lift[0] == 1) {
+                                scope.snapNow(lyricsIn, (lyricsIn.value - d / artFullPx).coerceIn(0f, 1f))
+                            } else {
+                                dragState.dispatchRawDelta(d)
+                            }
+                        },
+                        Orientation.Vertical,
+                        // Not tied to the player being open: a drag that collapses
+                        // it would be cancelled halfway, and let go of midway.
+                        enabled = !flipped && !lyricsFull,
+                        onDragStarted = {
+                            lift[0] = 0
+                            startSheetDrag()
+                        },
+                        // In the screen's own scope: whatever the drag decided
+                        // still lands even if this gesture's own scope ends with it.
+                        onDragStopped = { v ->
+                            scope.launch {
+                                if (lift[0] != 1) {
+                                    settleSheet(v)
+                                    return@launch
+                                }
+                                // A third of the cover, or a flick, is enough either way.
+                                val open = when {
+                                    v < -Motion.FlingVelocity / 2 -> true
+                                    v > Motion.FlingVelocity / 2 -> false
+                                    else -> lyricsIn.value > .35f
+                                }
+                                if (open != showLyrics) {
+                                    haptics.press()
+                                    showLyrics = open
+                                    library.lyricsOpen = open
+                                    if (open) flipped = false else lyricsFull = false
+                                }
+                                // Cleared before settling: the effect above may
+                                // animate the same landing, never a stale one.
+                                lyricsDrag[0] = false
+                                lyricsIn.animateTo(if (open) 1f else 0f, Motion.settle(169f), initialVelocity = -v / artFullPx)
+                                lyricsPeek = false
+                            }
+                        },
+                    )
                     .background(c.outline),
                 contentAlignment = Alignment.Center,
             ) {
@@ -645,7 +725,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     AnimatedContent(
                         track.coverUrl,
                         Modifier.fillMaxSize().graphicsLayer {
-                            val r = lyricsIn.value * 70f
+                            val r = lyricsIn.value * 38f
                             renderEffect = if (r > .5f && Build.VERSION.SDK_INT >= 31) BlurEffect(r, r, TileMode.Clamp) else null
                         },
                         // A thrown cover comes back already showing the new art; other changes cross-fade.
@@ -665,7 +745,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     Icon(Icons.Rounded.MusicNote, null, tint = c.onSurfaceVariant, modifier = Modifier.fillMaxSize(.4f))
                 }
                 // Darkens the blurred cover so the lyrics read on any art.
-                Box(Modifier.fillMaxSize().graphicsLayer { alpha = lyricsIn.value }.background(Color.Black.copy(.58f)))
+                Box(Modifier.fillMaxSize().graphicsLayer { alpha = lyricsIn.value }.background(Color.Black.copy(.46f)))
                 tapHint?.let { (id, dir) -> SeekRipple(id, dir) }
             }
 
@@ -736,7 +816,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     }
                     // Lyrics sit inside the cover's square, over the blurred art.
                     Box(Modifier.fillMaxWidth().height(artSpace), contentAlignment = Alignment.Center) {
-                        if (showLyrics) {
+                        if (lyricsShown) {
                             Box(Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value * (1f - fullIn.value) }) {
                                 // Hidden under full-screen lyrics: its sweep holds still.
                                 LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), playback = s.takeUnless { lyricsFull }, translated = meaning)
@@ -1402,7 +1482,7 @@ private fun LyricsView(
                     }
                     val d by animateFloatAsState(target, Motion.settle(169f), label = "distance")
                     val focus = (1f - d).coerceIn(0f, 1f)
-                    val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.8f).dp else 0.dp
+                    val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.1f).dp else 0.dp
                     val sweep = if (i == current) remember(line) { wordSweep(line, lines.getOrNull(i + 1)?.atMs?.toLong()) } else null
                     val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
                     // The line and its translation fade, blur and scale as one.
