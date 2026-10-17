@@ -591,13 +591,16 @@ fun TrackRow(
                             }
                         },
                         Orientation.Horizontal,
+                        // Settled in the row's own scope, not the drag's: a swipe
+                        // that ends as the list changes still brings the row back,
+                        // instead of leaving it parked to one side.
                         onDragStopped = {
                             if (armed) {
                                 haptics.press()
                                 onSwipe()
                             }
                             armed = false
-                            offset.animateTo(0f, Motion.settle(320f))
+                            scope.launch { offset.animateTo(0f, Motion.settle(320f)) }
                         },
                     )
                 },
