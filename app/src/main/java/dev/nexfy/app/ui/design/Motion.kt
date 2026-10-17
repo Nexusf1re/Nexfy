@@ -96,6 +96,9 @@ object Motion {
     /** A short, bouncy "no" (a cover thrown with nothing after it). */
     fun <T> refuse() = if (reduced) settle<T>(700f) else spring(dampingRatio = .3f, stiffness = 700f)
 
+    /** Something a gesture brings in (the lyrics): lands with a little give. */
+    fun <T> reveal() = if (reduced) settle<T>(400f) else spring(dampingRatio = .78f, stiffness = 200f)
+
     /** The player's cover turning over: a slow spring with a little sway. */
     fun <T> turn() = if (reduced) settle<T>() else spring(dampingRatio = .74f, stiffness = 150f)
 

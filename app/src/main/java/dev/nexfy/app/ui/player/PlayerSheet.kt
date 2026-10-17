@@ -155,7 +155,6 @@ import dev.nexfy.app.ui.design.boneWidth
 import dev.nexfy.app.ui.design.LivingArtwork
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.ThinSlider
-import dev.nexfy.app.ui.design.kenBurns
 import dev.nexfy.app.ui.design.snapNow
 import dev.nexfy.app.ui.design.liquidGlass
 import androidx.compose.runtime.CompositionLocalProvider
@@ -550,7 +549,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
             val lift = remember { intArrayOf(0) }
             LaunchedEffect(showLyrics, settled) {
                 if (lyricsDrag[0]) return@LaunchedEffect
-                lyricsIn.animateTo(if (showLyrics && settled) 1f else 0f, Motion.settle(169f))
+                lyricsIn.animateTo(if (showLyrics && settled) 1f else 0f, Motion.reveal())
                 // A drag of theirs that ended in something else (the player
                 // closing) leaves them on screen at nothing: take them off.
                 if (!showLyrics) lyricsPeek = false
@@ -706,7 +705,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                                 // Cleared before settling: the effect above may
                                 // animate the same landing, never a stale one.
                                 lyricsDrag[0] = false
-                                lyricsIn.animateTo(if (open) 1f else 0f, Motion.settle(169f), initialVelocity = -v / artFullPx)
+                                lyricsIn.animateTo(if (open) 1f else 0f, Motion.reveal(), initialVelocity = -v / artFullPx)
                                 lyricsPeek = false
                             }
                         },
@@ -725,7 +724,10 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     AnimatedContent(
                         track.coverUrl,
                         Modifier.fillMaxSize().graphicsLayer {
-                            val r = lyricsIn.value * 38f
+                            // The blur leads and the veil follows: the art goes
+                            // soft before it goes dark, so the two read as depth
+                            // rather than as one curtain coming down.
+                            val r = lyricsIn.value.coerceIn(0f, 1f).pow(.7f) * 38f
                             renderEffect = if (r > .5f && Build.VERSION.SDK_INT >= 31) BlurEffect(r, r, TileMode.Clamp) else null
                         },
                         // A thrown cover comes back already showing the new art; other changes cross-fade.
@@ -739,13 +741,35 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         },
                         label = "cover",
                     ) { url ->
-                        AsyncImage(url, null, Modifier.fillMaxSize().kenBurns(s.playing && settled && !showLyrics), contentScale = ContentScale.Crop)
+                        // No slow drift on the player's cover: it turned on and
+                        // off with no way back, so the art jumped as the lyrics
+                        // came in and again as they left.
+                        AsyncImage(url, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                     }
                 } else {
                     Icon(Icons.Rounded.MusicNote, null, tint = c.onSurfaceVariant, modifier = Modifier.fillMaxSize(.4f))
                 }
                 // Darkens the blurred cover so the lyrics read on any art.
-                Box(Modifier.fillMaxSize().graphicsLayer { alpha = lyricsIn.value }.background(Color.Black.copy(.46f)))
+                // The dark falls down the cover like a curtain, ahead of the
+                // words rising to meet it, instead of the whole square dimming
+                // at once. It reads on bright art and on dark art alike, which
+                // a light sweep over the lyrics did not.
+                Box(
+                    Modifier.fillMaxSize().drawBehind {
+                        val p = lyricsIn.value.coerceIn(0f, 1f)
+                        if (p <= 0f) return@drawBehind
+                        val veil = Color.Black.copy(alpha = .46f * (.35f + .65f * p))
+                        val edge = (p * 1.6f).coerceIn(.001f, 1f)
+                        val solid = (edge - .55f).coerceIn(0f, edge - .001f)
+                        drawRect(
+                            if (edge >= 1f) {
+                                Brush.verticalGradient(0f to veil, solid to veil, 1f to veil)
+                            } else {
+                                Brush.verticalGradient(0f to veil, solid to veil, edge to Color.Transparent, 1f to Color.Transparent)
+                            },
+                        )
+                    },
+                )
                 tapHint?.let { (id, dir) -> SeekRipple(id, dir) }
             }
 
@@ -817,9 +841,39 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                     // Lyrics sit inside the cover's square, over the blurred art.
                     Box(Modifier.fillMaxWidth().height(artSpace), contentAlignment = Alignment.Center) {
                         if (lyricsShown) {
-                            Box(Modifier.size(artFull).graphicsLayer { alpha = lyricsIn.value * (1f - fullIn.value) }) {
+                            Box(
+                                Modifier.size(artFull)
+                                    .graphicsLayer {
+                                        // They rise into place, grow the last of the
+                                        // way, and come into focus as they land: the
+                                        // words resolve out of the blur the cover is
+                                        // sinking into, instead of fading in sharp.
+                                        val p = lyricsIn.value.coerceIn(0f, 1f)
+                                        // A step behind the cover going soft: the
+                                        // ground is already quiet when the words
+                                        // land on it, never both at once in a blur.
+                                        val w = ((p - .12f) / .88f).coerceIn(0f, 1f)
+                                        alpha = (w * 1.35f).coerceAtMost(1f) * (1f - fullIn.value)
+                                        translationY = (1f - w) * artFullPx * .07f
+                                        // Barely a growth: enough to feel it settle,
+                                        // not enough to read as the cover zooming.
+                                        val sc = .975f + .025f * lyricsIn.value
+                                        scaleX = sc
+                                        scaleY = sc
+                                        val soft = (1f - w) * 7f
+                                        renderEffect =
+                                            if (soft > .5f && Build.VERSION.SDK_INT >= 31) BlurEffect(soft, soft, TileMode.Decal) else null
+                                    },
+                            ) {
                                 // Hidden under full-screen lyrics: its sweep holds still.
-                                LyricsView(lyrics, position, controls, Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp), playback = s.takeUnless { lyricsFull }, translated = meaning)
+                                LyricsView(
+                                    lyrics, position, controls,
+                                    Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 14.dp),
+                                    playback = s.takeUnless { lyricsFull }, translated = meaning,
+                                    // The lines land one after the other, out from the
+                                    // one playing, as the lyrics come in.
+                                    enter = { lyricsIn.value },
+                                )
                                 Row(Modifier.align(Alignment.TopEnd)) {
                                     TranslateButton(translation, translating) { translating = !translating }
                                     IconButton({ lyricsFull = true }) {
@@ -1401,6 +1455,11 @@ private fun LyricsView(
     playback: PlaybackSnapshot? = null,
     /** The same lines in another language, under each; null while off. */
     translated: List<String>? = null,
+    /**
+     * How far in the lyrics are (0 to 1), read while drawing: the lines
+     * arrive out from the one playing. Null for lyrics that are simply there.
+     */
+    enter: (() -> Float)? = null,
 ) {
     if (state == LyricsState.Loading) {
         // Lines the size of the real ones, so the lyrics fade in where they will sit.
@@ -1482,17 +1541,26 @@ private fun LyricsView(
                     }
                     val d by animateFloatAsState(target, Motion.settle(169f), label = "distance")
                     val focus = (1f - d).coerceIn(0f, 1f)
-                    val blur = if (Build.VERSION.SDK_INT >= 31 && d > .05f) (d * 1.1f).dp else 0.dp
+                    // Only the far lines soften: next to the one playing, the
+                    // words stay sharp and the fading alone sets them back.
+                    val blur = if (Build.VERSION.SDK_INT >= 31 && d > 1.2f) ((d - 1.2f) * .9f).dp else 0.dp
                     val sweep = if (i == current) remember(line) { wordSweep(line, lines.getOrNull(i + 1)?.atMs?.toLong()) } else null
                     val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
                     // The line and its translation fade, blur and scale as one.
                     Column(
                         Modifier.fillMaxWidth()
                             .graphicsLayer {
-                                val sc = .88f + .12f * focus
+                                // While they come in, each line waits on the one
+                                // nearer the song, then eases the last of the way
+                                // up: the lyric arrives as a wave out from the
+                                // words being sung, not as a block.
+                                val wave = enter?.let { (((it() - d * .08f)) * 2.2f).coerceIn(0f, 1f) } ?: 1f
+                                val k = 1f - (1f - wave).pow(3)
+                                val sc = (.88f + .12f * focus) * (.96f + .04f * k)
                                 scaleX = sc
                                 scaleY = sc
-                                alpha = (1f - .2f * d).coerceIn(.3f, 1f) * (.55f + .45f * focus)
+                                alpha = (1f - .2f * d).coerceIn(.3f, 1f) * (.55f + .45f * focus) * k
+                                translationY = (1f - k) * 30.dp.toPx()
                                 transformOrigin = TransformOrigin(0f, .5f)
                             }
                             .then(if (blur > 0.dp) Modifier.blur(blur, BlurredEdgeTreatment.Unbounded) else Modifier)
