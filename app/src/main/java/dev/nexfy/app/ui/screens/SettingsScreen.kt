@@ -2,6 +2,8 @@ package dev.nexfy.app.ui.screens
 
 import dev.nexfy.app.ui.design.awaitShown
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -368,8 +371,18 @@ private fun AboutSection(actions: AppActions) {
             }
         }, filled = false)
         answer?.let { Text(it, color = c.onSurfaceVariant, fontSize = 13.sp) }
+        PillButton("Ver as versões no GitHub", {
+            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_URL))) }
+        }, icon = Icons.AutoMirrored.Rounded.OpenInNew, filled = false)
+        Text(
+            "Todas as versões, com o que mudou em cada uma e o APK para baixar à mão.",
+            color = c.onSurfaceVariant, fontSize = 13.sp,
+        )
     }
 }
+
+/** The releases page: what each version changed, and its APK. */
+private const val RELEASES_URL = "https://github.com/Nexusf1re/Nexfy/releases"
 
 @Composable
 internal fun Section(title: String, description: String, content: @Composable () -> Unit) {
@@ -521,7 +534,10 @@ private fun TranslatorEmail(library: dev.nexfy.app.LibraryPrefs) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Tradução da letra", fontSize = 14.sp)
         Text(
-            "Sem email dá umas 3 letras por dia. Com um email, umas 30.",
+            "A tradução vem do MyMemory, que é gratuito e dá uma cota de caracteres por dia " +
+                "a cada pessoa: sem email, umas 3 letras por dia; com um email, umas 30. " +
+                "Ele vai só junto do pedido de tradução, não cria conta nem senha, e fica " +
+                "guardado neste aparelho. Cada música é traduzida uma vez e guardada.",
             color = c.onSurfaceVariant, fontSize = 13.sp,
         )
         OutlinedTextField(
