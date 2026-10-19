@@ -6,7 +6,6 @@
 //! session's own token is not used: its client is shared by every librespot
 //! user and the Web API rate limits it almost constantly.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Result};
@@ -83,8 +82,8 @@ impl RawDevice {
         let id = self.id?;
         Some(Device {
             is_self: id == own_id,
-            name: device_name(&id, &self.name, &self.kind),
             id,
+            name: self.name,
             kind: self.kind,
             active: self.is_active,
             volume: self.volume_percent,
@@ -275,51 +274,6 @@ fn kind_name(kind: librespot_protocol::devices::DeviceType) -> String {
     format!("{kind:?}").replace('_', "").to_lowercase()
 }
 
-/// A name Spotify gave a device, by its id. The cluster sometimes names a
-/// device after its own id, hours into a session: the last real name it
-/// reported is better than that.
-static NAMES: std::sync::Mutex<Option<HashMap<String, String>>> = std::sync::Mutex::new(None);
-
-/// Whether `name` is an id dressed as a name: the device's own id, or
-/// anything carrying a UUID ("dd603a64-42c1-478e-8a04-81d3b1721bc5_amzn_1").
-fn is_id(name: &str, id: &str) -> bool {
-    if name == id {
-        return true;
-    }
-    name.split(|c: char| !c.is_ascii_hexdigit() && c != '-').any(|token| {
-        let parts: Vec<&str> = token.split('-').collect();
-        parts.len() == 5 && [8, 4, 4, 4, 12] == std::array::from_fn(|i| parts[i].len())
-    })
-}
-
-/// What to call a device: its name while that is a name, else the last one
-/// it reported, else what kind of thing it is.
-fn device_name(id: &str, name: &str, kind: &str) -> String {
-    let mut known = NAMES.lock().unwrap();
-    let known = known.get_or_insert_with(HashMap::new);
-    if !name.trim().is_empty() && !is_id(name, id) {
-        known.insert(id.to_owned(), name.to_owned());
-        return name.to_owned();
-    }
-    known.get(id).cloned().unwrap_or_else(|| kind_label(&kind.to_lowercase()).to_owned())
-}
-
-/// The kinds the app shows, in its own words. The screens say the same;
-/// this is for a device whose name never came.
-fn kind_label(kind: &str) -> &'static str {
-    match kind {
-        "computer" => "Computador",
-        "smartphone" => "Celular",
-        "tablet" => "Tablet",
-        "tv" | "stb" | "castvideo" => "TV",
-        "speaker" | "avr" | "audiodongle" | "castaudio" => "Caixa de som",
-        "automobile" => "Carro",
-        "gameconsole" => "Console",
-        "smartwatch" => "Relógio",
-        _ => "Dispositivo",
-    }
-}
-
 fn cluster_devices(own: &str, cluster: &librespot_protocol::connect::Cluster) -> Vec<Device> {
     // Earlier sessions of this phone linger under its name until Spotify
     // drops them: only the current one is this phone.
@@ -332,8 +286,8 @@ fn cluster_devices(own: &str, cluster: &librespot_protocol::connect::Cluster) ->
             id.as_str() == own || **id == cluster.active_device_id || Some(info.name.as_str()) != own_name
         })
         .map(|(id, info)| Device {
-            name: device_name(id, &info.name, &kind_name(info.device_type.enum_value_or_default())),
             id: id.clone(),
+            name: info.name.clone(),
             kind: kind_name(info.device_type.enum_value_or_default()),
             active: *id == cluster.active_device_id,
             is_self: id == own,
@@ -543,27 +497,4 @@ pub fn session_neighbours() -> Option<(Option<String>, Option<String>)> {
     let previous = player.prev_tracks.iter().map(|t| &t.uri).filter(song).last().cloned();
     let next = player.next_tracks.iter().map(|t| &t.uri).find(song).cloned();
     Some((previous, next))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_id_is_not_a_name() {
-        assert!(is_id("dd603a64-42c1-478e-8a04-81d3b1721bc5_amzn_1", "other"));
-        assert!(is_id("abc123", "abc123"));
-        assert!(!is_id("Echo Show 5", "dd603a64-42c1-478e-8a04-81d3b1721bc5_amzn_1"));
-        assert!(!is_id("MacBook-Pro", "x"));
-    }
-
-    #[test]
-    fn a_device_keeps_the_last_name_it_had() {
-        let id = "a-device-for-this-test";
-        assert_eq!(device_name(id, "Echo Show 5", "speaker"), "Echo Show 5");
-        // The cluster starts naming it after its id: the name it gave stands.
-        assert_eq!(device_name(id, "dd603a64-42c1-478e-8a04-81d3b1721bc5_amzn_1", "speaker"), "Echo Show 5");
-        // One never named reads as what it is.
-        assert_eq!(device_name("another-device", "", "Speaker"), "Caixa de som");
-    }
 }
