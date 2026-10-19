@@ -113,7 +113,7 @@ struct RawContext {
 
 fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(reqwest::Client::new)
+    CLIENT.get_or_init(|| webapi::http_client(std::time::Duration::from_secs(10)))
 }
 
 /// Send a player request; `Ok(None)` for an empty answer (204). Tries the
@@ -133,7 +133,7 @@ async fn send(
             // Spotify answers 411 to bodiless PUTs and POSTs without a length.
             None => request.header(reqwest::header::CONTENT_LENGTH, "0"),
         };
-        let response = request.send().await?;
+        let response = request.send().await.map_err(webapi::net_error)?;
         let status = response.status().as_u16();
         if (200..300).contains(&status) {
             if status == 204 {

@@ -212,7 +212,12 @@ pub async fn refresh(client_id: &str, refresh_token: &str) -> Result<TokenRespon
 }
 
 async fn token_request(form: &[(&str, &str)]) -> Result<TokenResponse> {
-    let response = reqwest::Client::new().post(TOKEN_URL).form(form).send().await?;
+    let response = crate::webapi::http_client(Duration::from_secs(15))
+        .post(TOKEN_URL)
+        .form(form)
+        .send()
+        .await
+        .map_err(crate::webapi::net_error)?;
     let status = response.status();
     if !status.is_success() {
         let detail = response.text().await.unwrap_or_default();

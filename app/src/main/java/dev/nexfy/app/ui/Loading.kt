@@ -8,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.nexfy.app.Connectivity
 import dev.nexfy.app.ui.design.PillButton
 
 /** A value loaded from the core, with its error and loading flags. */
@@ -31,7 +33,8 @@ private val lastValues = java.util.concurrent.ConcurrentHashMap<String, Any>()
  * Run [load] when [keys] change. The first load may come from the core's
  * cache; [LoadHandle.refresh] reloads from the network. A screen shown
  * again starts from the last value while it reloads. A change of [reloadOn]
- * loads again too, keeping the value shown meanwhile.
+ * loads again too, keeping the value shown meanwhile. One that failed
+ * without a network loads again by itself when the network returns.
  */
 @Suppress("UNCHECKED_CAST")
 @Composable
@@ -44,11 +47,19 @@ fun <T> rememberLoaded(vararg keys: Any?, reloadOn: Any? = null, load: suspend (
         state = try {
             Loaded(load(refreshes > 0).also { value -> value?.let { lastValues[memoryKey] = it } }, null, false)
         } catch (e: Exception) {
-            state.copy(error = e.message ?: e.toString(), loading = false)
+            val message = e.message ?: e.toString()
+            val offline = !Connectivity.online.value || message.contains("sem conexão")
+            state.copy(error = if (offline) OFFLINE else message, loading = false)
         }
+    }
+    val online by Connectivity.online.collectAsState()
+    LaunchedEffect(online) {
+        if (online && state.error != null) refreshes++
     }
     return LoadHandle(state) { refreshes++ }
 }
+
+private const val OFFLINE = "Sem conexão. Carrega sozinho quando a internet voltar."
 
 /** Why a load failed, with a retry button. */
 @Composable

@@ -43,6 +43,11 @@ import kotlinx.coroutines.flow.stateIn
 import uniffi.nexfy_core.NexfyCore
 
 /** Owns the single Rust core, shared by the UI and the playback service. */
+/** Whether the phone reaches the internet now: kept by [NexfyApp], read by the screens. */
+object Connectivity {
+    val online = MutableStateFlow(true)
+}
+
 class NexfyApp : Application(), SingletonImageLoader.Factory {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -76,6 +81,20 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     override fun onCreate() {
         super.onCreate()
         bridge.listening.onListen = playLog::record
+        // The network back, or a different one: the session comes back at once
+        // and what the account plays is read again, not at the next tap.
+        scope.launch {
+            var last = network.value
+            Connectivity.online.value = last != null
+            network.collect { now ->
+                Connectivity.online.value = now != null
+                if (now != null && now != last) {
+                    runCatching { core.networkBack() }.onFailure { Log.d("Nexfy", "network back: ${it.message}") }
+                    refreshRemote()
+                }
+                last = now
+            }
+        }
         // Plays on the account's other devices join the log each time the app opens:
         // Spotify keeps only the last 50. A moment first, for the sign-in to come back.
         scope.launch {
@@ -201,6 +220,40 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
         }
     }
 
+    /**
+     * The network the phone uses while it reaches the internet, null without
+     * one: a Wi-Fi with no internet behind it counts as none. Another value
+     * is another network (Wi-Fi to mobile data).
+     */
+    private val network: StateFlow<Network?> by lazy {
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        fun usable(network: Network?, caps: NetworkCapabilities?) = network?.takeIf {
+            caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+        val now = connectivity.activeNetwork.let { usable(it, connectivity.getNetworkCapabilities(it)) }
+        callbackFlow {
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                var current: Network? = null
+
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    current = network
+                    trySend(usable(network, caps))
+                }
+
+                // Only the one in use: the old Wi-Fi can be reported lost
+                // after mobile data has already taken over.
+                override fun onLost(network: Network) {
+                    if (network != current) return
+                    current = null
+                    trySend(null)
+                }
+            }
+            connectivity.registerDefaultNetworkCallback(callback)
+            awaitClose { connectivity.unregisterNetworkCallback(callback) }
+        }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, now)
+    }
+
     /** Whether the network is unmetered (Wi-Fi), where songs are downloaded ahead. */
     val unmetered: StateFlow<Boolean> by lazy {
         val connectivity = getSystemService(ConnectivityManager::class.java)
@@ -241,9 +294,13 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     /** Whether a screen of the app is showing; remote playback is only polled then. */
     val visible = MutableStateFlow(false)
 
-    /** Read what the account is playing now and mirror it. */
+    /**
+     * Read what the account is playing now and mirror it. Not without a
+     * network: each try would start a reconnect bound to fail, every few
+     * seconds; the network coming back reads it at once.
+     */
     suspend fun refreshRemote() {
-        if (!core.isConnected()) return
+        if (!core.isConnected() || !Connectivity.online.value) return
         runCatching { core.remoteState() }
             .onSuccess { bridge.setRemote(it) }
             .onFailure { Log.d("Nexfy", "remote state: ${it.message}") }

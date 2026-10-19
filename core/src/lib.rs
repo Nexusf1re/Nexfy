@@ -235,6 +235,8 @@ struct Inner {
     /// drops would each start a session and a Spirc, and the player would
     /// follow only one of them.
     reconnecting: tokio::sync::Mutex<()>,
+    /// A dropped session is being brought back in the background.
+    healing: AtomicBool,
     queue: Mutex<QueueState>,
     /// Metadata for queue entries, fetched once per track.
     track_cache: Mutex<HashMap<String, Track>>,
@@ -279,6 +281,7 @@ impl NexfyCore {
                 queue: Mutex::new(QueueState::default()),
                 track_cache: Mutex::new(tracks),
                 reconnecting: tokio::sync::Mutex::new(()),
+                healing: AtomicBool::new(false),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
                 loaded: AtomicBool::new(false),
@@ -1047,6 +1050,20 @@ impl NexfyCore {
         self.inner.connected.lock().unwrap().is_some()
     }
 
+    /// The phone has a network again, or a different one: bring the session
+    /// back now rather than at the next tap, so what was playing goes on and
+    /// the screens load. Started without a network, this is the sign-in.
+    pub async fn network_back(&self) {
+        let result = if self.is_connected() {
+            self.inner.ensure_session().await
+        } else {
+            self.restore_session().await.map(|_| ())
+        };
+        if let Err(error) = result {
+            log::info!("network back, session not yet: {error}");
+        }
+    }
+
     /// The signed-in account's username (for its liked-songs context URI).
     pub fn username(&self) -> Option<String> {
         self.inner.with_session(|s| s.username())
@@ -1703,6 +1720,41 @@ impl Inner {
         Ok(())
     }
 
+    /// Reconnect a session that dropped with a song in the player, and put
+    /// the song back where it was, paused if it was paused. Retries with
+    /// growing pauses while the network is away; [NexfyCore::network_back]
+    /// tries at once when it returns.
+    fn heal(this: Weak<Self>) {
+        match this.upgrade() {
+            Some(inner) if !inner.healing.swap(true, Ordering::AcqRel) => {}
+            _ => return,
+        }
+        tokio::spawn(async move {
+            for wait in [1u64, 2, 4, 8, 15, 30, 30, 60, 60, 120] {
+                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                let Some(inner) = this.upgrade() else { return };
+                // Gone already (network_back, a tap), or a disconnect asked
+                // for: a transfer to another device leaves no song behind.
+                let dropped = inner.connected.lock().unwrap().as_ref().is_some_and(|connected| {
+                    connected.session.is_invalid() && connected.spirc.disconnected_playback().is_some()
+                });
+                if !dropped {
+                    break;
+                }
+                match inner.ensure_session().await {
+                    Ok(()) => {
+                        log::info!("session back after a drop");
+                        break;
+                    }
+                    Err(error) => log::info!("session still down: {error}"),
+                }
+            }
+            if let Some(inner) = this.upgrade() {
+                inner.healing.store(false, Ordering::Release);
+            }
+        });
+    }
+
     /// Whether the session is up; an error when there is none at all.
     fn session_alive(&self) -> Result<bool, CoreError> {
         let connected = self.connected.lock().unwrap();
@@ -1878,6 +1930,9 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                     RepeatMode::Off
                 }
             }),
+            // A session that drops with a song in the player comes back on its
+            // own; one that drops idle waits for its next use, as before.
+            PlayerEvent::SessionDisconnected { .. } => Inner::heal(Arc::downgrade(&inner)),
             _ => {}
         }
     }

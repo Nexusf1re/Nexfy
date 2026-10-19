@@ -29,6 +29,27 @@ const API: &str = "https://api.spotify.com/v1";
 const MAX_ITEMS: usize = 2000;
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(5);
 
+/// An HTTP client that gives up. Without limits a request made as the
+/// network goes away waits for the system's own timeout, minutes, and the
+/// screen waiting on it never falls back to the copy it has kept.
+pub fn http_client(timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(timeout)
+        .build()
+        .unwrap_or_default()
+}
+
+/// A request that got no answer, in words: no network, or one too slow to
+/// use. Anything else keeps reqwest's own description.
+pub fn net_error(error: reqwest::Error) -> anyhow::Error {
+    if error.is_connect() || error.is_timeout() {
+        anyhow!("sem conexão com a internet")
+    } else {
+        error.into()
+    }
+}
+
 /// A list Spotify cut short (a page refused, often the daily quota): what
 /// came, for when a complete read elsewhere fails too.
 #[derive(Debug)]
@@ -615,7 +636,7 @@ impl WebApi {
         shared.stored.client_id = auth::SHARED_WEB_CLIENT_ID.to_owned();
         let personal = load("personal.json");
         Self {
-            http: reqwest::Client::new(),
+            http: http_client(Duration::from_secs(20)),
             revalidating: Default::default(),
             shared: Mutex::new(shared),
             personal: Mutex::new(personal),
@@ -769,7 +790,7 @@ impl WebApi {
         let mut waited = false;
         loop {
             let token = self.token(app, false).await?;
-            let response = self.http.get(&url).bearer_auth(&token).send().await?;
+            let response = self.http.get(&url).bearer_auth(&token).send().await.map_err(net_error)?;
             match response.status().as_u16() {
                 200..=299 => return Ok(response.json().await?),
                 401 if !refreshed => {
@@ -1259,7 +1280,7 @@ impl WebApi {
                     // Spotify answers 411 to a bodiless write without it.
                     None => request.header(reqwest::header::CONTENT_LENGTH, 0),
                 };
-                let response = request.send().await?;
+                let response = request.send().await.map_err(net_error)?;
                 let status = response.status().as_u16();
                 if status == 401 && !refreshed {
                     refreshed = true;
