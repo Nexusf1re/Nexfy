@@ -2,7 +2,7 @@
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::{
     cmp::Reverse,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -37,6 +37,9 @@ struct SizeLimiter {
     sizes: HashMap<PathBuf, u64>,
     size_limit: u64,
     in_use: u64,
+    /// Files kept whatever their age: counted in `in_use`, never in `queue`,
+    /// so pruning passes them by. Listed before they exist, too.
+    pinned: HashSet<PathBuf>,
 }
 
 impl SizeLimiter {
@@ -47,6 +50,7 @@ impl SizeLimiter {
             sizes: HashMap::new(),
             size_limit: limit,
             in_use: 0,
+            pinned: HashSet::new(),
         }
     }
 
@@ -55,7 +59,9 @@ impl SizeLimiter {
     /// If this file is already contained, it will be updated accordingly.
     fn add(&mut self, file: &Path, size: u64, accessed: SystemTime) {
         self.in_use += size;
-        self.queue.push(file.to_owned(), Reverse(accessed));
+        if !self.pinned.contains(file) {
+            self.queue.push(file.to_owned(), Reverse(accessed));
+        }
         if let Some(old_size) = self.sizes.insert(file.to_owned(), size) {
             // It's important that decreasing happens after
             // increasing the size, to prevent an overflow.
@@ -83,7 +89,7 @@ impl SizeLimiter {
                 }
                 Some(next)
             } else {
-                error!("in_use was > 0, so the queue should have contained an item.");
+                // Only pinned files are left: they stay, over the limit or not.
                 None
             }
         } else {
@@ -96,21 +102,39 @@ impl SizeLimiter {
         self.queue
             .change_priority(file, Reverse(access_time))
             .is_some()
+            || self.sizes.contains_key(file)
     }
 
     /// Removes an element with the specified path. Returns `true` if the item did exist.
     fn remove(&mut self, file: &Path) -> bool {
-        if self.queue.remove(file).is_none() {
-            return false;
+        let queued = self.queue.remove(file).is_some();
+        match self.sizes.remove(file) {
+            Some(size) => {
+                self.in_use -= size;
+                true
+            }
+            None => queued,
         }
+    }
 
-        if let Some(size) = self.sizes.remove(file) {
-            self.in_use -= size;
-        } else {
-            error!("`queue` and `sizes` should have the same keys.");
+    /// Replace the pinned files: the ones no longer pinned can be pruned again,
+    /// as if just used.
+    fn set_pinned(&mut self, pinned: HashSet<PathBuf>) {
+        for file in self.pinned.difference(&pinned) {
+            if self.sizes.contains_key(file) {
+                self.queue.push(file.clone(), Reverse(SystemTime::now()));
+            }
         }
+        for file in &pinned {
+            self.queue.remove(file);
+        }
+        self.pinned = pinned;
+    }
 
-        true
+    /// Bytes in use, and how many of them are pinned.
+    fn usage(&self) -> (u64, u64) {
+        let pinned = self.pinned.iter().filter_map(|file| self.sizes.get(file)).sum();
+        (self.in_use, pinned)
     }
 }
 
@@ -267,6 +291,9 @@ pub struct Cache {
     volume_location: Option<PathBuf>,
     audio_location: Option<PathBuf>,
     size_limiter: Option<Arc<FsSizeLimiter>>,
+    /// Audio keys and song metadata, kept so a cached song plays offline.
+    /// Outside the audio location: the size limit never prunes them.
+    data_location: Option<PathBuf>,
 }
 
 impl Cache {
@@ -309,9 +336,55 @@ impl Cache {
             volume_location,
             audio_location,
             size_limiter,
+            data_location: None,
         };
 
         Ok(cache)
+    }
+
+    /// Keep each song's audio key and metadata under `dir`, so a song in the
+    /// audio cache can play without a connection.
+    pub fn with_data_dir(mut self, dir: impl AsRef<Path>) -> Self {
+        let dir = dir.as_ref();
+        for sub in ["keys", "meta"] {
+            if let Err(e) = fs::create_dir_all(dir.join(sub)) {
+                warn!("Could not create {sub} dir in {dir:?}: {e}");
+            }
+        }
+        self.data_location = Some(dir.to_owned());
+        self
+    }
+
+    fn data_path(&self, sub: &str, name: &str) -> Option<PathBuf> {
+        let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        Some(self.data_location.as_ref()?.join(sub).join(name))
+    }
+
+    /// The audio key kept for `file`, if it was ever fetched.
+    pub fn audio_key(&self, file: FileId) -> Option<[u8; 16]> {
+        let bytes = fs::read(self.data_path("keys", &file.to_base16())?).ok()?;
+        bytes.try_into().ok()
+    }
+
+    pub fn save_audio_key(&self, file: FileId, key: &[u8; 16]) {
+        if let Some(path) = self.data_path("keys", &file.to_base16()) {
+            if let Err(e) = fs::write(&path, key) {
+                warn!("Could not keep audio key {path:?}: {e}");
+            }
+        }
+    }
+
+    /// The metadata kept for `uri` (protobuf bytes), if it was ever fetched.
+    pub fn metadata(&self, uri: &str) -> Option<Vec<u8>> {
+        fs::read(self.data_path("meta", uri)?).ok()
+    }
+
+    pub fn save_metadata(&self, uri: &str, bytes: &[u8]) {
+        if let Some(path) = self.data_path("meta", uri) {
+            if let Err(e) = fs::write(&path, bytes) {
+                warn!("Could not keep metadata {path:?}: {e}");
+            }
+        }
     }
 
     /// Keep credentials only in memory, shared by clones of this cache.
@@ -460,6 +533,52 @@ impl Cache {
         Err(CacheError::Path.into())
     }
 
+    /// Keep `files` whatever the size limit; the ones pinned before and not
+    /// now can be pruned again.
+    pub fn set_pinned(&self, files: impl IntoIterator<Item = FileId>) {
+        if let Some(limiter) = self.size_limiter.as_deref() {
+            let pinned = files.into_iter().filter_map(|file| self.file_path(file)).collect();
+            limiter.limiter.lock().expect(CACHE_LIMITER_POISON_MSG).set_pinned(pinned);
+        }
+    }
+
+    /// Change the size limit, removing the least recently used files now if
+    /// the cache is over it.
+    pub fn set_size_limit(&self, limit: u64) -> Result<(), Error> {
+        match self.size_limiter.as_deref() {
+            Some(limiter) => {
+                limiter.limiter.lock().expect(CACHE_LIMITER_POISON_MSG).size_limit = limit;
+                limiter.prune()
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Remove every audio file. Pinned songs stay pinned, for when they are
+    /// downloaded again.
+    pub fn clear_audio(&self) -> Result<(), Error> {
+        let Some(location) = &self.audio_location else {
+            return Ok(());
+        };
+        match fs::remove_dir_all(location) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+            _ => fs::create_dir_all(location)?,
+        }
+        if let Some(limiter) = self.size_limiter.as_deref() {
+            let mut limiter = limiter.limiter.lock().expect(CACHE_LIMITER_POISON_MSG);
+            limiter.queue.clear();
+            limiter.sizes.clear();
+            limiter.in_use = 0;
+        }
+        Ok(())
+    }
+
+    /// Bytes the audio cache holds, and how many of them are pinned.
+    pub fn audio_usage(&self) -> Option<(u64, u64)> {
+        let limiter = self.size_limiter.as_deref()?;
+        Some(limiter.limiter.lock().expect(CACHE_LIMITER_POISON_MSG).usage())
+    }
+
     pub fn remove_file(&self, file: FileId) -> Result<(), Error> {
         let path = self.file_path(file).ok_or(CacheError::Path)?;
 
@@ -554,5 +673,24 @@ mod test {
         limiter.add(Path::new("f"), 500, ordered_time(2));
         assert!(limiter.remove(Path::new("c")));
         assert!(!limiter.exceeds_limit());
+    }
+
+    #[test]
+    fn pinned_files_are_never_pruned() {
+        let mut limiter = SizeLimiter::new(100);
+        // Pinned before it exists, as a kept song still to download.
+        limiter.set_pinned([PathBuf::from("kept")].into_iter().collect());
+        limiter.add(Path::new("kept"), 80, ordered_time(1));
+        limiter.add(Path::new("a"), 30, ordered_time(2));
+        assert_eq!(limiter.pop().as_deref(), Some(Path::new("a")));
+        assert_eq!(limiter.pop(), None);
+        assert_eq!(limiter.usage(), (80, 80));
+        assert!(limiter.update(Path::new("kept"), ordered_time(3)));
+
+        // Unpinned, it is an ordinary file again.
+        limiter.set_pinned(HashSet::new());
+        limiter.size_limit = 50;
+        assert_eq!(limiter.pop().as_deref(), Some(Path::new("kept")));
+        assert_eq!(limiter.usage(), (0, 0));
     }
 }

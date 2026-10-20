@@ -43,6 +43,9 @@ import kotlinx.coroutines.flow.stateIn
 import uniffi.nexfy_core.NexfyCore
 
 /** Owns the single Rust core, shared by the UI and the playback service. */
+/** How often the library is read ahead on Wi-Fi. */
+private const val WARM_EVERY_MS = 86_400_000L
+
 /** Whether the phone reaches the internet now: kept by [NexfyApp], read by the screens. */
 object Connectivity {
     val online = MutableStateFlow(true)
@@ -86,8 +89,13 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
         scope.launch {
             var last = network.value
             Connectivity.online.value = last != null
+            core.setOnline(last != null)
             network.collect { now ->
                 Connectivity.online.value = now != null
+                core.setOnline(now != null)
+                // What another device plays cannot be read or driven offline: a
+                // stale "playing" with dead buttons is worse than none.
+                if (now == null) bridge.setRemote(null)
                 if (now != null && now != last) {
                     runCatching { core.networkBack() }.onFailure { Log.d("Nexfy", "network back: ${it.message}") }
                     refreshRemote()
@@ -146,10 +154,32 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
-        // Songs on the phone: on Wi-Fi, download the next songs of the queue
-        // and every kept playlist and album into the audio cache.
+        // On Wi-Fi, once a day: read every playlist and album of the library in
+        // the background, so each opens at once later, offline too. One at a
+        // time, as a listener browsing would.
         scope.launch {
-            combine(bridge.local.map { s -> s.queue.next.take(3).map { it.uri } }.distinctUntilChanged(), library.prefetchQueue, unmetered) { next, on, wifi ->
+            combine(unmetered, network) { wifi, now -> wifi && now != null }.distinctUntilChanged().collectLatest { wifi ->
+                if (!wifi || System.currentTimeMillis() - library.warmedAt < WARM_EVERY_MS || !awaitConnected()) return@collectLatest
+                delay(30_000)
+                val playlists = runCatching { core.myPlaylists(false) }.getOrNull() ?: return@collectLatest
+                val albums = runCatching { core.savedAlbums(false) }.getOrNull().orEmpty()
+                for (playlist in playlists) {
+                    runCatching { core.playlist(playlist.id, false) }.onFailure { Log.d("Nexfy", "warm ${playlist.id}: ${it.message}") }
+                    delay(1_500)
+                }
+                for (album in albums) {
+                    runCatching { core.album(album.id, false) }.onFailure { Log.d("Nexfy", "warm ${album.id}: ${it.message}") }
+                    delay(1_500)
+                }
+                library.warmedAt = System.currentTimeMillis()
+            }
+        }
+        // The Auto quality streams lower on mobile data.
+        scope.launch { unmetered.collect { core.setMetered(!it) } }
+        // Songs on the phone: on Wi-Fi (or on mobile data when allowed), download
+        // the next songs of the queue and every kept playlist and album.
+        scope.launch {
+            combine(bridge.local.map { s -> s.queue.next.take(3).map { it.uri } }.distinctUntilChanged(), library.prefetchQueue, downloadable) { next, on, wifi ->
                 if (on && wifi) next else emptyList()
             }.collectLatest { next ->
                 if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
@@ -159,20 +189,36 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
             // Whole collections only while nothing plays here: downloading them
             // alongside a song starved its stream (the player gave up mid song).
             val playing = bridge.local.map { it.playing }.distinctUntilChanged()
-            combine(library.kept, unmetered, playing) { kept, wifi, busy -> if (wifi && !busy) kept else emptySet() }.collectLatest { kept ->
-                if (kept.isEmpty() || !awaitConnected()) return@collectLatest
+            combine(library.kept, downloadable, playing) { kept, wifi, busy -> if (wifi && !busy) kept else emptySet() }.collectLatest { kept ->
+                if (!awaitConnected()) return@collectLatest
+                // Every kept song first, so the audio cache never makes room by
+                // dropping one (and ones no longer kept can go again).
+                val songs = kept.associateWith { key ->
+                    runCatching { keptTracks(key) }.onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }.getOrNull()
+                }
+                if (songs.values.none { it == null }) core.setKeptSongs(songs.values.flatMap { it.orEmpty() }.distinct())
+                if (kept.isEmpty()) return@collectLatest
                 delay(10_000)
-                for (key in kept) {
-                    runCatching { core.cacheTracks(keptTracks(key)) }
+                for ((key, tracks) in songs) {
+                    if (tracks == null) continue
+                    runCatching { core.cacheTracks(tracks) }
                         .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
                 }
             }
         }
-        // One shuffle mode: when the player's changes (here, on another device, from
-        // the notification), the pages' shuffle buttons follow it.
+        // One shuffle mode: when the player's is switched (here, on another device,
+        // from the notification), the pages' shuffle buttons follow it. Only a
+        // switch while the same list plays: the first report after the app
+        // opens, or another list starting with its own, used to undo the
+        // button the user had left on.
         scope.launch {
-            bridge.state.filter { it.track != null }.map { it.queue.shuffle }.distinctUntilChanged()
-                .collect { library.setShuffle(it) }
+            var last: Pair<String?, Boolean>? = null
+            bridge.state.filter { it.track != null }.map { it.queue.contextUri to it.queue.shuffle }.distinctUntilChanged()
+                .collect { now ->
+                    val before = last
+                    last = now
+                    if (before != null && before.first == now.first && before.second != now.second) library.setShuffle(now.second)
+                }
         }
         // Keep the home-screen widgets in step with what plays (here or elsewhere).
         NexfyWidgets.follow(this, scope)
@@ -252,6 +298,12 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
             connectivity.registerDefaultNetworkCallback(callback)
             awaitClose { connectivity.unregisterNetworkCallback(callback) }
         }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, now)
+    }
+
+    /** Whether songs download now: on Wi-Fi, or on mobile data when the user allows. */
+    private val downloadable: StateFlow<Boolean> by lazy {
+        combine(unmetered, library.mobileDownloads, network) { wifi, mobile, now -> now != null && (wifi || mobile) }
+            .distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, false)
     }
 
     /** Whether the network is unmetered (Wi-Fi), where songs are downloaded ahead. */

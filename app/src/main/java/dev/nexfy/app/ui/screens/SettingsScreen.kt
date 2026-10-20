@@ -41,6 +41,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -273,15 +274,27 @@ private fun SoundSection(actions: AppActions) {
     val core = actions.core
     var sound by remember { mutableStateOf(core.soundSettings()) }
     Section("Som", "Como as músicas tocam neste celular.") {
-        Choice("Qualidade de áudio", listOf(AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
-            if (it == AudioQuality.NORMAL) "Normal · 160 kbps" else "Alta · 320 kbps"
+        Choice("Qualidade de áudio", listOf(AudioQuality.AUTO, AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
+            when (it) {
+                AudioQuality.AUTO -> "Automática"
+                AudioQuality.NORMAL -> "Normal"
+                AudioQuality.HIGH -> "Alta"
+            }
         }) {
             core.setAudioQuality(it)
             sound = core.soundSettings()
         }
-        if (sound.quality != sound.activeQuality) {
-            Text("A nova qualidade vale na próxima vez que o app abrir.", color = c.onSurfaceVariant, fontSize = 13.sp)
-        }
+        // What the choice means, and what Auto picked for the network now. A
+        // new choice plays from the next song.
+        Text(
+            when (sound.quality) {
+                AudioQuality.AUTO -> "Alta no Wi-Fi, normal nos dados móveis. Agora: " +
+                    (if (sound.activeQuality == AudioQuality.NORMAL) "normal." else "alta.")
+                AudioQuality.NORMAL -> "160 kbps. Gasta menos dados."
+                AudioQuality.HIGH -> "320 kbps, para quem tem Premium."
+            },
+            color = c.onSurfaceVariant, fontSize = 13.sp,
+        )
         Toggle("Normalizar volume", "Deixa as músicas num volume parecido.", sound.normalize, {
             core.setNormalize(it)
             sound = core.soundSettings()
@@ -464,51 +477,71 @@ private val Limits = listOf(1L, 2L, 5L, 10L).map { it * 1024 * 1024 * 1024 }
 
 private fun gb(bytes: Long) = "%.1f GB".format(bytes / (1024.0 * 1024 * 1024)).replace('.', ',')
 
-/** The audio cache: what it holds, its size, queue prefetch and clearing it. */
+/**
+ * What the phone keeps: the songs (their size limit, the kept ones and the
+ * downloads), the covers and the pages' data, each to clear on its own.
+ */
 @Composable
 private fun StorageSection(actions: AppActions) {
     val c = MaterialTheme.colorScheme
     val core = actions.core
     val library = actions.app.library
+    val context = LocalContext.current
+    val images = remember { coil3.SingletonImageLoader.get(context) }
     var info by remember { mutableStateOf(core.cacheInfo()) }
+    var covers by remember { mutableLongStateOf(images.diskCache?.size ?: 0L) }
     var chosen by remember { mutableStateOf(info.limitBytes.toLong()) }
     var confirmClear by remember { mutableStateOf(false) }
     val prefetch by library.prefetchQueue.collectAsState()
+    val mobile by library.mobileDownloads.collectAsState()
     // Downloads fill it in the background: keep the numbers live.
     LaunchedEffect(Unit) {
         while (true) {
             info = core.cacheInfo()
+            covers = images.diskCache?.size ?: 0L
             delay(3_000)
             awaitShown()
         }
     }
     Section(
         "Armazenamento",
-        "As próximas da fila e as playlists mantidas no aparelho, baixadas no Wi-Fi. Começam na hora; ainda precisam de internet.",
+        "As músicas no aparelho tocam sem internet. As das playlists mantidas nunca saem para abrir espaço.",
     ) {
         val used = info.usedBytes.toLong()
-        Text("${gb(used)} de ${gb(chosen)}", style = MaterialTheme.typography.titleMedium)
+        Text("${size(used)} de ${gb(chosen)}", style = MaterialTheme.typography.titleMedium)
         Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(c.outline)) {
             Box(
                 Modifier.fillMaxWidth((used.toFloat() / chosen).coerceIn(0f, 1f)).fillMaxHeight()
                     .clip(CircleShape).background(accentColor()),
             )
         }
+        if (info.keptBytes > 0uL) {
+            Text("${size(info.keptBytes.toLong())} das playlists mantidas", color = c.onSurfaceVariant, fontSize = 13.sp)
+        }
         PillSelector(Limits, chosen, { gb(it).removeSuffix(",0 GB") + " GB" }, {
             chosen = it
             core.setCacheLimit(it.toULong())
+            info = core.cacheInfo()
         }, Modifier.fillMaxWidth())
-        if (chosen != info.limitBytes.toLong()) {
-            Text("O novo tamanho vale na próxima vez que o app abrir.", color = c.onSurfaceVariant, fontSize = 13.sp)
-        }
-        Toggle("Baixar as próximas da fila no Wi-Fi", null, prefetch, library::setPrefetchQueue)
+        Toggle("Baixar as próximas da fila", null, prefetch, library::setPrefetchQueue)
+        Toggle("Baixar também nos dados móveis", "Sem isso, só no Wi-Fi. Gasta o plano de dados.", mobile, library::setMobileDownloads)
         PillButton("Apagar músicas baixadas", { confirmClear = true }, filled = false)
+        HorizontalDivider(color = c.outline.copy(alpha = .5f))
+        StorageLine("Capas", "Voltam a baixar quando aparecem.", covers) {
+            images.diskCache?.clear()
+            images.memoryCache?.clear()
+            covers = images.diskCache?.size ?: 0L
+        }
+        StorageLine("Dados das páginas", "Playlists, álbuns e artistas guardados para abrir na hora e sem internet.", info.dataBytes.toLong()) {
+            core.clearDataCache()
+            info = core.cacheInfo()
+        }
     }
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Apagar músicas baixadas?") },
-            text = { Text("Libera ${gb(info.usedBytes.toLong())}. As playlists mantidas no aparelho voltam a baixar no Wi-Fi.") },
+            text = { Text("Libera ${size(info.usedBytes.toLong())}. As playlists mantidas no aparelho voltam a baixar no Wi-Fi.") },
             confirmButton = {
                 TextButton({
                     core.clearAudioCache()
@@ -520,6 +553,23 @@ private fun StorageSection(actions: AppActions) {
         )
     }
 }
+
+/** One kind of stored data: what it is, how much, and clearing it. */
+@Composable
+private fun StorageLine(title: String, description: String, bytes: Long, onClear: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text("$title · ${size(bytes)}", fontSize = 14.sp)
+            Text(description, color = c.onSurfaceVariant, fontSize = 13.sp)
+        }
+        PillButton("Limpar", onClear, filled = false, enabled = bytes > 0)
+    }
+}
+
+/** Megabytes below a gigabyte, so a small cache does not read "0,0 GB". */
+private fun size(bytes: Long) =
+    if (bytes >= 1024L * 1024 * 1024) gb(bytes) else "${bytes / (1024 * 1024)} MB"
 
 /**
  * The translator's free allowance is counted per person: 5 000 characters a

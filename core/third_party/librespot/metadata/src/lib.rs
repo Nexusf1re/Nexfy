@@ -46,9 +46,33 @@ pub trait Metadata: Send + Sized + 'static {
     // Request a protobuf
     async fn request(session: &Session, id: &SpotifyUri) -> RequestResult;
 
-    // Request a metadata struct
+    // Request a metadata struct. A song's or episode's is kept in the cache:
+    // it answers when the session is down or the request fails, so a song in
+    // the audio cache plays offline.
     async fn get(session: &Session, id: &SpotifyUri) -> Result<Self, Error> {
-        let response = Self::request(session, id).await?;
+        let cache = session
+            .cache()
+            .filter(|_| matches!(id, SpotifyUri::Track { .. } | SpotifyUri::Episode { .. }));
+        let uri = id.to_uri();
+        let kept = || cache.and_then(|cache| cache.metadata(&uri));
+        let response = match kept().filter(|_| session.is_invalid()) {
+            Some(bytes) => bytes::Bytes::from(bytes),
+            None => match Self::request(session, id).await {
+                Ok(bytes) => {
+                    if let Some(cache) = cache {
+                        cache.save_metadata(&uri, &bytes);
+                    }
+                    bytes
+                }
+                Err(error) => match kept() {
+                    Some(bytes) => {
+                        debug!("Metadata for {uri} from the cache: {error}");
+                        bytes::Bytes::from(bytes)
+                    }
+                    None => return Err(error),
+                },
+            },
+        };
         let msg = Self::Message::parse_from_bytes(&response)?;
         trace!("Received metadata: {msg:#?}");
         Self::parse(&msg, id)

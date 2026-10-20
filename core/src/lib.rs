@@ -12,6 +12,7 @@ mod collection;
 mod equalizer;
 mod lyrics;
 mod offline;
+mod offline_play;
 mod playlist_edit;
 mod remote;
 mod session_reads;
@@ -248,8 +249,14 @@ struct Inner {
     levels: Arc<sound::Levels>,
     /// Runs on the player's output; the app changes it live.
     equalizer: Arc<equalizer::Equalizer>,
-    /// Read at start: the player is built with it.
-    quality: AudioQuality,
+    /// The quality chosen; what streams also depends on [Inner::metered].
+    quality: Mutex<AudioQuality>,
+    /// The phone is on mobile data: Auto streams at Normal.
+    metered: AtomicBool,
+    /// One audio cache for every session: its size limiter knows the files.
+    cache: std::sync::OnceLock<Cache>,
+    /// Songs on the phone, playing with no connection.
+    offline_play: Mutex<Option<Arc<offline_play::OfflinePlay>>>,
 }
 
 #[derive(uniffi::Object)]
@@ -273,7 +280,10 @@ impl NexfyCore {
                 offline: offline::Offline::new(&cache_dir, quality),
                 levels: Arc::new(sound::Levels::new(sound::load_normalize(&cache_dir))),
                 equalizer: Arc::new(equalizer::Equalizer::load(&cache_dir)),
-                quality,
+                quality: Mutex::new(quality),
+                metered: AtomicBool::new(false),
+                cache: std::sync::OnceLock::new(),
+                offline_play: Mutex::new(None),
                 cache_dir,
                 device_name,
                 pending_login: Mutex::new(None),
@@ -1050,6 +1060,12 @@ impl NexfyCore {
         self.inner.connected.lock().unwrap().is_some()
     }
 
+    /// Whether the phone reaches the internet; offline, requests fail at once
+    /// and what was kept answers.
+    pub fn set_online(&self, online: bool) {
+        self.inner.web.set_offline(!online);
+    }
+
     /// The phone has a network again, or a different one: bring the session
     /// back now rather than at the next tap, so what was playing goes on and
     /// the screens load. Started without a network, this is the sign-in.
@@ -1207,20 +1223,38 @@ impl NexfyCore {
     }
 
     pub async fn next(&self) -> Result<(), CoreError> {
+        if let Some(play) = self.inner.offline_play() {
+            play.skip(true, true);
+            return Ok(());
+        }
         self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.next())
     }
 
     pub async fn previous(&self) -> Result<(), CoreError> {
+        if let Some(play) = self.inner.offline_play() {
+            play.skip(false, true);
+            return Ok(());
+        }
         self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.prev())
     }
 
     pub fn set_shuffle(&self, shuffle: bool) -> Result<(), CoreError> {
+        if let Some(play) = self.inner.offline_play() {
+            play.set_shuffle(shuffle);
+            self.inner.update_queue(|queue| play.show(queue));
+            return Ok(());
+        }
         self.inner.with_spirc(|spirc| spirc.shuffle(shuffle))
     }
 
     pub fn set_repeat(&self, repeat: RepeatMode) -> Result<(), CoreError> {
+        if let Some(play) = self.inner.offline_play() {
+            play.set_repeat(repeat);
+            self.inner.update_queue(|queue| play.show(queue));
+            return Ok(());
+        }
         self.inner.with_spirc(|spirc| match repeat {
             RepeatMode::Off => spirc.repeat_track(false).and_then(|_| spirc.repeat(false)),
             RepeatMode::All => spirc.repeat_track(false).and_then(|_| spirc.repeat(true)),
@@ -1236,16 +1270,29 @@ impl NexfyCore {
     // ---------------------------------------------------------- sound --
 
     pub fn sound_settings(&self) -> SoundSettings {
+        // Read on its own: a lock taken inside the struct literal would last
+        // to its end, and stream_quality takes the same one.
+        let quality = *self.inner.quality.lock().unwrap();
         SoundSettings {
-            quality: AudioQuality::load(&self.inner.cache_dir),
-            active_quality: self.inner.quality,
+            quality,
+            active_quality: self.inner.stream_quality(),
             normalize: self.inner.levels.normalize(),
         }
     }
 
-    /// Takes effect on the next app start, with the player built anew.
+    /// From the next song on; downloads pick the new quality's files.
     pub fn set_audio_quality(&self, quality: AudioQuality) {
-        quality.save(&self.inner.cache_dir)
+        quality.save(&self.inner.cache_dir);
+        *self.inner.quality.lock().unwrap() = quality;
+        self.inner.offline.set_quality(quality);
+        self.inner.apply_quality();
+    }
+
+    /// Whether the phone is on mobile data, for the Auto quality.
+    pub fn set_metered(&self, metered: bool) {
+        if self.inner.metered.swap(metered, Ordering::Relaxed) != metered {
+            self.inner.apply_quality();
+        }
     }
 
     /// Heard at once, even mid-song.
@@ -1318,16 +1365,34 @@ impl NexfyCore {
 
     /// How much the audio cache holds and may hold.
     pub fn cache_info(&self) -> CacheInfo {
-        self.inner.offline.info()
+        self.inner.offline.info(self.inner.cache.get())
     }
 
-    /// Audio cache size; takes effect on the next app start.
+    /// Audio cache size, at once: past it, the songs heard longest ago go
+    /// first, and the kept ones never.
     pub fn set_cache_limit(&self, bytes: u64) {
-        self.inner.offline.set_limit(bytes)
+        self.inner.offline.set_limit(bytes);
+        if let Some(cache) = self.inner.cache.get() {
+            if let Err(e) = cache.set_size_limit(bytes) {
+                log::warn!("audio cache not pruned: {e}");
+            }
+        }
     }
 
     pub fn clear_audio_cache(&self) {
-        self.inner.offline.clear()
+        self.inner.offline.clear(self.inner.cache.get())
+    }
+
+    /// The songs of the kept playlists and albums: the audio cache keeps
+    /// them whatever its limit.
+    pub fn set_kept_songs(&self, uris: Vec<String>) {
+        self.inner.offline.set_kept(uris);
+        self.inner.pin_kept();
+    }
+
+    /// Forget the pages' data kept for showing them at once; they load again.
+    pub fn clear_data_cache(&self) {
+        self.inner.web.clear_cache()
     }
 
     /// How many of these songs are on the phone already.
@@ -1353,7 +1418,45 @@ impl NexfyCore {
                 Err(error) => log::info!("could not cache {uri}: {error:#}"),
             }
         }
+        // The songs just downloaded have files now: kept ones get pinned.
+        self.inner.pin_kept();
         Ok(downloaded)
+    }
+
+    /// Play songs on the phone with no connection: those of `uris` here
+    /// (audio, key and metadata), from `start_index` when that one is, else
+    /// from the first. Returns how many of them can play.
+    pub async fn play_offline(&self, uris: Vec<String>, start_index: u32, shuffle: bool) -> Result<u32, CoreError> {
+        let inner = &self.inner;
+        let session = inner.offline_session()?;
+        let uris: Vec<String> = uris.iter().filter_map(|uri| parse_track(uri).ok()).map(|t| t.to_uri()).collect();
+        let wanted = uris.get(start_index as usize).cloned();
+        let mut here = Vec::new();
+        for uri in uris {
+            if offline::playable_offline(&session, &uri).await {
+                here.push(uri);
+            }
+        }
+        if here.is_empty() {
+            return Err(CoreError::Playback("Sem conexão: nenhuma dessas músicas está no aparelho".into()));
+        }
+        let start = wanted.and_then(|uri| here.iter().position(|u| *u == uri)).unwrap_or(0);
+        let player = inner.build_player(&session)?;
+        // One player at a time.
+        let _ = inner.with_online_player(|player| player.stop());
+        let repeat = inner.queue.lock().unwrap().repeat;
+        let count = here.len() as u32;
+        let play = offline_play::OfflinePlay::start(inner, player, here, start, shuffle, repeat);
+        let old = inner.offline_play.lock().unwrap().replace(play);
+        if let Some(old) = old {
+            old.player.stop();
+        }
+        Ok(count)
+    }
+
+    /// Whether what plays here is songs on the phone, with no connection.
+    pub fn playing_offline(&self) -> bool {
+        self.inner.offline_play().is_some()
     }
     // --------------------------------------------------------- social --
 
@@ -1542,10 +1645,110 @@ impl Inner {
     }
 
     fn cache(&self) -> Result<Cache, CoreError> {
+        if let Some(cache) = self.cache.get() {
+            return Ok(cache.clone());
+        }
         let credentials = self.cache_dir.join("credentials");
         let audio = self.cache_dir.join("audio");
-        Cache::new(Some(credentials), None, Some(audio), Some(self.offline.limit()))
-            .map_err(|e| CoreError::Session(e.to_string()))
+        // Built with no limit, the kept songs pinned, then limited: pruning to
+        // the limit passes the kept songs by.
+        let cache = Cache::new(Some(credentials), None, Some(audio), Some(u64::MAX))
+            .map_err(|e| CoreError::Session(e.to_string()))?
+            .with_data_dir(self.offline.data_dir());
+        cache.set_pinned(self.offline.kept_files());
+        if let Err(e) = cache.set_size_limit(self.offline.limit()) {
+            log::warn!("audio cache not pruned: {e}");
+        }
+        Ok(self.cache.get_or_init(|| cache).clone())
+    }
+
+    /// What streams now: the choice, or what Auto picks for the network.
+    fn stream_quality(&self) -> AudioQuality {
+        self.quality.lock().unwrap().streaming(self.metered.load(Ordering::Relaxed))
+    }
+
+    /// The players load the next songs at the quality streaming now.
+    fn apply_quality(&self) {
+        let bitrate = self.stream_quality().bitrate();
+        let _ = self.with_online_player(|player| player.set_bitrate(bitrate));
+        if let Some(play) = self.offline_play() {
+            play.player.set_bitrate(bitrate);
+        }
+    }
+
+    /// A player on `session`, its sound through the volume levels and the
+    /// equalizer, its events forwarded to Kotlin.
+    fn build_player(self: &Arc<Self>, session: &Session) -> Result<Arc<Player>, CoreError> {
+        let backend = audio_backend::find(None)
+            .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
+        let mixer = NexfyMixer::new(self.levels.clone());
+        let equalizer = self.equalizer.clone();
+        let player = Player::new(
+            sound::player_config(self.stream_quality(), &self.levels),
+            session.clone(),
+            mixer.get_soft_volume(),
+            move || Box::new(equalizer::EqSink::new(backend(None, AudioFormat::default()), equalizer)),
+        );
+        tokio::spawn(run_events(Arc::downgrade(self), player.get_player_event_channel()));
+        Ok(player)
+    }
+
+    /// What a session that never connects needs to judge availability as it
+    /// did online, kept while the session is up.
+    fn save_account(&self, session: &Session) {
+        let country = session.country();
+        if country.is_empty() {
+            return;
+        }
+        let account = serde_json::json!({
+            "username": session.username(),
+            "country": country,
+            "catalogue": session.get_user_attribute("catalogue"),
+        });
+        let _ = std::fs::write(self.cache_dir.join("account.json"), account.to_string());
+    }
+
+    /// A session that never connects, for playing songs on the phone: the
+    /// account as it was last online, and marked down so that songs'
+    /// metadata comes from the cache without trying the network.
+    fn offline_session(&self) -> Result<Session, CoreError> {
+        let session = self.new_session()?;
+        let account = std::fs::read(self.cache_dir.join("account.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        if let Some(account) = account {
+            if let Some(name) = account["username"].as_str() {
+                session.set_username(name);
+            }
+            if let Some(country) = account["country"].as_str() {
+                session.set_country(country);
+            }
+            if let Some(catalogue) = account["catalogue"].as_str() {
+                session.set_user_attribute("catalogue", catalogue);
+            }
+        }
+        session.shutdown();
+        Ok(session)
+    }
+
+    fn offline_play(&self) -> Option<Arc<offline_play::OfflinePlay>> {
+        self.offline_play.lock().unwrap().clone()
+    }
+
+    /// Pin the kept songs whose files are known; the cache may not exist yet,
+    /// and then it pins them as it is built.
+    fn pin_kept(&self) {
+        if let Some(cache) = self.cache.get() {
+            cache.set_pinned(self.offline.kept_files());
+        }
+    }
+
+    /// Back online with playback started anew: the offline player stops.
+    fn stop_offline(&self) {
+        let play = self.offline_play.lock().unwrap().take();
+        if let Some(play) = play {
+            play.player.stop();
+        }
     }
 
     fn emit(&self, event: CoreEvent) {
@@ -1581,6 +1784,10 @@ impl Inner {
 
     async fn load(&self, request: LoadRequest) -> Result<(), CoreError> {
         self.ensure_session().await?;
+        self.stop_offline();
+        if let Some(session) = self.with_session(Session::clone) {
+            self.save_account(&session);
+        }
         self.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.load(request)))
     }
 
@@ -1659,22 +1866,9 @@ impl Inner {
             let _ = spirc.shutdown();
         }
         let session = self.new_session()?;
-
-        let backend = audio_backend::find(None)
-            .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
-        let mixer = NexfyMixer::new(self.levels.clone());
-        let equalizer = self.equalizer.clone();
-        let player = Player::new(
-            sound::player_config(self.quality, &self.levels),
-            session.clone(),
-            mixer.get_soft_volume(),
-            move || Box::new(equalizer::EqSink::new(backend(None, AudioFormat::default()), equalizer)),
-        );
-        tokio::spawn(run_events(
-            Arc::downgrade(self),
-            player.get_player_event_channel(),
-        ));
+        let player = self.build_player(&session)?;
         let spirc = self.start_spirc(&session, player.clone(), credentials).await?;
+        self.save_account(&session);
 
         let username = session.username();
         *self.connected.lock().unwrap() = Some(Connected { session, player, spirc });
@@ -1777,6 +1971,11 @@ impl Inner {
 
     /// A connected session, reconnecting first if it dropped.
     async fn live_session(&self) -> Result<Session, CoreError> {
+        // Offline, no wait for a sign-in that cannot come: the callers fall
+        // back to what they kept.
+        if self.web.is_offline() {
+            return Err(CoreError::Web("sem conexão com a internet".into()));
+        }
         // At launch the screens ask before the saved login reconnects:
         // wait for it briefly rather than fall back to the Web API.
         for _ in 0..40 {
@@ -1790,7 +1989,16 @@ impl Inner {
             .ok_or_else(|| CoreError::Session("não conectado".into()))
     }
 
+    /// The player playing here: the offline one while it plays.
     fn with_player(&self, action: impl FnOnce(&Player)) -> Result<(), CoreError> {
+        if let Some(play) = self.offline_play() {
+            action(&play.player);
+            return Ok(());
+        }
+        self.with_online_player(action)
+    }
+
+    fn with_online_player(&self, action: impl FnOnce(&Player)) -> Result<(), CoreError> {
         let connected = self.connected.lock().unwrap();
         let connected = connected
             .as_ref()

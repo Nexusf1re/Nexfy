@@ -18,14 +18,16 @@ pub enum AudioQuality {
     Normal,
     /// 320 kbps, Premium only.
     High,
+    /// High on Wi-Fi, Normal on mobile data; downloads are High.
+    Auto,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SoundSettings {
     /// The quality chosen.
     pub quality: AudioQuality,
-    /// The quality playing now: the player is built with it, so a new
-    /// choice applies on the next app start.
+    /// The quality streaming now: the choice, or what Auto picked for the
+    /// network. A new choice applies from the next song.
     pub active_quality: AudioQuality,
     pub normalize: bool,
 }
@@ -35,6 +37,7 @@ impl AudioQuality {
     pub fn load(dir: &Path) -> Self {
         match std::fs::read_to_string(dir.join("audio_quality")) {
             Ok(text) if text.trim() == "160" => Self::Normal,
+            Ok(text) if text.trim() == "auto" => Self::Auto,
             _ => Self::High,
         }
     }
@@ -43,14 +46,29 @@ impl AudioQuality {
         let text = match self {
             Self::Normal => "160",
             Self::High => "320",
+            Self::Auto => "auto",
         };
         let _ = std::fs::write(dir.join("audio_quality"), text);
     }
 
-    fn bitrate(self) -> Bitrate {
+    /// What streams on this network: Auto saves mobile data.
+    pub fn streaming(self, metered: bool) -> Self {
         match self {
+            Self::Auto if metered => Self::Normal,
+            Self::Auto => Self::High,
+            quality => quality,
+        }
+    }
+
+    /// What downloads keep: songs kept are heard later, often on mobile data.
+    pub fn downloading(self) -> Self {
+        self.streaming(false)
+    }
+
+    pub fn bitrate(self) -> Bitrate {
+        match self.downloading() {
             Self::Normal => Bitrate::Bitrate160,
-            Self::High => Bitrate::Bitrate320,
+            _ => Bitrate::Bitrate320,
         }
     }
 
@@ -58,7 +76,7 @@ impl AudioQuality {
     /// librespot's player.rs): prefetching any other file would not be the
     /// one that plays.
     pub fn formats(self) -> [AudioFileFormat; 7] {
-        match self {
+        match self.downloading() {
             Self::Normal => [
                 AudioFileFormat::OGG_VORBIS_160,
                 AudioFileFormat::MP3_160,
@@ -68,7 +86,7 @@ impl AudioQuality {
                 AudioFileFormat::OGG_VORBIS_320,
                 AudioFileFormat::MP3_320,
             ],
-            Self::High => [
+            _ => [
                 AudioFileFormat::OGG_VORBIS_320,
                 AudioFileFormat::MP3_320,
                 AudioFileFormat::MP3_256,

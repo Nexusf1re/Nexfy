@@ -1,8 +1,7 @@
 package dev.nexfy.app.playback
 
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.SystemClock
+import dev.nexfy.app.Connectivity
 import dev.nexfy.app.NexfyApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,12 +51,13 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
      * Run a command off the main thread. On failure [undo] takes back what
      * was shown ahead and the refusal is told in words a person reads.
      */
-    fun run(undo: () -> Unit = {}, action: suspend () -> Unit) {
+    fun run(undo: () -> Unit = {}, connect: Boolean = true, action: suspend () -> Unit) {
         scope.launch(Dispatchers.IO) {
             try {
                 withTimeout(COMMAND_TIMEOUT_MS) {
-                    // The widget can wake the app with no session yet.
-                    if (!core.isConnected()) core.restoreSession()
+                    // The widget can wake the app with no session yet. Offline
+                    // there is none to start: the songs on the phone play without.
+                    if (connect && online() && !core.isConnected()) core.restoreSession()
                     action()
                 }
             } catch (e: Exception) {
@@ -81,11 +81,7 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
         Refusals.post(message)
     }
 
-    private fun online(): Boolean {
-        val connectivity = app.getSystemService(ConnectivityManager::class.java)
-        val caps = connectivity.getNetworkCapabilities(connectivity.activeNetwork) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
+    private fun online() = Connectivity.online.value
 
     private var loadingWatch: Job? = null
 

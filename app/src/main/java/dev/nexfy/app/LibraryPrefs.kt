@@ -279,6 +279,21 @@ class LibraryPrefs(context: Context) {
         prefs.edit { putBoolean(PREFETCH_QUEUE, on) }
     }
 
+    private val _mobileDownloads = MutableStateFlow(prefs.getBoolean(MOBILE_DOWNLOADS, false))
+
+    /** Songs download on mobile data too, not only on Wi-Fi. */
+    val mobileDownloads: StateFlow<Boolean> = _mobileDownloads
+
+    fun setMobileDownloads(on: Boolean) {
+        _mobileDownloads.value = on
+        prefs.edit { putBoolean(MOBILE_DOWNLOADS, on) }
+    }
+
+    /** When the library's lists were last read ahead on Wi-Fi (epoch ms). */
+    var warmedAt: Long
+        get() = prefs.getLong(WARMED_AT, 0L)
+        set(value) = prefs.edit { putLong(WARMED_AT, value) }
+
     fun togglePin(key: String) {
         val now = _pinned.value.let { if (key in it) it - key else it + key }
         _pinned.value = now
@@ -308,6 +323,8 @@ class LibraryPrefs(context: Context) {
         const val PLAYS = "plays"
         const val KEPT = "kept"
         const val PREFETCH_QUEUE = "prefetch_queue"
+        const val MOBILE_DOWNLOADS = "mobile_downloads"
+        const val WARMED_AT = "warmed_at"
         const val COVER_ACCENT = "cover_accent"
         const val SHUFFLE = "shuffle"
         const val SHELF = "shelf"

@@ -113,6 +113,7 @@ enum PlayerCommand {
     Stop,
     Seek(u32),
     SetSession(Session),
+    SetBitrate(Bitrate),
     AddEventSender(mpsc::UnboundedSender<PlayerEvent>),
     SetSinkEventCallback(Option<SinkEventCallback>),
     EmitVolumeChangedEvent(u16),
@@ -601,6 +602,11 @@ impl Player {
 
     pub fn set_session(&self, session: Session) {
         self.command(PlayerCommand::SetSession(session));
+    }
+
+    /// The quality the next songs load at; the one playing keeps its own.
+    pub fn set_bitrate(&self, bitrate: Bitrate) {
+        self.command(PlayerCommand::SetBitrate(bitrate));
     }
 
     pub fn get_player_event_channel(&self) -> PlayerEventChannel {
@@ -1105,13 +1111,24 @@ impl PlayerTrackLoader {
             ],
         };
 
+        // A file already in the cache plays first, in the same order: one kept
+        // at another quality costs no data and plays on a weak network.
+        let cache = self.session.cache();
+        let pick = |cached_only: bool| {
+            formats.iter().find_map(|format| match audio_item.files.get(format) {
+                Some(&file_id)
+                    if !cached_only
+                        || cache.is_some_and(|cache| {
+                            cache.file_path(file_id).is_some_and(|path| path.exists())
+                        }) =>
+                {
+                    Some((*format, file_id))
+                }
+                _ => None,
+            })
+        };
         let (format, file_id) =
-            match formats
-                .iter()
-                .find_map(|format| match audio_item.files.get(format) {
-                    Some(&file_id) => Some((*format, file_id)),
-                    _ => None,
-                }) {
+            match pick(true).or_else(|| pick(false)) {
                 Some(t) => t,
                 None => {
                     warn!(
@@ -2374,6 +2391,8 @@ impl PlayerInternal {
 
             PlayerCommand::SetSession(session) => self.session = session,
 
+            PlayerCommand::SetBitrate(bitrate) => self.config.bitrate = bitrate,
+
             PlayerCommand::AddEventSender(sender) => self.event_senders.push(sender),
 
             PlayerCommand::SetSinkEventCallback(callback) => self.sink_event_callback = callback,
@@ -2582,6 +2601,7 @@ impl fmt::Debug for PlayerCommand {
             PlayerCommand::Stop => f.debug_tuple("Stop").finish(),
             PlayerCommand::Seek(position) => f.debug_tuple("Seek").field(&position).finish(),
             PlayerCommand::SetSession(_) => f.debug_tuple("SetSession").finish(),
+            PlayerCommand::SetBitrate(bitrate) => f.debug_tuple("SetBitrate").field(bitrate).finish(),
             PlayerCommand::AddEventSender(_) => f.debug_tuple("AddEventSender").finish(),
             PlayerCommand::SetSinkEventCallback(_) => {
                 f.debug_tuple("SetSinkEventCallback").finish()

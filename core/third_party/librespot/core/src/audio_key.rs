@@ -78,7 +78,21 @@ impl AudioKeyManager {
         Ok(())
     }
 
+    /// A file's key never changes: one kept in the cache answers at once,
+    /// and without a connection; one fetched is kept.
     pub async fn request(&self, track: SpotifyId, file: FileId) -> Result<AudioKey, Error> {
+        let cache = self.session().cache().cloned();
+        if let Some(key) = cache.as_ref().and_then(|cache| cache.audio_key(file)) {
+            return Ok(AudioKey(key));
+        }
+        let key = self.fetch(track, file).await?;
+        if let Some(cache) = cache {
+            cache.save_audio_key(file, &key.0);
+        }
+        Ok(key)
+    }
+
+    async fn fetch(&self, track: SpotifyId, file: FileId) -> Result<AudioKey, Error> {
         let (tx, rx) = oneshot::channel();
 
         let seq = self.lock(move |inner| {

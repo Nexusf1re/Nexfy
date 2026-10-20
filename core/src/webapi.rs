@@ -618,6 +618,9 @@ pub struct WebApi {
     revalidating: std::sync::Mutex<std::collections::HashSet<String>>,
     shared: Mutex<GrantState>,
     personal: Mutex<GrantState>,
+    /// The phone has no network: requests fail at once and the cached
+    /// copies answer, instead of each waiting out its timeout.
+    offline: std::sync::atomic::AtomicBool,
 }
 
 impl WebApi {
@@ -640,8 +643,24 @@ impl WebApi {
             revalidating: Default::default(),
             shared: Mutex::new(shared),
             personal: Mutex::new(personal),
+            offline: Default::default(),
             dir,
         }
+    }
+
+    pub fn set_offline(&self, offline: bool) {
+        self.offline.store(offline, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_offline(&self) -> bool {
+        self.offline.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Forget every cached page; the sign-ins stay.
+    pub fn clear_cache(&self) {
+        let dir = self.dir.join("cache");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
     }
 
     fn grant(&self, app: WebApp) -> &Mutex<GrantState> {
@@ -760,6 +779,9 @@ impl WebApi {
             Route::Personal => &[WebApp::Personal, WebApp::Shared],
             Route::Shared => &[WebApp::Shared],
         };
+        if self.is_offline() {
+            bail!("sem conexão com a internet");
+        }
         let mut last_error = anyhow!("nenhum app da Web API conectado");
         for &app in apps {
             if !self.signed_in(app).await {

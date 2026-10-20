@@ -239,6 +239,13 @@ class AppActions(
         if (tracks.isEmpty()) return
         source?.let(app.library::recordPlay)
         val start = index.coerceIn(0, tracks.lastIndex)
+        // No network: the list's songs that are on the phone play here, with no
+        // session to start first.
+        if (!dev.nexfy.app.Connectivity.online.value) {
+            val undo = app.bridge.optimistic { it.copy(loading = true, stopped = false) }
+            app.commands.run(undo, connect = false) { core.playOffline(tracks.map { it.uri }, start.toUInt(), shuffle) }
+            return
+        }
         val inJam = dev.nexfy.app.ui.player.JamState.current.value != null
         if (remote != null) {
             command {

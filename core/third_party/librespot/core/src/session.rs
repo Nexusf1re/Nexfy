@@ -566,6 +566,20 @@ impl Session {
         );
     }
 
+    /// The account's country, for a session that never connected (offline):
+    /// availability is checked against it.
+    pub fn set_country(&self, country: &str) {
+        country.clone_into(
+            &mut self
+                .0
+                .data
+                .write()
+                .expect(SESSION_DATA_POISON_MSG)
+                .user_data
+                .country,
+        );
+    }
+
     pub fn country(&self) -> String {
         self.0
             .data
