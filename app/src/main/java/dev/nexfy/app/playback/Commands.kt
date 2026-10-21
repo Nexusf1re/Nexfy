@@ -35,6 +35,9 @@ private const val COMMAND_TIMEOUT_MS = 12_000L
 /** How long a song may load before the wait is explained. */
 private const val LOADING_PATIENCE_MS = 8_000L
 
+/** How long a resume may take to sound, a renewed session included, before the button goes back. */
+private const val PLAYING_PATIENCE_MS = 10_000L
+
 /**
  * Playback commands shared by the screens and the home-screen widget: to
  * this phone through the core, or to the device playing elsewhere. Each
@@ -155,6 +158,26 @@ class Commands(private val app: NexfyApp, private val scope: CoroutineScope) {
         }
         val undo = showPlaying(!playing)
         run(undo) { if (playing) core.pause() else core.resume() }
+        if (!playing) watchPlaying()
+    }
+
+    private var playingWatch: Job? = null
+
+    /**
+     * A resume the core accepts can still not sound (a stream that cannot go
+     * on): if the player has not started a while later, the play button and
+     * the widgets go back to what it really does instead of showing a song
+     * playing in silence.
+     */
+    private fun watchPlaying() {
+        playingWatch?.cancel()
+        playingWatch = scope.launch {
+            delay(PLAYING_PATIENCE_MS)
+            if (remote == null && bridge.local.value.playing && !core.isPlaying()) {
+                showPlaying(false)
+                refuse("Não deu para retomar. Tente de novo")
+            }
+        }
     }
 
     /** The play button turns and the clock stops or starts in the same frame as the tap. */

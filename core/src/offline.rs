@@ -41,6 +41,15 @@ pub struct Offline {
     files: Mutex<HashMap<String, String>>,
     /// The songs of kept playlists and albums: pinned in the audio cache.
     kept: Mutex<HashSet<String>>,
+    /// When the last audio key was asked, and until when none is: Spotify
+    /// refuses keys asked in a burst.
+    keys: Mutex<KeyPace>,
+}
+
+#[derive(Default)]
+struct KeyPace {
+    last: Option<std::time::Instant>,
+    refused_until: Option<std::time::Instant>,
 }
 
 impl Offline {
@@ -54,6 +63,7 @@ impl Offline {
             quality: Mutex::new(quality.downloading()),
             files: Mutex::new(load_files(cache_dir, quality)),
             kept: Mutex::new(kept),
+            keys: Mutex::default(),
         }
     }
 
@@ -179,11 +189,12 @@ impl Offline {
     pub async fn download(&self, session: &Session, uri: &str) -> Result<bool> {
         let parsed = SpotifyUri::from_uri(uri).map_err(|e| anyhow!("{e}"))?;
         let file = self.file_for(session, &parsed).await?;
-        if let SpotifyUri::Track { id } = &parsed {
-            // Kept on disk by the key manager: asked once per song.
-            session.audio_key().request(*id, file).await.map_err(|e| anyhow!("{e}"))?;
-        }
         let cache = session.cache().ok_or_else(|| anyhow!("sem cache de áudio"))?;
+        if let SpotifyUri::Track { id } = &parsed {
+            if cache.audio_key(file).is_none() {
+                self.fetch_key(session, *id, file, uri).await;
+            }
+        }
         let path = cache.file_path(file).ok_or_else(|| anyhow!("sem cache de áudio"))?;
         if path.exists() {
             return Ok(false);
@@ -204,6 +215,34 @@ impl Offline {
         Err(anyhow!("download de {uri} não foi salvo"))
     }
 }
+
+impl Offline {
+    /// Ask a song's audio key, for playing it offline: kept on disk by the key
+    /// manager once fetched. Spaced out, and none for a while after Spotify
+    /// refuses one: asked in a burst they are all refused. A song without one
+    /// still downloads, and gets it when played online.
+    async fn fetch_key(&self, session: &Session, id: librespot_core::SpotifyId, file: FileId, uri: &str) {
+        let wait = {
+            let pace = self.keys.lock().unwrap();
+            if pace.refused_until.is_some_and(|until| std::time::Instant::now() < until) {
+                return;
+            }
+            pace.last.map(|last| KEY_SPACING.saturating_sub(last.elapsed())).unwrap_or_default()
+        };
+        tokio::time::sleep(wait).await;
+        let result = session.audio_key().request(id, file).await;
+        let mut pace = self.keys.lock().unwrap();
+        pace.last = Some(std::time::Instant::now());
+        if let Err(error) = result {
+            log::info!("no audio key yet for {uri}: {error}");
+            pace.refused_until = Some(std::time::Instant::now() + KEY_PAUSE);
+        }
+    }
+}
+
+/// Between two audio keys asked ahead, and the pause after Spotify refuses one.
+const KEY_SPACING: Duration = Duration::from_millis(1500);
+const KEY_PAUSE: Duration = Duration::from_secs(10 * 60);
 
 /// Whether `uri` can play with no connection: its metadata, one of its
 /// audio files and that file's key are all on the phone. `session` is one

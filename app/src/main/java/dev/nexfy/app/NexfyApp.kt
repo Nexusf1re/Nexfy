@@ -43,8 +43,10 @@ import kotlinx.coroutines.flow.stateIn
 import uniffi.nexfy_core.NexfyCore
 
 /** Owns the single Rust core, shared by the UI and the playback service. */
-/** How often the library is read ahead on Wi-Fi. */
+/** How often the library is read ahead on Wi-Fi, how many lists each time, and the largest. */
 private const val WARM_EVERY_MS = 86_400_000L
+private const val WARM_PER_DAY = 12
+private const val WARM_MAX_TRACKS = 200
 
 /** Whether the phone reaches the internet now: kept by [NexfyApp], read by the screens. */
 object Connectivity {
@@ -154,24 +156,35 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 }
             }
         }
-        // On Wi-Fi, once a day: read every playlist and album of the library in
-        // the background, so each opens at once later, offline too. One at a
-        // time, as a listener browsing would.
+        // On Wi-Fi, once a day: read the library's playlists and albums that have
+        // no copy on the phone yet, so each opens at once later, offline too.
+        // A few a day, one at a time and not the huge ones: every song of a list
+        // is read, and Spotify limited the app when all of them went at once.
         scope.launch {
             combine(unmetered, network) { wifi, now -> wifi && now != null }.distinctUntilChanged().collectLatest { wifi ->
                 if (!wifi || System.currentTimeMillis() - library.warmedAt < WARM_EVERY_MS || !awaitConnected()) return@collectLatest
                 delay(30_000)
-                val playlists = runCatching { core.myPlaylists(false) }.getOrNull() ?: return@collectLatest
-                val albums = runCatching { core.savedAlbums(false) }.getOrNull().orEmpty()
-                for (playlist in playlists) {
-                    runCatching { core.playlist(playlist.id, false) }.onFailure { Log.d("Nexfy", "warm ${playlist.id}: ${it.message}") }
-                    delay(1_500)
-                }
-                for (album in albums) {
-                    runCatching { core.album(album.id, false) }.onFailure { Log.d("Nexfy", "warm ${album.id}: ${it.message}") }
-                    delay(1_500)
-                }
                 library.warmedAt = System.currentTimeMillis()
+                val playlists = runCatching { core.myPlaylists(false) }.getOrNull().orEmpty()
+                    .filter { it.trackCount.toInt() <= WARM_MAX_TRACKS && !core.playlistSaved(it.id) }
+                val albums = runCatching { core.savedAlbums(false) }.getOrNull().orEmpty().filter { !core.albumSaved(it.id) }
+                val reads = playlists.map { p -> suspend { core.playlist(p.id, false); Unit } } +
+                    albums.map { a -> suspend { core.album(a.id, false); Unit } }
+                for (read in reads.take(WARM_PER_DAY)) {
+                    val failed = runCatching { read() }.exceptionOrNull()
+                    // Limited by Spotify: the rest waits for tomorrow.
+                    if (failed?.message?.contains("limit") == true) break
+                    delay(5_000)
+                }
+            }
+        }
+        // Back on screen after a long pause: the session is renewed before the
+        // first tap needs it. Frozen in the background, it had died unnoticed.
+        scope.launch {
+            visible.collect { shown ->
+                if (!shown) return@collect
+                runCatching { core.wake() }
+                refreshRemote()
             }
         }
         // The Auto quality streams lower on mobile data.

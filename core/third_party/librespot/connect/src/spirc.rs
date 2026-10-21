@@ -120,6 +120,7 @@ static SPIRC_COUNTER: AtomicUsize = AtomicUsize::new(0);
 #[derive(Debug)]
 enum SpircCommand {
     Restore(Arc<PlaybackSnapshot>),
+    Snapshot(tokio::sync::oneshot::Sender<Option<Arc<PlaybackSnapshot>>>),
     Play,
     PlayPause,
     Pause,
@@ -354,6 +355,15 @@ impl Spirc {
     /// bring the future initially returned to an end.
     pub fn shutdown(&self) -> Result<(), Error> {
         Ok(self.commands.send(SpircCommand::Shutdown)?)
+    }
+
+    /// The playback on this device, to carry it to a new session with
+    /// [Spirc::restore_playback]: a session can die unnoticed (an app frozen in
+    /// the background answers no pings). None while nothing is loaded.
+    pub async fn playback_snapshot(&self) -> Option<Arc<PlaybackSnapshot>> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.commands.send(SpircCommand::Snapshot(tx)).ok()?;
+        rx.await.ok().flatten()
     }
 
     /// Resumes the playback
@@ -667,22 +677,7 @@ impl SpircTask {
         }
 
         if !self.shutdown && self.connect_state.is_active() {
-            if !matches!(self.play_status, SpircPlayStatus::Stopped)
-                && self.transfer_state.is_none()
-                && self.connect_state.current_track(MessageField::is_some)
-            {
-                let snapshot = PlaybackSnapshot {
-                    state: self.connect_state.clone(),
-                    pending: self.context_resolver.pending(),
-                    username: self.session.username(),
-                    position_ms: self.position(),
-                    // The play status, not the last state sent: a pause made
-                    // offline never reached the server.
-                    playing: matches!(
-                        self.play_status,
-                        SpircPlayStatus::Playing { .. } | SpircPlayStatus::LoadingPlay { .. }
-                    ),
-                };
+            if let Some(snapshot) = self.snapshot() {
                 *self
                     .disconnected_playback
                     .lock()
@@ -797,9 +792,39 @@ impl SpircTask {
         dur.as_millis() as i64 + 1000 * self.session.time_delta()
     }
 
+    /// The playback here, as [Spirc::restore_playback] takes it.
+    fn snapshot(&mut self) -> Option<PlaybackSnapshot> {
+        if matches!(self.play_status, SpircPlayStatus::Stopped)
+            || self.transfer_state.is_some()
+            || !self.connect_state.current_track(MessageField::is_some)
+        {
+            return None;
+        }
+        Some(PlaybackSnapshot {
+            state: self.connect_state.clone(),
+            pending: self.context_resolver.pending(),
+            username: self.session.username(),
+            position_ms: self.position(),
+            // The play status, not the last state sent: a pause made
+            // offline never reached the server.
+            playing: matches!(
+                self.play_status,
+                SpircPlayStatus::Playing { .. } | SpircPlayStatus::LoadingPlay { .. }
+            ),
+        })
+    }
+
     async fn handle_command(&mut self, cmd: SpircCommand) -> Result<(), Error> {
         trace!("Received SpircCommand::{cmd:?}");
         match cmd {
+            SpircCommand::Snapshot(reply) => {
+                let snapshot = if self.connect_state.is_active() {
+                    self.snapshot().map(Arc::new)
+                } else {
+                    None
+                };
+                let _ = reply.send(snapshot);
+            }
             SpircCommand::Shutdown => {
                 trace!("Received SpircCommand::Shutdown");
                 self.handle_pause();

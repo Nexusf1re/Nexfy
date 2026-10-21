@@ -238,6 +238,8 @@ struct Inner {
     reconnecting: tokio::sync::Mutex<()>,
     /// A dropped session is being brought back in the background.
     healing: AtomicBool,
+    /// Since when the song in this phone's player is paused.
+    paused_at: Mutex<Option<std::time::Instant>>,
     queue: Mutex<QueueState>,
     /// Metadata for queue entries, fetched once per track.
     track_cache: Mutex<HashMap<String, Track>>,
@@ -292,6 +294,7 @@ impl NexfyCore {
                 track_cache: Mutex::new(tracks),
                 reconnecting: tokio::sync::Mutex::new(()),
                 healing: AtomicBool::new(false),
+                paused_at: Mutex::new(None),
                 listener: Mutex::new(None),
                 playing: AtomicBool::new(false),
                 loaded: AtomicBool::new(false),
@@ -482,6 +485,18 @@ impl NexfyCore {
 
     /// The playlist service first (no Web API quota): its rows in one
     /// request, the songs from the track cache. The Web API is the fallback.
+    /// Whether a playlist's page is kept on the phone, however old.
+    pub fn playlist_saved(&self, id: String) -> bool {
+        let key = format!("session:playlist5:{id}");
+        self.inner.web.load_local::<PlaylistDetail>(&key, std::time::Duration::from_secs(365 * 86_400)).is_some()
+    }
+
+    /// Whether an album's page is kept on the phone, however old.
+    pub fn album_saved(&self, id: String) -> bool {
+        let key = format!("session:album:{id}");
+        self.inner.web.load_local::<AlbumDetail>(&key, std::time::Duration::from_secs(365 * 86_400)).is_some()
+    }
+
     pub async fn playlist(&self, id: String, refresh: bool) -> Result<PlaylistDetail, CoreError> {
         let web = &self.inner.web;
         let key = format!("session:playlist5:{id}");
@@ -1060,6 +1075,18 @@ impl NexfyCore {
         self.inner.connected.lock().unwrap().is_some()
     }
 
+    /// The app is back on screen. After a long pause it was likely frozen
+    /// and its session dead without knowing: replace it now, the paused
+    /// song carried over, before the first tap needs it.
+    pub async fn wake(&self) {
+        if self.inner.offline_play().is_some() || self.inner.web.is_offline() || !self.inner.paused_long() {
+            return;
+        }
+        if let Err(error) = self.inner.renew_session().await {
+            log::info!("session not renewed: {error}");
+        }
+    }
+
     /// Whether the phone reaches the internet; offline, requests fail at once
     /// and what was kept answers.
     pub fn set_online(&self, online: bool) {
@@ -1207,6 +1234,14 @@ impl NexfyCore {
     pub async fn resume(&self) -> Result<(), CoreError> {
         log::info!("resume");
         if self.inner.loaded.load(Ordering::Relaxed) {
+            // Paused long, the session may have died unnoticed and the rest of
+            // the song could not stream: a new one first, the song carried
+            // over, and played through it.
+            if self.inner.offline_play().is_none() && !self.inner.web.is_offline() && self.inner.paused_long() {
+                if let Ok(true) = self.inner.renew_session().await {
+                    return self.inner.with_spirc(|spirc| spirc.play());
+                }
+            }
             return self.inner.with_player(|player| player.play());
         }
         self.inner.ensure_session().await?;
@@ -1452,6 +1487,11 @@ impl NexfyCore {
             old.player.stop();
         }
         Ok(count)
+    }
+
+    /// Whether this phone's player is playing, as its last event said.
+    pub fn is_playing(&self) -> bool {
+        self.inner.playing.load(Ordering::Relaxed)
     }
 
     /// Whether what plays here is songs on the phone, with no connection.
@@ -1885,7 +1925,7 @@ impl Inner {
         }
         let _turn = self.reconnecting.lock().await;
         // Someone else may have reconnected while this call waited.
-        let (player, old_spirc) = {
+        let old_spirc = {
             let connected = self.connected.lock().unwrap();
             let connected = connected
                 .as_ref()
@@ -1893,25 +1933,83 @@ impl Inner {
             if !connected.session.is_invalid() {
                 return Ok(());
             }
-            (connected.player.clone(), connected.spirc.clone())
+            connected.spirc.clone()
         };
-
         log::warn!("session closed by the server, reconnecting");
         let snapshot = old_spirc.disconnected_playback();
+        self.replace_session(old_spirc, snapshot).await.map(|_| ())
+    }
+
+    /// Whether the song here has been paused long enough for Android to have
+    /// frozen the app: Media3 keeps a paused service in the foreground for
+    /// ten minutes, and frozen, the app answers none of Spotify's pings.
+    fn paused_long(&self) -> bool {
+        self.paused_at.lock().unwrap().is_some_and(|at| at.elapsed() >= PAUSED_LONG)
+    }
+
+    /// Replace the session even though it looks alive, carrying the playback
+    /// over. Frozen in the background, the app answered no pings, the server
+    /// dropped the session, and librespot had not noticed: the first command
+    /// after waking went nowhere, and the rest of the paused song could not
+    /// stream. Returns whether a song came along.
+    async fn renew_session(&self) -> Result<bool, CoreError> {
+        let _turn = self.reconnecting.lock().await;
+        let old_spirc = self
+            .connected
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|connected| connected.spirc.clone())
+            .ok_or_else(|| CoreError::Session("não conectado".into()))?;
+        // Asked of the old Connect device, which still runs here with its
+        // session gone; not waited on for long.
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(2), old_spirc.playback_snapshot())
+            .await
+            .ok()
+            .flatten();
+        log::info!("renewing the session after a long pause (song carried over: {})", snapshot.is_some());
+        let restored = self.replace_session(old_spirc, snapshot).await?;
+        // A fresh session: the pause counts from now, or a resume right after
+        // waking would renew it again.
+        if let Some(at) = self.paused_at.lock().unwrap().as_mut() {
+            *at = std::time::Instant::now();
+        }
+        Ok(restored)
+    }
+
+    /// A new session and Connect device for the same player, and the song
+    /// that was here restored on it. Returns whether there was one.
+    async fn replace_session(
+        &self,
+        old_spirc: Arc<Spirc>,
+        snapshot: Option<Arc<librespot_connect::PlaybackSnapshot>>,
+    ) -> Result<bool, CoreError> {
+        let player = self
+            .connected
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|connected| connected.player.clone())
+            .ok_or_else(|| CoreError::Session("não conectado".into()))?;
         let _ = old_spirc.shutdown();
         let session = self.new_session()?;
         player.set_session(session.clone());
         let spirc = self.start_spirc(&session, player, self.stored_credentials()?).await?;
-        if let Some(snapshot) = snapshot {
-            if let Err(error) = spirc.restore_playback(snapshot) {
-                log::warn!("could not restore playback: {error}");
-            }
-        }
+        let restored = match snapshot {
+            Some(snapshot) => match spirc.restore_playback(snapshot) {
+                Ok(()) => true,
+                Err(error) => {
+                    log::warn!("could not restore playback: {error}");
+                    false
+                }
+            },
+            None => false,
+        };
         if let Some(connected) = self.connected.lock().unwrap().as_mut() {
             connected.session = session;
             connected.spirc = spirc;
         }
-        Ok(())
+        Ok(restored)
     }
 
     /// Reconnect a session that dropped with a song in the player, and put
@@ -2019,6 +2117,8 @@ impl Inner {
 
 /// How many upcoming and past queue entries Kotlin gets.
 const QUEUE_AHEAD: usize = 100;
+/// A pause this long may have outlasted the foreground service: see [Inner::paused_long].
+const PAUSED_LONG: std::time::Duration = std::time::Duration::from_secs(9 * 60);
 const QUEUE_BEHIND: usize = 20;
 
 fn entry(track: QueueTrack) -> QueueEntry {
@@ -2079,11 +2179,13 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
             PlayerEvent::Playing { position_ms, .. } => {
                 inner.loaded.store(true, Ordering::Relaxed);
                 inner.playing.store(true, Ordering::Relaxed);
+                *inner.paused_at.lock().unwrap() = None;
                 inner.emit(CoreEvent::Playing { position_ms });
             }
             PlayerEvent::Paused { position_ms, .. } => {
                 inner.loaded.store(true, Ordering::Relaxed);
                 inner.playing.store(false, Ordering::Relaxed);
+                inner.paused_at.lock().unwrap().get_or_insert_with(std::time::Instant::now);
                 inner.emit(CoreEvent::Paused { position_ms });
             }
             PlayerEvent::Seeked { position_ms, .. }
