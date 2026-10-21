@@ -5,6 +5,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import dev.nexfy.app.ui.design.LocalScreenScope
 import dev.nexfy.app.ui.design.LocalSharedScope
 import kotlinx.coroutines.CancellationException
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -13,11 +14,18 @@ import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.SeekableTransitionState
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.Job
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -73,6 +81,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.session.MediaController
@@ -415,23 +424,56 @@ fun NexfyRoot(
     // dragged, a tap on the arrow or the button, keeps the card animation.
     val target = nav.screen
     val screens = remember { SeekableTransitionState(target) }
-    LaunchedEffect(target) { screens.animateTo(target) }
-    MetricsState("screen", target.route?.key?.substringBefore(':') ?: "tab-${target.tab.name.lowercase()}")
-    MetricsState("nav", if (screens.currentState != screens.targetState) "moving" else null)
     // Whether the page underneath is being uncovered by a finger: the drag
     // from the edge and the drag from anywhere both say so, and both get the
-    // slide. Set before the first seek, which is what starts the transition.
+    // slide. Set before the first seek, which is what starts the transition,
+    // and cleared only once the pages have settled: cleared as the way back
+    // of a drag let go began, it switched to the card animation halfway.
     var swiping by remember { mutableStateOf(false) }
+    fun settled() {
+        if (screens.currentState == screens.targetState) swiping = false
+    }
+    // A back drag given up: the page slides home from where it was let go,
+    // the same slide seeked backwards frame by frame, and is then put there.
+    // animateTo(currentState) reversed the transition instead, and Compose
+    // started that one from its beginning: the page's entrance from a card,
+    // over the whole page underneath, which was the jump.
+    var rewinding by remember { mutableStateOf<Job?>(null) }
+    suspend fun stayHere() {
+        val parent = screens.targetState
+        val from = screens.fraction
+        if (parent != screens.currentState && from > 0f) {
+            val ms = (Motion.SWIPE_MS * from).coerceAtLeast(120f)
+            val start = withFrameNanos { it }
+            while (true) {
+                val t = ((withFrameNanos { it } - start) / 1_000_000f / ms).coerceIn(0f, 1f)
+                screens.seekTo(from * (1f - FastOutSlowInEasing.transform(t)), parent)
+                if (t >= 1f) break
+            }
+        }
+        screens.snapTo(screens.currentState)
+        settled()
+    }
+    LaunchedEffect(target) {
+        screens.animateTo(target)
+        settled()
+    }
+    MetricsState("screen", target.route?.key?.substringBefore(':') ?: "tab-${target.tab.name.lowercase()}")
+    MetricsState("nav", if (screens.currentState != screens.targetState) "moving" else null)
+    val windowWidth = LocalWindowInfo.current.containerSize.width.toFloat().coerceAtLeast(1f)
     PredictiveBackHandler(enabled = nav.stack().isNotEmpty()) { events ->
+        rewinding?.cancel()
         val parent = nav.parentScreen()
         try {
-            events.collect {
+            var touched = false
+            events.collect { event ->
                 swiping = true
-                screens.seekTo(it.progress, parent)
+                touched = touched || event.touchX > 0f
+                screens.seekTo(backTravel(event, windowWidth, touched), parent)
             }
             nav.pop()
         } catch (e: CancellationException) {
-            scope.launch { screens.animateTo(screens.currentState) }
+            rewinding = scope.launch { stayHere() }
             throw e
         }
     }
@@ -448,12 +490,10 @@ fun NexfyRoot(
             if (p >= 0f && parent != null) screens.seekTo(p, parent)
         }
     }
-    LaunchedEffect(screens.currentState, screens.targetState) {
-        if (screens.currentState == screens.targetState && swipe < 0f) swiping = false
-    }
     val swipeBack = Modifier.swipeToBack(
         enabled = swipeBackOn && nav.stack().isNotEmpty(),
         onStart = {
+            rewinding?.cancel()
             haptics.tick()
             swipeParent = nav.parentScreen()
             swiping = true
@@ -464,7 +504,7 @@ fun NexfyRoot(
             if (done) {
                 nav.pop()
             } else {
-                scope.launch { screens.animateTo(screens.currentState) }
+                rewinding = scope.launch { stayHere() }
             }
         },
     )
@@ -495,7 +535,10 @@ fun NexfyRoot(
                     .glassSource(haze).then(swipeBack),
             ) {
                 SharedTransitionLayout(Modifier.fillMaxSize()) {
-                    CompositionLocalProvider(LocalSharedScope provides this) {
+                    // No cover morph under a back drag: the page slides off whole, its
+                    // cover with it. The morph started from the card underneath, its
+                    // image still loading (a blank square), and crossed the slide.
+                    CompositionLocalProvider(LocalSharedScope provides this.takeUnless { swiping }) {
                         rememberTransition(screens, label = "screen").AnimatedContent(
                             modifier = Modifier.fillMaxSize(),
                             transitionSpec = {
@@ -508,7 +551,13 @@ fun NexfyRoot(
                             },
                         ) { screen ->
                             // Pages leaving or arriving show as rounded cards.
-                            val corner by transition.animateDp(label = "corner") { if (it == EnterExitState.Visible) 0.dp else 32.dp }
+                            // Under a back drag, as long as the slide: a longer spring here
+                            // stretched the seek, and the page ran ahead of the finger (half
+                            // open with the finger at a third, then sent back on release).
+                            val corner by transition.animateDp(
+                                transitionSpec = { if (swiping) tween(Motion.SWIPE_MS, easing = LinearEasing) else spring(visibilityThreshold = Dp.VisibilityThreshold) },
+                                label = "corner",
+                            ) { if (it == EnterExitState.Visible) 0.dp else 32.dp }
                             CompositionLocalProvider(LocalScreenScope provides this) {
                                 Box(
                                     Modifier.fillMaxSize().graphicsLayer {
@@ -713,6 +762,21 @@ private fun LinkOpener(actions: AppActions) {
             null -> android.widget.Toast.makeText(actions.app, "Esse link do Spotify não abre no Nexfy", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
+}
+
+/**
+ * How far a back gesture from the edge has gone, 0 to 1 of the width: where
+ * the finger is, not the system's progress. That one eases behind the finger
+ * and, on a gesture given up, eases back from where it lagged, so the page
+ * jumped out again before settling. Only a gesture that never [touched] a
+ * position (some report none) goes by the progress: once one has, x = 0 is
+ * the finger back at the edge, and taking the progress there brought the
+ * lagging value, and the jump, right back.
+ */
+private fun backTravel(event: BackEventCompat, width: Float, touched: Boolean): Float {
+    if (!touched) return event.progress
+    val travel = if (event.swipeEdge == BackEventCompat.EDGE_RIGHT) width - event.touchX else event.touchX
+    return (travel / width).coerceIn(0f, 1f)
 }
 
 /**

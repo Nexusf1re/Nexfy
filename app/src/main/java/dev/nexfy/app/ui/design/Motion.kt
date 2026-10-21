@@ -161,7 +161,12 @@ object Motion {
             targetContentZIndex = -1f,
         )
 
-    private const val SWIPE_MS = 320
+    /**
+     * The back slide's length. Anything else animated by the screen transition
+     * must last as long under a back drag: a seek divides the longest one,
+     * and a longer corner made the page run ahead of the finger.
+     */
+    const val SWIPE_MS = 320
 
     /** Content taking its skeleton's place: it slides in a little from the right as the skeleton fades. */
     val arrive: ContentTransform
