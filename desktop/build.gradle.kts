@@ -17,6 +17,9 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(libs.kotlinx.coroutines.swing)
+    // Windows keeps the animations of a window behind its styles, which an
+    // undecorated one is missing (see WindowsChrome.kt).
+    implementation(libs.jna)
 }
 
 /**

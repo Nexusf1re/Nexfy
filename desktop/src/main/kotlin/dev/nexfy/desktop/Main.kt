@@ -98,7 +98,11 @@ fun main() {
         ) {
             // Below this the three columns have nowhere to go; the shell drops
             // the right panel on its own before that.
-            LaunchedEffect(Unit) { window.minimumSize = Dimension(940, 620) }
+            LaunchedEffect(Unit) {
+                window.minimumSize = Dimension(940, 620)
+                // Undecorated, the window had lost the shell's own motion.
+                restoreWindowAnimations(window)
+            }
             val scope = this
             val frame = remember(scope, windowState) {
                 object : WindowFrame {
