@@ -52,6 +52,9 @@ class DesktopServices(
     /** No system notification here: the message goes over the dock, where the app's own do. */
     override fun toast(message: String) = edits.tell(message)
 
+    /** Nothing freezes a window on a computer. */
+    override suspend fun <T> keepingAwake(block: suspend () -> T): T = block()
+
     /**
      * Follow what the account plays on its other devices, fetch the songs
      * either side of the current one, and keep the session awake. The phone

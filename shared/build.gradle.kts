@@ -70,20 +70,29 @@ kotlin {
         androidMain.get().dependsOn(commonJvmMain)
         named("desktopMain").get().dependsOn(commonJvmMain)
 
+        // Compose, Coil and Haze stand in this module's own signatures (a
+        // screen takes a PlatformContext, the theme carries a Look), so the
+        // apps that show these screens compile against them too.
         commonMain.dependencies {
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.materialIconsExtended)
-            implementation(compose.ui)
-            implementation(libs.kotlinx.coroutines.core)
+            api(compose.runtime)
+            api(compose.foundation)
+            api(compose.material3)
+            api(compose.materialIconsExtended)
+            api(compose.ui)
+            api(libs.kotlinx.coroutines.core)
+        }
+        androidMain.dependencies {
+            // The predictive back gesture and the jank measurements, both of
+            // which only Android has.
+            implementation(libs.androidx.activity.compose)
+            implementation(libs.androidx.metrics.performance)
         }
         commonJvmMain.dependencies {
             // UniFFI's bindings call the core through JNA.
             implementation(libs.jna)
-            implementation(libs.coil.compose)
-            implementation(libs.coil.network.okhttp)
-            implementation(libs.haze)
+            api(libs.coil.compose)
+            api(libs.coil.network.okhttp)
+            api(libs.haze)
         }
     }
 }

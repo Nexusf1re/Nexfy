@@ -55,6 +55,13 @@ interface NexfyServices {
 
     /** A short message the system shows over the app, outside its own windows. */
     fun toast(message: String)
+
+    /**
+     * Run [block] with the process kept awake. A phone freezes a
+     * backgrounded app, which strands the sign-in while the browser covers
+     * Nexfy; nothing does that to a window on a computer.
+     */
+    suspend fun <T> keepingAwake(block: suspend () -> T): T
 }
 
 /**
