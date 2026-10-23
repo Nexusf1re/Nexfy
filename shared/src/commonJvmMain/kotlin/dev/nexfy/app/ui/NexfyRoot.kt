@@ -623,7 +623,7 @@ fun NexfyRoot(
 }
 
 @Composable
-private fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifier) {
+internal fun ScreenContent(screen: Screen, actions: AppActions, modifier: Modifier) {
     val nav = actions.nav
     when (val route = screen.route) {
         is Route.Playlist -> PlaylistScreen(actions, route.id, nav.list(route.key), modifier)
@@ -729,7 +729,7 @@ private fun Dock(tab: Tab, onSelect: (Tab) -> Unit, modifier: Modifier) {
  * the Jam and shows it.
  */
 @Composable
-private fun LinkOpener(actions: AppActions) {
+internal fun LinkOpener(actions: AppActions) {
     val link by SpotifyLinks.pending.collectAsState()
     var jamOpen by remember { mutableStateOf(false) }
     if (jamOpen) dev.nexfy.app.ui.player.JamSheet { jamOpen = false }

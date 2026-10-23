@@ -19,13 +19,43 @@ dependencies {
     implementation(libs.kotlinx.coroutines.swing)
 }
 
+/**
+ * The directory JNA looks in on the classpath for a bundled library:
+ * `win32-x86-64`, `darwin-aarch64`, `linux-x86-64`. Putting the core there
+ * makes `Native.register` find it both from Gradle and from an installed
+ * app, with no library path to set.
+ */
+val jnaPlatform: String = run {
+    val os = System.getProperty("os.name").lowercase()
+    val arch = when (val a = System.getProperty("os.arch").lowercase()) {
+        "amd64", "x86_64" -> "x86-64"
+        "aarch64", "arm64" -> "aarch64"
+        else -> a
+    }
+    val prefix = when {
+        os.startsWith("windows") -> "win32"
+        os.startsWith("mac") -> "darwin"
+        else -> "linux"
+    }
+    "$prefix-$arch"
+}
+
+/** Carries the host build of the core into the app's own resources. */
+val bundleRustCore by tasks.registering(Copy::class) {
+    dependsOn(":shared:buildRustCoreHost")
+    from(rootProject.file("core/target/android-dev/${System.mapLibraryName("nexfy_core")}"))
+    into(layout.buildDirectory.dir("generated/core/$jnaPlatform"))
+}
+
+sourceSets.main {
+    resources.srcDir(layout.buildDirectory.dir("generated/core"))
+}
+
+tasks.named("processResources") { dependsOn(bundleRustCore) }
+
 compose.desktop {
     application {
         mainClass = "dev.nexfy.desktop.MainKt"
-        // Where :shared leaves the host build of the core, so JNA finds it
-        // the way it finds jniLibs on the phone. A packaged app carries the
-        // library itself instead.
-        jvmArgs += "-Djna.library.path=" + rootProject.file("core/target/android-dev").path
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Nexfy"

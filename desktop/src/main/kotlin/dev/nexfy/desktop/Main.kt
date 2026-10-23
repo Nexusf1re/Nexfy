@@ -39,7 +39,7 @@ import dev.nexfy.app.LocalServices
 import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.nexfyDataDir
 import dev.nexfy.app.ui.DesktopBack
-import dev.nexfy.app.ui.NexfyRoot
+import dev.nexfy.app.ui.NexfyDesktop
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.systemAnimationsOff
 import dev.nexfy.app.ui.openInBrowser
@@ -152,7 +152,7 @@ private fun App(services: DesktopServices) {
     val look = remember(backdrop, lyricsSize, addedBy) { Look(backdrop, lyricsSize.scale, addedBy, haptics = false) }
     NexfyTheme(dark = dark, accentArt = accentArt, look = look) {
         CompositionLocalProvider(LocalServices provides services) {
-            NexfyRoot(services, openBrowser = { openInBrowser(context, it) })
+            NexfyDesktop(services, openBrowser = { openInBrowser(context, it) })
         }
     }
 }
