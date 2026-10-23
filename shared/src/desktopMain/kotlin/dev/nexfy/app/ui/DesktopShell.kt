@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FilterNone
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Repeat
@@ -87,6 +89,7 @@ import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
 import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.LocalShellHeader
+import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.PlayingBars
 import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.ThinSlider
@@ -95,11 +98,14 @@ import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.player.DevicesSheet
+import dev.nexfy.app.ui.player.LyricsState
+import dev.nexfy.app.ui.player.LyricsView
 import dev.nexfy.app.ui.player.PlayPauseGlyph
 import dev.nexfy.app.ui.player.TrackActionsSheet
 import dev.nexfy.app.ui.theme.Hairline
 import dev.nexfy.app.ui.theme.accentColor
 import dev.nexfy.app.ui.theme.isDark
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
@@ -151,6 +157,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     val snapshot by services.bridge.state.collectAsState()
     val backdrop = remember { GlassBackdrop() }
     var panelOpen by remember { mutableStateOf(false) }
+    var panelTab by remember { mutableStateOf(PanelTab.Queue) }
 
     ShimmerDriver()
     // The media keys, for as long as this shell is up.
@@ -197,14 +204,17 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 Sidebar(actions, Modifier.width(SidebarWidth).fillMaxHeight())
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
                 if (panelOpen && roomForPanel) {
-                    SongPanel(snapshot, actions, Modifier.width(PanelWidth).fillMaxHeight())
+                    SongPanel(snapshot, actions, panelTab, { panelTab = it }, Modifier.width(PanelWidth).fillMaxHeight())
                 }
             }
             }
             PlayingBar(
                 snapshot, actions,
                 panelOpen = panelOpen && roomForPanel,
-                onPanel = { panelOpen = !panelOpen }.takeIf { roomForPanel },
+                onPanel = { tab: PanelTab ->
+                    panelOpen = !(panelOpen && panelTab == tab)
+                    panelTab = tab
+                }.takeIf { roomForPanel },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             )
@@ -477,7 +487,7 @@ private fun PlayingBar(
     s: PlaybackSnapshot,
     actions: AppActions,
     panelOpen: Boolean,
-    onPanel: (() -> Unit)?,
+    onPanel: ((PanelTab) -> Unit)?,
     modifier: Modifier,
 ) {
     val c = MaterialTheme.colorScheme
@@ -522,8 +532,9 @@ private fun PlayingBar(
         // Where it plays, and how loud.
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             if (s.playing) PlayingBars(accentColor(), Modifier.size(16.dp).padding(end = 2.dp))
-            onPanel?.let {
-                NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, if (panelOpen) "Fechar a fila" else "A seguir", it)
+            onPanel?.let { open ->
+                NavIcon(Icons.Rounded.Lyrics, "Letra") { open(PanelTab.Lyrics) }
+                NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, "A seguir") { open(PanelTab.Queue) }
             }
             NavIcon(Icons.Rounded.Devices, "Dispositivos") { actions.openDevices() }
             Volume(s, actions)
@@ -640,47 +651,110 @@ private fun Volume(s: PlaybackSnapshot, actions: AppActions) {
 
 // -------------------------------------------------------------- song panel
 
-/** The song's own column: its art large, and what plays after it. */
+/** What the right-hand column is showing. */
+private enum class PanelTab(val label: String) {
+    Queue("A seguir"),
+    Lyrics("Letra"),
+}
+
+/**
+ * The song's own column: its art, what plays after it, and the words. The
+ * phone keeps all three behind the player's own gestures; a window has the
+ * room to leave one of them standing open beside the page.
+ */
 @Composable
-private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, onTab: (PanelTab) -> Unit, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     val track = s.track
+    Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp, bottom = BarHeight + 16.dp)) {
+        Panel(Modifier.weight(1f)) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Cover(track?.coverUrl, Modifier.size(44.dp), radius = 10.dp)
+                Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                    Text(
+                        track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        track?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            PillSelector(
+                PanelTab.entries, tab, { it.label }, onTab,
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+            )
+            when (tab) {
+                PanelTab.Queue -> QueueList(s, actions, Modifier.weight(1f))
+                PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** The cover large, then the songs lined up behind this one. */
+@Composable
+private fun QueueList(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
     val next = s.queue.next
     val uris = remember(next) { next.take(30).map { it.uri } }
     val songs by produceState(emptyList<Track>(), uris) {
         value = if (uris.isEmpty()) emptyList() else runCatching { actions.core.tracksInfo(uris) }.getOrDefault(emptyList())
     }
-    Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp, bottom = BarHeight + 16.dp)) {
-        Panel(Modifier.weight(1f)) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
-                item {
-                    Cover(track?.coverUrl, Modifier.fillMaxWidth(), radius = 16.dp)
-                    Text(
-                        track?.title ?: "Nada tocando",
-                        Modifier.padding(top = 14.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        track?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 13.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        "A seguir", Modifier.padding(top = 22.dp, bottom = 6.dp),
-                        color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                itemsIndexed(songs) { i, song ->
-                    ShelfRow(song.imageUrl, song.title, song.artists) {
-                        next.getOrNull(i)?.let { actions.skipTo(it, i) }
-                    }
-                }
-                if (songs.isEmpty()) {
-                    item {
-                        Text("A fila está vazia.", color = c.onSurfaceVariant, fontSize = 13.sp)
-                    }
-                }
+    LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 16.dp)) {
+        item {
+            Cover(s.track?.coverUrl, Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), radius = 16.dp)
+        }
+        itemsIndexed(songs) { i, song ->
+            ShelfRow(song.imageUrl, song.title, song.artists) {
+                next.getOrNull(i)?.let { actions.skipTo(it, i) }
+            }
+        }
+        if (songs.isEmpty()) {
+            item {
+                Text(
+                    "A fila está vazia.",
+                    Modifier.padding(16.dp),
+                    color = c.onSurfaceVariant, fontSize = 13.sp,
+                )
             }
         }
     }
+}
+
+/**
+ * The words, scrolling with the song where they are timed. The same view
+ * the phone's player shows, which seeks to a line when one is clicked.
+ */
+@Composable
+private fun LyricsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+    val track = s.track
+    if (track == null) {
+        Box(modifier.fillMaxWidth(), Alignment.Center) {
+            Text("Nada tocando", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        }
+        return
+    }
+    var lyrics by remember(track.uri) { mutableStateOf<LyricsState>(LyricsState.Loading) }
+    LaunchedEffect(track.uri) {
+        lyrics = try {
+            actions.lyrics(track)?.let { LyricsState.Found(it) } ?: LyricsState.None
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            LyricsState.Failed
+        }
+    }
+    // Timed lines follow the song, so the position is read every frame.
+    val position by produceState(0L, s) {
+        while (true) {
+            withFrameMillis { }
+            value = s.currentPositionMs()
+        }
+    }
+    LyricsView(lyrics, position, actions, modifier.fillMaxWidth().padding(horizontal = 18.dp), playback = s)
 }

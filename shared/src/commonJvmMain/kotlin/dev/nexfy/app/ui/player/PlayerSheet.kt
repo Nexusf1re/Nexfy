@@ -1453,7 +1453,7 @@ sealed interface LyricsState {
  * by word, following [playback] frame by frame (null holds it at [position]).
  */
 @Composable
-private fun LyricsView(
+internal fun LyricsView(
     state: LyricsState,
     position: Long,
     controls: PlayerControls,
