@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.unit.Dp
 import coil3.PlatformContext
 import java.awt.Desktop
@@ -99,3 +100,19 @@ actual fun appVersion(context: PlatformContext): String? =
     DesktopBack::class.java.`package`?.implementationVersion
 
 actual fun appDataDir(context: PlatformContext): java.io.File = dev.nexfy.app.nexfyDataDir()
+
+/**
+ * The keys a music app answers: the media keys of a keyboard that has
+ * them, and Ctrl with the arrows for the same on one that does not. The
+ * window hands every key press here first.
+ *
+ * Space is deliberately not one of them: it would be taken from the
+ * search field as the user typed.
+ */
+object DesktopKeys {
+    /** Set by the shell while it is up. */
+    internal var handler: ((key: Key, ctrl: Boolean) -> Boolean)? = null
+
+    /** True when the app took the key, so the window leaves it alone. */
+    fun pressed(key: Key, ctrl: Boolean): Boolean = handler?.invoke(key, ctrl) == true
+}

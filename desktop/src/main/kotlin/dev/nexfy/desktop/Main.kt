@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.DpSize
@@ -40,6 +41,7 @@ import dev.nexfy.app.LocalServices
 import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.nexfyDataDir
 import dev.nexfy.app.ui.DesktopBack
+import dev.nexfy.app.ui.DesktopKeys
 import dev.nexfy.app.ui.NexfyDesktop
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.systemAnimationsOff
@@ -73,8 +75,17 @@ fun main() {
             title = "Nexfy",
             state = rememberWindowState(size = DpSize(1100.dp, 760.dp)),
             // Esc is this machine's back gesture; the innermost screen that
-            // wants it takes it, and the window keeps the rest.
-            onPreviewKeyEvent = { it.type == KeyEventType.KeyDown && it.key == Key.Escape && DesktopBack.pressed() },
+            // wants it takes it, and the window keeps the rest. The media
+            // keys drive playback wherever the focus is.
+            onPreviewKeyEvent = { event ->
+                if (event.type != KeyEventType.KeyDown) {
+                    false
+                } else if (event.key == Key.Escape) {
+                    DesktopBack.pressed()
+                } else {
+                    DesktopKeys.pressed(event.key, event.isCtrlPressed)
+                }
+            },
         ) {
             // Below this the three columns have nowhere to go; the shell drops
             // the right panel on its own before that.

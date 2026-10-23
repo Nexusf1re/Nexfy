@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -43,6 +44,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -115,6 +118,27 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit) {
     var panelOpen by remember { mutableStateOf(false) }
 
     ShimmerDriver()
+    // The media keys, for as long as this shell is up.
+    DisposableEffect(actions) {
+        DesktopKeys.handler = { key, ctrl ->
+            when {
+                key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause -> {
+                    actions.playPause()
+                    true
+                }
+                key == Key.MediaNext || (ctrl && key == Key.DirectionRight) -> {
+                    actions.next()
+                    true
+                }
+                key == Key.MediaPrevious || (ctrl && key == Key.DirectionLeft) -> {
+                    actions.previous()
+                    true
+                }
+                else -> false
+            }
+        }
+        onDispose { DesktopKeys.handler = null }
+    }
     // Esc goes back a page, then out of a tab, as the phone's back does.
     BackGesture(enabled = nav.stack().isNotEmpty()) { nav.pop() }
     BackGesture(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
@@ -296,6 +320,14 @@ private fun ShelfRow(art: String?, title: String, subtitle: String, icon: ImageV
 
 // --------------------------------------------------------------------- page
 
+/**
+ * The pages that are a column of words and switches, which read badly
+ * stretched across a wide window. Lists and art fill it as they should.
+ */
+private val Reading = setOf(
+    Route.Settings, Route.Equalizer, Route.Guide, Route.Stats, Route.Friends, Route.Downloads,
+)
+
 /** The page itself, with the way back above it when there is one. */
 @Composable
 private fun Page(actions: AppActions, modifier: Modifier) {
@@ -311,7 +343,13 @@ private fun Page(actions: AppActions, modifier: Modifier) {
                     NavIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar") { nav.pop() }
                 }
             }
-            ScreenContent(screen, actions, Modifier.fillMaxSize())
+            val held = screen.route in Reading
+            Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+                ScreenContent(
+                    screen, actions,
+                    if (held) Modifier.widthIn(max = 760.dp).fillMaxHeight() else Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 }
