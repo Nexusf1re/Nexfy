@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -123,18 +124,21 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit) {
         LocalBottomSpace provides BarHeight,
         LocalPlaying provides snapshot.playing,
     ) {
-        Box(Modifier.fillMaxSize().background(c.background)) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(c.background)) {
+            // A narrow window keeps the page wide enough to read: the panel
+            // waits until there is room for all three columns.
+            val roomForPanel = maxWidth >= 1180.dp
             Row(Modifier.fillMaxSize()) {
                 Sidebar(actions, Modifier.width(SidebarWidth).fillMaxHeight())
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
-                if (panelOpen) {
+                if (panelOpen && roomForPanel) {
                     SongPanel(snapshot, actions, Modifier.width(PanelWidth).fillMaxHeight())
                 }
             }
             PlayingBar(
                 snapshot, actions,
-                panelOpen = panelOpen,
-                onPanel = { panelOpen = !panelOpen },
+                panelOpen = panelOpen && roomForPanel,
+                onPanel = { panelOpen = !panelOpen }.takeIf { roomForPanel },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             )
@@ -325,7 +329,7 @@ private fun PlayingBar(
     s: PlaybackSnapshot,
     actions: AppActions,
     panelOpen: Boolean,
-    onPanel: () -> Unit,
+    onPanel: (() -> Unit)?,
     modifier: Modifier,
 ) {
     val c = MaterialTheme.colorScheme
@@ -370,7 +374,9 @@ private fun PlayingBar(
         // Where it plays, and how loud.
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             if (s.playing) PlayingBars(accentColor(), Modifier.size(16.dp).padding(end = 2.dp))
-            NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, if (panelOpen) "Fechar a fila" else "Fila e letra", onPanel)
+            onPanel?.let {
+                NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, if (panelOpen) "Fechar a fila" else "A seguir", it)
+            }
             NavIcon(Icons.Rounded.Devices, "Dispositivos") { actions.openDevices() }
             Volume(s, actions)
         }

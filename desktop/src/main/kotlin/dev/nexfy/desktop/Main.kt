@@ -34,6 +34,7 @@ import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
+import java.awt.Dimension
 import dev.nexfy.app.DesktopServices
 import dev.nexfy.app.LocalServices
 import dev.nexfy.app.ThemeMode
@@ -75,6 +76,9 @@ fun main() {
             // wants it takes it, and the window keeps the rest.
             onPreviewKeyEvent = { it.type == KeyEventType.KeyDown && it.key == Key.Escape && DesktopBack.pressed() },
         ) {
+            // Below this the three columns have nowhere to go; the shell drops
+            // the right panel on its own before that.
+            LaunchedEffect(Unit) { window.minimumSize = Dimension(940, 620) }
             Root()
         }
     }
