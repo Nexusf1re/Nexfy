@@ -1,6 +1,7 @@
 package dev.nexfy.app.ui.design
 
 import dev.nexfy.app.ui.design.LocalShellHeader
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.PI
 import androidx.compose.ui.graphics.StrokeCap
@@ -349,25 +350,35 @@ fun ThinSlider(
     val grab by animateFloatAsState(if (dragging) 1f else 0f, Motion.settle(260f), label = "grab")
     val change by rememberUpdatedState(onChange)
     val done by rememberUpdatedState(onDone)
+    // A finger is wide and aims roughly, so it is forgiven the whole band.
+    // A pointer is exact, and the band is invisible: in a playing bar a
+    // click a centimetre above the line would restart the song.
+    val reach = if (LocalPointer.current) 9.dp else 14.dp
     Canvas(
         modifier.fillMaxWidth().height(28.dp).then(
             if (!enabled) {
                 Modifier
             } else {
                 Modifier
-                    .pointerInput(Unit) {
+                    .pointerInput(reach) {
+                        val near = { y: Float -> abs(y - size.height / 2f) <= reach.toPx() }
+                        var taken = false
                         detectHorizontalDragGestures(
                             onDragStart = { o ->
-                                dragging = true
-                                haptics.tick()
-                                change((o.x / size.width).coerceIn(0f, 1f))
+                                taken = near(o.y)
+                                if (taken) {
+                                    dragging = true
+                                    haptics.tick()
+                                    change((o.x / size.width).coerceIn(0f, 1f))
+                                }
                             },
-                            onDragEnd = { dragging = false; done() },
-                            onDragCancel = { dragging = false; done() },
-                        ) { c, _ -> change((c.position.x / size.width).coerceIn(0f, 1f)) }
+                            onDragEnd = { if (taken) { dragging = false; done() } },
+                            onDragCancel = { if (taken) { dragging = false; done() } },
+                        ) { c, _ -> if (taken) change((c.position.x / size.width).coerceIn(0f, 1f)) }
                     }
-                    .pointerInput(Unit) {
+                    .pointerInput(reach) {
                         detectTapGestures { o ->
+                            if (abs(o.y - size.height / 2f) > reach.toPx()) return@detectTapGestures
                             change((o.x / size.width).coerceIn(0f, 1f))
                             done()
                         }
