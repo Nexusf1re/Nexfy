@@ -106,3 +106,5 @@ actual fun appVersion(context: PlatformContext): String? = runCatching {
     val info = context.packageManager.getPackageInfo(context.packageName, 0)
     "${info.versionName} (${info.longVersionCode})"
 }.getOrNull()
+
+actual fun appDataDir(context: PlatformContext): java.io.File = context.filesDir

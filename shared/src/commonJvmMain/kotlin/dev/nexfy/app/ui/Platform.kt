@@ -63,3 +63,10 @@ expect fun SystemBarAppearance(light: Boolean)
 
 /** This install's version, to show in the settings; null when it cannot be read. */
 expect fun appVersion(context: PlatformContext): String?
+
+/**
+ * Where the app keeps its own files: the listening log and anything else
+ * only it reads. Private to the app on a phone, under the user's
+ * application data on a computer.
+ */
+expect fun appDataDir(context: PlatformContext): java.io.File

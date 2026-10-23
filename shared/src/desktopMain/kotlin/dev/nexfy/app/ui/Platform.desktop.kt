@@ -97,3 +97,5 @@ actual fun SystemBarAppearance(light: Boolean) = Unit
 
 actual fun appVersion(context: PlatformContext): String? =
     DesktopBack::class.java.`package`?.implementationVersion
+
+actual fun appDataDir(context: PlatformContext): java.io.File = dev.nexfy.app.nexfyDataDir()

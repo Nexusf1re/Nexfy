@@ -11,19 +11,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.NexfyCore
 
+/** How often the library is read ahead, how many lists each time, and the largest. */
+private const val WARM_EVERY_MS = 86_400_000L
+private const val WARM_PER_DAY = 12
+private const val WARM_MAX_TRACKS = 200
+
 /**
  * The app on a computer: the same services the screens read on the phone,
  * over a core opened in the per-user data directory.
  *
- * Two of them have no counterpart here. There is no self-updater ([updates]
- * is null, and the version rows do not appear); and the listening log is
- * not kept yet, so [listens] is empty and the stats page has nothing to
- * show until it is.
+ * One thing has no counterpart here: there is no self-updater, so
+ * [updates] is null and the version rows do not appear.
  */
 class DesktopServices(
     override val core: NexfyCore,
@@ -39,7 +43,10 @@ class DesktopServices(
     override val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
     override val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
 
-    override val listens: StateFlow<List<Listen>> = MutableStateFlow(emptyList())
+    /** Songs played here, for the listening stats. */
+    private val playLog = PlayLog(context, scope) { core }
+
+    override val listens: StateFlow<List<Listen>> = playLog.listens
 
     override val updates: UpdateOffers? = null
 
@@ -57,15 +64,20 @@ class DesktopServices(
 
     /**
      * Follow what the account plays on its other devices, fetch the songs
-     * either side of the current one, and keep the session awake. The phone
-     * does the same from its Application; it also downloads songs ahead,
-     * which this does not do yet.
+     * either side of the current one, and read songs and lists ahead so
+     * they open and play without the network. The phone's Application does
+     * the same; the conditions it reads them under (Wi-Fi, metering) have
+     * no counterpart here, so a computer reads them whenever it can.
      */
     fun start() {
+        // Each song played long enough joins the log.
+        bridge.listening.onListen = playLog::record
         scope.launch {
             // Nothing tells a desktop app the network went away the way Android
             // does; the core's own failures are what shows it here.
             core.setOnline(true)
+            // Nothing here is a metered connection the way mobile data is.
+            core.setMetered(false)
             var seen = 0uL
             while (true) {
                 refreshRemote()
@@ -73,6 +85,13 @@ class DesktopServices(
                 // between changes. The timeout covers a session with no cluster yet.
                 seen = core.awaitRemoteChange(seen, 10_000u)
             }
+        }
+        // Plays on the account's other devices join the log each time the app
+        // opens: Spotify keeps only the last 50. A moment first, for the
+        // sign-in to come back.
+        scope.launch {
+            delay(3_000)
+            playLog.importElsewhere()
         }
         // The songs either side of the current one, so a skip shows the new one at once.
         scope.launch {
@@ -108,6 +127,56 @@ class DesktopServices(
                     }
                 }
         }
+        // The next songs of the queue, so they play without the network.
+        scope.launch {
+            combine(
+                bridge.local.map { s -> s.queue.next.take(3).map { it.uri } }.distinctUntilChanged(),
+                library.prefetchQueue,
+            ) { next, on -> if (on) next else emptyList() }.collectLatest { next ->
+                if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
+            }
+        }
+        // Whole kept collections, only while nothing plays here: downloading
+        // them alongside a song starved its stream on the phone, and the
+        // same single core feeds both.
+        scope.launch {
+            val playing = bridge.local.map { it.playing }.distinctUntilChanged()
+            combine(library.kept, playing) { kept, busy -> if (busy) emptySet() else kept }.collectLatest { kept ->
+                if (!awaitConnected()) return@collectLatest
+                // Every kept song first, so the audio cache never makes room by
+                // dropping one (and ones no longer kept can go again).
+                val songs = kept.associateWith { key -> runCatching { keptTracks(key) }.getOrNull() }
+                if (songs.values.none { it == null }) {
+                    core.setKeptSongs(songs.values.flatMap { it.orEmpty() }.distinct())
+                }
+                if (kept.isEmpty()) return@collectLatest
+                delay(10_000)
+                for (tracks in songs.values) {
+                    if (tracks == null) continue
+                    runCatching { core.cacheTracks(tracks) }
+                }
+            }
+        }
+        // Once a day: read the library's playlists and albums that have no copy
+        // here yet, so each opens at once later. A few a day, one at a time and
+        // not the huge ones: every song of a list is read, and Spotify limited
+        // the app when all of them went at once.
+        scope.launch {
+            if (System.currentTimeMillis() - library.warmedAt < WARM_EVERY_MS || !awaitConnected()) return@launch
+            delay(30_000)
+            library.warmedAt = System.currentTimeMillis()
+            val playlists = runCatching { core.myPlaylists(false) }.getOrNull().orEmpty()
+                .filter { it.trackCount.toInt() <= WARM_MAX_TRACKS && !core.playlistSaved(it.id) }
+            val albums = runCatching { core.savedAlbums(false) }.getOrNull().orEmpty().filter { !core.albumSaved(it.id) }
+            val reads = playlists.map { p -> suspend { core.playlist(p.id, false); Unit } } +
+                albums.map { a -> suspend { core.album(a.id, false); Unit } }
+            for (read in reads.take(WARM_PER_DAY)) {
+                val failed = runCatching { read() }.exceptionOrNull()
+                // Limited by Spotify: the rest waits for tomorrow.
+                if (failed?.message?.contains("limit") == true) break
+                delay(5_000)
+            }
+        }
         // One shuffle mode: when the player's is switched (here, on another device),
         // the pages' shuffle buttons follow it, but only while the same list plays.
         scope.launch {
@@ -140,6 +209,15 @@ class DesktopServices(
             delay(1_500)
             refreshRemote()
         }
+    }
+
+    /** Wait for the Spotify session (restored at start); false if it never comes. */
+    private suspend fun awaitConnected(): Boolean {
+        repeat(60) {
+            if (core.isConnected()) return true
+            delay(2_000)
+        }
+        return false
     }
 
     override suspend fun keptTracks(key: String): List<String> {

@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.android.kmp.library)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 // The Rust core for this computer, plus the UniFFI bindings both targets
@@ -80,6 +81,7 @@ kotlin {
             api(compose.materialIconsExtended)
             api(compose.ui)
             api(libs.kotlinx.coroutines.core)
+            implementation(libs.kotlinx.serialization.json)
         }
         androidMain.dependencies {
             // The predictive back gesture and the jank measurements, both of
