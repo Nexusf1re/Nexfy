@@ -39,6 +39,11 @@ librespot-protocol = { path = "third_party/librespot/protocol" }
 protobuf = "3.7"
 librespot-connect = { path = "third_party/librespot/connect", default-features = false, features = ["rustls-tls-webpki-roots"] }
 
+# Only for the desktop smoke test (core/examples); never in the Android library.
+[dev-dependencies]
+env_logger = "0.11"
+tokio = { version = "1", features = ["signal"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
 jni = "0.21"
