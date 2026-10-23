@@ -24,4 +24,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "Nexfy"
 include(":app")
+// The Compose UI both platforms share, and the desktop app that hosts it.
+include(":shared")
+include(":desktop")
  

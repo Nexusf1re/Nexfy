@@ -16,6 +16,7 @@ captures/
 # Generated from core/ by the build
 /app/src/main/jniLibs/
 /app/src/main/java/uniffi/
+/shared/src/commonJvmMain/kotlin/uniffi/
 
 # Signing
 *.jks
