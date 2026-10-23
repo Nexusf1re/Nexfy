@@ -5,6 +5,7 @@ import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
+import dev.nexfy.app.playback.OutputGain
 import dev.nexfy.app.playback.SleepTimer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -39,6 +40,8 @@ class DesktopServices(
 
     override val library: LibraryPrefs = LibraryPrefs(openPrefs(context, "library"))
 
+    override val output = OutputGain(core, library.volumePercent / 100.0)
+
     override val commands: Commands by lazy { Commands(this, scope) }
     override val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
     override val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
@@ -70,6 +73,12 @@ class DesktopServices(
      * no counterpart here, so a computer reads them whenever it can.
      */
     fun start() {
+        // The volume the user left is the one the player opens at, and
+        // every change to it is kept.
+        scope.launch {
+            output.setVolume(output.volume.value)
+            output.volume.collect { library.volumePercent = (it * 100).toInt() }
+        }
         // Each song played long enough joins the log.
         bridge.listening.onListen = playLog::record
         scope.launch {

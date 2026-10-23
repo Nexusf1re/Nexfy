@@ -136,6 +136,14 @@ class LibraryPrefs(private val prefs: Prefs) {
         prefs.putBoolean(SHUFFLE, on)
     }
 
+    /**
+     * The player's own volume, 0 to 100. A phone leaves it at 100 and uses
+     * its volume keys; a window carries a slider.
+     */
+    var volumePercent: Int
+        get() = prefs.long(VOLUME, 100).toInt().coerceIn(0, 100)
+        set(value) = prefs.putLong(VOLUME, value.coerceIn(0, 100).toLong())
+
     private val _coverAccent = MutableStateFlow(prefs.boolean(COVER_ACCENT, true))
 
     /** The accent takes the colour of the playing song's cover ("Cor da música"). */
@@ -324,6 +332,7 @@ class LibraryPrefs(private val prefs: Prefs) {
         const val WARMED_AT = "warmed_at"
         const val COVER_ACCENT = "cover_accent"
         const val SHUFFLE = "shuffle"
+        const val VOLUME = "volume"
         const val SHELF = "shelf"
         const val LYRICS_OPEN = "lyrics_open"
         const val LIBRARY_GRID = "library_grid"

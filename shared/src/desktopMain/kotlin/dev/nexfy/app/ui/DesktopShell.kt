@@ -38,7 +38,9 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -494,18 +496,35 @@ private fun SeekLine(s: PlaybackSnapshot, actions: AppActions) {
     }
 }
 
-/** Only the device playing elsewhere takes a volume; this machine's is the system's. */
+/**
+ * How loud: this machine's own output, or the device playing elsewhere
+ * when one is. It follows the slider as it is dragged rather than waiting
+ * for it to be let go, which is what a volume should do.
+ */
 @Composable
 private fun Volume(s: PlaybackSnapshot, actions: AppActions) {
     val c = MaterialTheme.colorScheme
-    val remote = s.remote ?: return
-    var held by remember(remote.id) { mutableFloatStateOf((remote.volume?.toInt() ?: 50) / 100f) }
-    Row(Modifier.width(140.dp).padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.VolumeUp, null, tint = c.onSurfaceVariant, modifier = Modifier.size(18.dp))
+    val output = actions.services.output
+    val remote = s.remote
+    val here by output.volume.collectAsState()
+    var held by remember(remote?.id) {
+        mutableFloatStateOf(if (remote == null) here.toFloat() else (remote.volume?.toInt() ?: 50) / 100f)
+    }
+    val level = if (remote == null) here.toFloat() else held
+    val icon = when {
+        level <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeOff
+        level < .5f -> Icons.AutoMirrored.Rounded.VolumeDown
+        else -> Icons.AutoMirrored.Rounded.VolumeUp
+    }
+    Row(Modifier.width(132.dp).padding(start = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, "Volume", tint = c.onSurfaceVariant, modifier = Modifier.size(18.dp))
         ThinSlider(
-            progress = { held },
-            onChange = { held = it },
-            onDone = { actions.setVolume((held * 100).toInt()) },
+            progress = { level },
+            onChange = {
+                held = it
+                if (remote == null) output.setVolume(it.toDouble())
+            },
+            onDone = { if (remote != null) actions.setVolume((held * 100).toInt()) },
             modifier = Modifier.weight(1f).padding(start = 8.dp),
         )
     }

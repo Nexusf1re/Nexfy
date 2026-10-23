@@ -3,6 +3,7 @@ package dev.nexfy.app
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
+import dev.nexfy.app.playback.OutputGain
 import dev.nexfy.app.playback.SleepTimer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,9 @@ interface NexfyServices {
 
     /** Pauses playback after a while or at the end of the song. */
     val sleep: SleepTimer
+
+    /** The gain on the player's output: the user's volume and the sleep fade. */
+    val output: OutputGain
 
     /** Songs played here, for the listening stats; oldest first. */
     val listens: StateFlow<List<Listen>>

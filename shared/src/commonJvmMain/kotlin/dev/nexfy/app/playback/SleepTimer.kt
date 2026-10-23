@@ -54,7 +54,7 @@ class SleepTimer(private val app: NexfyServices, private val scope: CoroutineSco
                 }
             } finally {
                 // Cancelled mid-fade, or done: either way the volume comes back.
-                app.core.setFade(1.0)
+                app.output.setFade(1.0)
             }
             _state.compareAndSet(sleep, null)
         }
@@ -107,7 +107,7 @@ class SleepTimer(private val app: NexfyServices, private val scope: CoroutineSco
         val steps = (ms / 100).coerceAtLeast(1)
         for (i in 1..steps) {
             val t = i.toDouble() / steps
-            app.core.setFade((1 - t) * (1 - t))
+            app.output.setFade((1 - t) * (1 - t))
             delay(ms / steps)
         }
     }
