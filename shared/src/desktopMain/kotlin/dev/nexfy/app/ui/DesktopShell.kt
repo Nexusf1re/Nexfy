@@ -1,8 +1,12 @@
 package dev.nexfy.app.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,11 +30,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CropSquare
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FilterNone
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Search
@@ -65,6 +73,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.nexfy.app.NexfyServices
@@ -76,6 +85,8 @@ import dev.nexfy.app.ui.design.GlassLevel
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
+import dev.nexfy.app.ui.design.LocalPointer
+import dev.nexfy.app.ui.design.LocalShellHeader
 import dev.nexfy.app.ui.design.PlayingBars
 import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.ThinSlider
@@ -93,6 +104,28 @@ import kotlinx.coroutines.launch
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
 
+/**
+ * What the window itself can do, lent to the shell so it can draw the
+ * frame rather than leave it to the system: the buttons every window has,
+ * and the strip that moves it.
+ */
+interface WindowFrame {
+    val maximized: Boolean
+
+    fun minimize()
+
+    fun toggleMaximize()
+
+    fun close()
+
+    /** Wraps the strip the window is dragged by. */
+    @Composable
+    fun DragArea(content: @Composable () -> Unit)
+}
+
+/** How tall the title strip is. */
+private val TitleHeight = 42.dp
+
 /** How tall the playing bar is, and how much room the pages leave under them for it. */
 private val BarHeight = 84.dp
 private val SidebarWidth = 268.dp
@@ -109,7 +142,7 @@ private val PanelWidth = 332.dp
  * player that pulls up, which is right for a thumb and wrong for a mouse.
  */
 @Composable
-fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit) {
+fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: WindowFrame? = null) {
     val c = MaterialTheme.colorScheme
     val dark = c.isDark
     val nav = remember { NavState() }
@@ -149,17 +182,24 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit) {
         LocalHaze provides backdrop,
         LocalBottomSpace provides BarHeight,
         LocalPlaying provides snapshot.playing,
+        // The strip below carries the name, the way back and the buttons, and
+        // the input is a mouse: the screens leave out what belongs to a phone.
+        LocalShellHeader provides true,
+        LocalPointer provides true,
     ) {
         BoxWithConstraints(Modifier.fillMaxSize().background(c.background)) {
             // A narrow window keeps the page wide enough to read: the panel
             // waits until there is room for all three columns.
             val roomForPanel = maxWidth >= 1180.dp
-            Row(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+            TitleBar(actions, frame)
+            Row(Modifier.weight(1f).fillMaxWidth()) {
                 Sidebar(actions, Modifier.width(SidebarWidth).fillMaxHeight())
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
                 if (panelOpen && roomForPanel) {
                     SongPanel(snapshot, actions, Modifier.width(PanelWidth).fillMaxHeight())
                 }
+            }
             }
             PlayingBar(
                 snapshot, actions,
@@ -178,6 +218,82 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit) {
             LinkOpener(actions)
         }
     }
+}
+
+/**
+ * The window's own strip: the way back on the left, a band to move the
+ * window by in the middle, and the three buttons on the right, drawn flat
+ * and round the way a Linux or a macOS window wears them rather than as
+ * the system's grey rectangles.
+ */
+@Composable
+private fun TitleBar(actions: AppActions, frame: WindowFrame?) {
+    val nav = actions.nav
+    val bar = @Composable {
+        Row(
+            Modifier.fillMaxWidth().height(TitleHeight).padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BackButton(enabled = nav.stack().isNotEmpty()) { nav.pop() }
+            Spacer(Modifier.weight(1f))
+            if (frame != null) {
+                WindowButton(Icons.Rounded.Remove, "Minimizar", frame::minimize)
+                WindowButton(
+                    if (frame.maximized) Icons.Rounded.FilterNone else Icons.Rounded.CropSquare,
+                    if (frame.maximized) "Restaurar" else "Maximizar",
+                    frame::toggleMaximize,
+                    glyph = 13.dp,
+                )
+                WindowButton(Icons.Rounded.Close, "Fechar", frame::close, danger = true)
+            }
+        }
+    }
+    if (frame == null) bar() else frame.DragArea { bar() }
+}
+
+/** Greyed out rather than gone, so the strip does not shift as pages open. */
+@Composable
+private fun BackButton(enabled: Boolean, onBack: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val tint by animateColorAsState(
+        if (enabled) c.onSurface else c.onSurfaceVariant.copy(.35f),
+        label = "back",
+    )
+    Box(
+        Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onBack),
+        Alignment.Center,
+    ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", tint = tint, modifier = Modifier.size(18.dp)) }
+}
+
+/** A flat round button that only shows its ground under the pointer. */
+@Composable
+private fun WindowButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    danger: Boolean = false,
+    glyph: Dp = 15.dp,
+) {
+    val c = MaterialTheme.colorScheme
+    val hover = remember { MutableInteractionSource() }
+    val over by hover.collectIsHoveredAsState()
+    val ground by animateColorAsState(
+        when {
+            !over -> Color.Transparent
+            danger -> Color(0xFFE5484D)
+            else -> c.onSurface.copy(.12f)
+        },
+        label = "windowButton",
+    )
+    val tint by animateColorAsState(
+        if (over && danger) Color.White else c.onSurfaceVariant,
+        label = "windowGlyph",
+    )
+    Box(
+        Modifier.padding(start = 4.dp).size(30.dp).clip(CircleShape).background(ground)
+            .hoverable(hover).clickable(onClick = onClick),
+        Alignment.Center,
+    ) { Icon(icon, description, tint = tint, modifier = Modifier.size(glyph)) }
 }
 
 // ------------------------------------------------------------------ sidebar
@@ -337,14 +453,6 @@ private fun Page(actions: AppActions, modifier: Modifier) {
     val screen = nav.screen
     Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp)) {
         Panel(Modifier.weight(1f)) {
-            if (nav.stack().isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 10.dp, top = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    NavIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar") { nav.pop() }
-                }
-            }
             val held = screen.route in Reading
             Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
                 ScreenContent(

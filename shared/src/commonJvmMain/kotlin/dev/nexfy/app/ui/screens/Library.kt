@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.foundation.layout.aspectRatio
@@ -74,6 +76,7 @@ import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.LargeTitle
 import dev.nexfy.app.ui.design.ListRowSkeleton
+import dev.nexfy.app.ui.design.gridColumns
 import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.PillSelector
@@ -100,6 +103,7 @@ private data class Entry(
     val own: Boolean = false,
 )
 
+/** A phone's width takes three tiles; a window takes as many as fit. */
 private const val GRID_COLUMNS = 3
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -166,6 +170,8 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
         }
     }
 
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val columns = if (maxWidth >= 640.dp) gridColumns(maxWidth - 40.dp) else GRID_COLUMNS
     Column(Modifier.fillMaxSize()) {
         RootHeader("Biblioteca", collapse, actions)
         LazyColumn(
@@ -176,7 +182,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
         ) {
             item(key = "title") { LargeTitle("Biblioteca", collapse, Modifier.padding(start = 4.dp)) }
             item(key = "shelf") {
-                PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it; library.shelf = it.name }, Modifier.fillMaxWidth().padding(top = 12.dp))
+                PillSelector(Shelf.entries, shelf, { it.label }, { shelf = it; library.shelf = it.name }, Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(top = 12.dp))
             }
             // Only once something is kept: before that there is nothing to report.
             if (kept.isNotEmpty()) {
@@ -236,7 +242,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
             if (grid) {
                 // Liked songs lead the grid as they lead the list.
                 val tiles = if (shelf == Shelf.Playlists && found != null && likedShown) listOf<Entry?>(null) + found else found.orEmpty()
-                itemsIndexed(tiles.chunked(GRID_COLUMNS), key = { _, row -> row.joinToString { it?.key ?: "liked" } }) { i, row ->
+                itemsIndexed(tiles.chunked(columns), key = { _, row -> row.joinToString { it?.key ?: "liked" } }) { i, row ->
                     Row(Modifier.cascade(i, cascadeClock), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         row.forEach { e ->
                             val tile = Modifier.weight(1f)
@@ -252,7 +258,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                                 )
                             }
                         }
-                        repeat(GRID_COLUMNS - row.size) { Spacer(Modifier.weight(1f)) }
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             } else {
@@ -304,6 +310,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                 }
             }
         }
+    }
     }
 }
 

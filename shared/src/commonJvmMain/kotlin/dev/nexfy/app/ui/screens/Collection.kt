@@ -1,6 +1,8 @@
 package dev.nexfy.app.ui.screens
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import dev.nexfy.app.ui.design.GlassBackdrop
+import dev.nexfy.app.ui.design.LocalShellHeader
 import dev.nexfy.app.ui.rememberUpdateOffer
 import dev.nexfy.app.ui.theme.accentColor
 import androidx.compose.foundation.border
@@ -112,6 +114,8 @@ private val knownFaces = java.util.concurrent.ConcurrentHashMap<String, UserFace
  */
 @Composable
 fun RootHeader(title: String, collapse: State<Float>, actions: AppActions) {
+    // The window's frame carries the name and the buttons where there is one.
+    if (LocalShellHeader.current) return
     val c = MaterialTheme.colorScheme
     Box(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -264,64 +268,97 @@ fun CollectionScreen(
                     contentPadding = PaddingValues(bottom = LocalBottomSpace.current),
                 ) {
                     item(key = "header") {
+                        BoxWithConstraints {
+                        // A phone's column can only stack the cover above the
+                        // title; a window has room beside it, which is where
+                        // every desktop player puts it.
+                        val wide = maxWidth >= 640.dp
+                        val coverSize = if (wide) 232.dp else 208.dp
+                        val align = if (wide) Alignment.Start else Alignment.CenterHorizontally
+                        val textAlign = if (wide) TextAlign.Start else TextAlign.Center
                         Column(
-                            Modifier.fillMaxWidth().statusBarsPadding().padding(top = TopBarHeight)
+                            Modifier.fillMaxWidth().statusBarsPadding()
+                                .padding(top = if (wide) 24.dp else TopBarHeight)
                                 .padding(start = 24.dp, end = 24.dp, bottom = 24.dp)
                                 .graphicsLayer { alpha = (1f - collapse.value * 1.5f).coerceIn(0f, 1f) },
-                            horizontalAlignment = Alignment.CenterHorizontally,
+                            horizontalAlignment = align,
                         ) {
-                            val coverModifier = Modifier.size(208.dp).graphicsLayer {
+                            val coverModifier = Modifier.size(coverSize).graphicsLayer {
                                 val sc = 1f - .15f * collapse.value.coerceIn(0f, 1f)
                                 scaleX = sc
                                 scaleY = sc
                             }
-                            val coverRadius = if (round) 104.dp else 10.dp
-                            if (loading && imageUrl == null) {
-                                Bone(coverModifier, RoundedCornerShape(coverRadius), light = dark)
-                            } else {
-                                Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
-                            }
-                            Spacer(Modifier.height(16.dp))
-                            if (loading && title.isBlank()) {
-                                Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
-                                    Bone(Modifier.size(180.dp, 22.dp), light = dark)
+                            val coverRadius = if (round) coverSize / 2 else 10.dp
+                            val cover = @Composable {
+                                if (loading && imageUrl == null) {
+                                    Bone(coverModifier, RoundedCornerShape(coverRadius), light = dark)
+                                } else {
+                                    Cover(imageUrl, coverModifier, radius = coverRadius, motion = true, sharedKey = source?.let(actions.nav::origin))
                                 }
-                            } else {
-                                Text(
-                                    title, color = ink, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold,
-                                    textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                )
                             }
-                            Spacer(Modifier.height(4.dp))
-                            if (!subtitle.isNullOrBlank()) {
-                                Row(
-                                    Modifier.clip(CircleShape)
-                                        .then(if (onSubtitle != null) Modifier.clickable { haptics.tick(); onSubtitle() } else Modifier)
-                                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    if (subtitleImage != null) {
-                                        dev.nexfy.app.ui.design.UserAvatar(UserFace("", subtitle, subtitleImage), Modifier.size(22.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                    }
+                            val naming = @Composable {
+                                if (wide && meta.isNotBlank()) {
                                     Text(
-                                        subtitle,
-                                        color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
+                                        meta.substringBefore(" \u00b7 ").uppercase(), color = ink.copy(.7f), fontSize = 12.sp,
+                                        letterSpacing = 1.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                                if (loading && title.isBlank()) {
+                                    Box(Modifier.height(28.dp), contentAlignment = Alignment.Center) {
+                                        Bone(Modifier.size(180.dp, 22.dp), light = dark)
+                                    }
+                                } else {
+                                    Text(
+                                        title, color = ink,
+                                        fontSize = if (wide) 44.sp else 24.sp,
+                                        lineHeight = if (wide) 48.sp else 28.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = textAlign, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                if (!subtitle.isNullOrBlank()) {
+                                    Row(
+                                        Modifier.clip(CircleShape)
+                                            .then(if (onSubtitle != null) Modifier.clickable { haptics.tick(); onSubtitle() } else Modifier)
+                                            .padding(horizontal = if (wide) 0.dp else 12.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        if (subtitleImage != null) {
+                                            dev.nexfy.app.ui.design.UserAvatar(UserFace("", subtitle, subtitleImage), Modifier.size(22.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                        }
+                                        Text(
+                                            subtitle,
+                                            color = ink, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+                                if (loading && meta.isBlank()) {
+                                    Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
+                                        Bone(Modifier.size(132.dp, 10.dp), light = dark)
+                                    }
+                                } else {
+                                    Text(
+                                        if (wide) meta.substringAfter(" \u00b7 ", meta).trim().uppercase() else meta.uppercase(),
+                                        color = ink.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
+                                        textAlign = textAlign, maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     )
                                 }
                             }
-                            if (loading && meta.isBlank()) {
-                                Box(Modifier.height(24.dp), contentAlignment = Alignment.Center) {
-                                    Bone(Modifier.size(132.dp, 10.dp), light = dark)
+                            if (wide) {
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    cover()
+                                    Column(Modifier.padding(start = 24.dp).weight(1f).padding(bottom = 8.dp)) { naming() }
                                 }
                             } else {
-                                Text(
-                                    meta.uppercase(), color = ink.copy(.7f), fontSize = 12.sp, letterSpacing = 1.sp,
-                                    textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
+                                cover()
+                                Spacer(Modifier.height(16.dp))
+                                naming()
                             }
-                            Spacer(Modifier.height(16.dp))
+                            Spacer(Modifier.height(if (wide) 24.dp else 16.dp))
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 // A toggle, as in Spotify: on, "Tocar" plays shuffled; flipped while
                                 // this list plays, the player follows.
@@ -364,6 +401,7 @@ fun CollectionScreen(
                                     color = ink.copy(.7f), fontSize = 12.sp,
                                 )
                             }
+                        }
                         }
                     }
                     if (loading && error == null) {

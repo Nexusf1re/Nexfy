@@ -1,5 +1,6 @@
 package dev.nexfy.app.ui.design
 
+import dev.nexfy.app.ui.design.LocalShellHeader
 import kotlin.math.sin
 import kotlin.math.PI
 import androidx.compose.ui.graphics.StrokeCap
@@ -811,7 +812,10 @@ fun DetailTopBar(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            GlassIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", onBack, light = bar > .5f, liquid = liquid)
+            // Where the window's frame carries the way back, this one would be the second.
+            if (!LocalShellHeader.current) {
+                GlassIcon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", onBack, light = bar > .5f, liquid = liquid)
+            }
             Text(
                 title, Modifier.weight(1f).padding(horizontal = 12.dp).graphicsLayer { alpha = bar },
                 style = MaterialTheme.typography.titleMedium, color = c.onBackground, maxLines = 1, overflow = TextOverflow.Ellipsis,

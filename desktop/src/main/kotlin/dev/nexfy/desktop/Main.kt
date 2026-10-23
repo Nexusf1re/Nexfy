@@ -1,8 +1,10 @@
 package dev.nexfy.desktop
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -24,9 +26,11 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import coil3.ImageLoader
@@ -35,6 +39,7 @@ import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
+import dev.nexfy.app.ui.WindowFrame
 import java.awt.Dimension
 import dev.nexfy.app.DesktopServices
 import dev.nexfy.app.LocalServices
@@ -70,10 +75,14 @@ fun main() {
             .build()
     }
     application {
+        val windowState = rememberWindowState(size = DpSize(1100.dp, 760.dp))
         Window(
             onCloseRequest = ::exitApplication,
             title = "Nexfy",
-            state = rememberWindowState(size = DpSize(1100.dp, 760.dp)),
+            state = windowState,
+            // The app draws its own frame, so the window wears the theme
+            // instead of the system's grey strip.
+            undecorated = true,
             // Esc is this machine's back gesture; the innermost screen that
             // wants it takes it, and the window keeps the rest. The media
             // keys drive playback wherever the focus is.
@@ -90,7 +99,36 @@ fun main() {
             // Below this the three columns have nowhere to go; the shell drops
             // the right panel on its own before that.
             LaunchedEffect(Unit) { window.minimumSize = Dimension(940, 620) }
-            Root()
+            val scope = this
+            val frame = remember(scope, windowState) {
+                object : WindowFrame {
+                    override val maximized get() = windowState.placement == WindowPlacement.Maximized
+
+                    override fun minimize() {
+                        windowState.isMinimized = true
+                    }
+
+                    override fun toggleMaximize() {
+                        windowState.placement =
+                            if (maximized) WindowPlacement.Floating else WindowPlacement.Maximized
+                    }
+
+                    override fun close() = exitApplication()
+
+                    @Composable
+                    override fun DragArea(content: @Composable () -> Unit) {
+                        with(scope) {
+                            WindowDraggableArea(
+                                // Double-click fills the screen, as on every window.
+                                Modifier.pointerInput(Unit) {
+                                    detectTapGestures(onDoubleTap = { toggleMaximize() })
+                                },
+                            ) { content() }
+                        }
+                    }
+                }
+            }
+            Root(frame)
         }
     }
 }
@@ -101,7 +139,7 @@ fun main() {
  * device, so a phone can push a playlist here.
  */
 @Composable
-private fun Root() {
+private fun Root(frame: WindowFrame) {
     val scope = rememberCoroutineScope()
     var services by remember { mutableStateOf<DesktopServices?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -125,7 +163,7 @@ private fun Root() {
     val running = services
     when {
         failure != null -> Opening { Text(failure!!, style = MaterialTheme.typography.bodySmall) }
-        running != null -> App(running)
+        running != null -> App(running, frame)
         else -> Opening { Text("opening the core…", style = MaterialTheme.typography.titleMedium) }
     }
 }
@@ -142,7 +180,7 @@ private fun Opening(content: @Composable () -> Unit) {
 
 /** The app itself: the settings drive the theme, as they do on the phone. */
 @Composable
-private fun App(services: DesktopServices) {
+private fun App(services: DesktopServices, frame: WindowFrame) {
     val context: PlatformContext = PlatformContext.INSTANCE
     val library = services.library
     val mode by library.themeMode.collectAsState()
@@ -167,7 +205,7 @@ private fun App(services: DesktopServices) {
     val look = remember(backdrop, lyricsSize, addedBy) { Look(backdrop, lyricsSize.scale, addedBy, haptics = false) }
     NexfyTheme(dark = dark, accentArt = accentArt, look = look) {
         CompositionLocalProvider(LocalServices provides services) {
-            NexfyDesktop(services, openBrowser = { openInBrowser(context, it) })
+            NexfyDesktop(services, openBrowser = { openInBrowser(context, it) }, frame = frame)
         }
     }
 }

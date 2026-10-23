@@ -2,6 +2,7 @@ package dev.nexfy.app.ui.screens
 
 import coil3.compose.LocalPlatformContext
 import dev.nexfy.app.ui.appVersion
+import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.awaitShown
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -120,6 +121,10 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
     }
 }
 
+/** What to call the machine the app runs on, in the settings' own words. */
+@Composable
+private fun hereWord() = if (LocalPointer.current) "neste computador" else "neste celular"
+
 /** Spotify sign-in for playback, and the two Web API apps. [onMessage] reports how a sign-in went. */
 @Composable
 private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
@@ -159,7 +164,7 @@ private fun AccountSection(actions: AppActions, onMessage: (String) -> Unit) {
 
     val status = web
     Section("Conta", "Spotify para tocar; a Web API para biblioteca e busca.") {
-        Group("Spotify", "Toca as músicas neste celular. Precisa de Spotify Premium.") {
+        Group("Spotify", "Toca as músicas ${hereWord()}. Precisa de Spotify Premium.") {
             StatusRow(if (user != null) "Conectado como $user" else "Não conectado", user != null)
             if (user == null) {
                 PillButton("Entrar com Spotify", { signIn("Spotify", { core.beginLogin() }, { core.finishLogin() }) })
@@ -273,7 +278,7 @@ private fun SoundSection(actions: AppActions) {
     val c = MaterialTheme.colorScheme
     val core = actions.core
     var sound by remember { mutableStateOf(core.soundSettings()) }
-    Section("Som", "Como as músicas tocam neste celular.") {
+    Section("Som", "Como as músicas tocam ${hereWord()}.") {
         Choice("Qualidade de áudio", listOf(AudioQuality.AUTO, AudioQuality.NORMAL, AudioQuality.HIGH), sound.quality, {
             when (it) {
                 AudioQuality.AUTO -> "Automática"
@@ -338,8 +343,10 @@ private fun BehaviourSection(actions: AppActions) {
     val swipeBack by library.swipeBack.collectAsState()
     Section("Reprodução e comportamento", "O que as listas mostram e como o app responde ao toque.") {
         Toggle("Mostrar quem adicionou", "A foto de quem pôs cada música, em playlists compartilhadas e na fila.", addedBy, library::setShowAddedBy)
-        Toggle("Vibração", "Uma vibração leve nos toques e gestos.", haptics, library::setHaptics)
-        Toggle("Voltar arrastando", "Arraste uma página para o lado, de qualquer ponto, para voltar.", swipeBack, library::setSwipeBack)
+        if (!LocalPointer.current) {
+            Toggle("Vibração", "Uma vibração leve nos toques e gestos.", haptics, library::setHaptics)
+            Toggle("Voltar arrastando", "Arraste uma página para o lado, de qualquer ponto, para voltar.", swipeBack, library::setSwipeBack)
+        }
         TranslatorEmail(library)
     }
 }
