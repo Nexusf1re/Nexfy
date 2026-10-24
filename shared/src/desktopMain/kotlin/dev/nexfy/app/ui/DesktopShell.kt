@@ -91,6 +91,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -724,6 +725,18 @@ private fun PlayingBar(
     }
     Row(
         modifier.height(BarHeight).liquidGlass(shape, dark, GlassLevel.Strong)
+            // The bar floats over the page and is seen through, so the page
+            // reads as being under it — and a click on the bar's own empty
+            // space used to go through to whatever row was under there and
+            // play it. Everything inside the bar still takes its own clicks;
+            // this only stops the rest falling through.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            }
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
