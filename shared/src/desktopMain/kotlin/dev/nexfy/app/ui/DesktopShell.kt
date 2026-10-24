@@ -2,11 +2,13 @@ package dev.nexfy.app.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
@@ -74,8 +77,18 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -104,6 +117,7 @@ import dev.nexfy.app.ui.design.PlayingBars
 import dev.nexfy.app.ui.design.ShimmerDriver
 import dev.nexfy.app.ui.design.ThinSlider
 import dev.nexfy.app.ui.design.durationLabel
+import dev.nexfy.app.ui.design.glassPane
 import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.liquidGlass
 import dev.nexfy.app.ui.design.rememberHaptics
@@ -117,6 +131,7 @@ import dev.nexfy.app.ui.theme.accentColor
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.RepeatMode
 import uniffi.nexfy_core.Track
 
@@ -171,6 +186,9 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     val backdrop = remember { GlassBackdrop() }
     var panelOpen by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(PanelTab.Queue) }
+    // The strip's field is the one search box of the window, so the shortcut
+    // that reaches for it is held here, beside the key dispatch that fires it.
+    val searchFocus = remember { FocusRequester() }
 
     ShimmerDriver()
     // The media keys, for as long as this shell is up.
@@ -187,6 +205,12 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 }
                 key == Key.MediaPrevious || (ctrl && key == Key.DirectionLeft) -> {
                     actions.previous()
+                    true
+                }
+                // Ctrl+F is where every app puts "find": the strip's field
+                // takes the caret, whatever page is open.
+                ctrl && key == Key.F -> {
+                    runCatching { searchFocus.requestFocus() }
                     true
                 }
                 else -> false
@@ -224,7 +248,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 label = "sidebar",
             )
             Column(Modifier.fillMaxSize()) {
-            TitleBar(actions, frame)
+            TitleBar(actions, frame, searchFocus)
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 Sidebar(
                     actions, rail,
@@ -262,20 +286,36 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
 }
 
 /**
- * The window's own strip: the way back on the left, a band to move the
- * window by in the middle, and the three buttons on the right, drawn flat
- * and round the way a Linux or a macOS window wears them rather than as
- * the system's grey rectangles.
+ * The window's own strip: the mark and the way back on the left, the search
+ * field standing in the middle of the bar, and the three buttons on the
+ * right, drawn flat and round the way a Linux or a macOS window wears them
+ * rather than as the system's grey rectangles.
+ *
+ * The band that moves the window lies *under* the three of them instead of
+ * around them, so a drag that starts on the field is the field's own while
+ * everything between the controls is still the window's handle, the
+ * double-click that fills the screen included. A strip hit nowhere falls
+ * through to it, which is what every gap here is.
  */
 @Composable
-private fun TitleBar(actions: AppActions, frame: WindowFrame?) {
+private fun TitleBar(actions: AppActions, frame: WindowFrame?, search: FocusRequester) {
+    val c = MaterialTheme.colorScheme
     val nav = actions.nav
-    val bar = @Composable {
+    Box(Modifier.fillMaxWidth().height(TitleHeight)) {
+        if (frame != null) frame.DragArea { Box(Modifier.fillMaxSize()) }
         Row(
-            Modifier.fillMaxWidth().height(TitleHeight).padding(horizontal = 10.dp),
+            Modifier.fillMaxSize().padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // No wordmark here: the sidebar carries it, directly below, and
+            // the name twice within an inch of itself reads as a mistake.
+            //
+            // No arrow forward either: a tab's stack only ever loses its top,
+            // so there is never a page ahead to return to.
+            Spacer(Modifier.width(2.dp))
             BackButton(enabled = nav.stack().isNotEmpty()) { nav.pop() }
+            Spacer(Modifier.weight(1f))
+            SearchField(actions, search, Modifier.weight(1.6f))
             Spacer(Modifier.weight(1f))
             if (frame != null) {
                 WindowButton(Icons.Rounded.Remove, "Minimizar", frame::minimize)
@@ -289,7 +329,87 @@ private fun TitleBar(actions: AppActions, frame: WindowFrame?) {
             }
         }
     }
-    if (frame == null) bar() else frame.DragArea { bar() }
+}
+
+/**
+ * Where a search starts, from whatever page is open. The field does not
+ * search: Enter hands the words to the Buscar screen, which is the one that
+ * knows how, through the recent searches both sides already read — so the
+ * screen's own field stays the single place the query is typed and cleared.
+ */
+@Composable
+private fun SearchField(actions: AppActions, search: FocusRequester, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    val nav = actions.nav
+    val accent = accentColor()
+    // The Buscar screen's field is this same query (see NavState.searchQuery),
+    // so whichever one is typed in, both read it and one search runs.
+    var query by nav::searchQuery
+    val focus = remember { MutableInteractionSource() }
+    val focused by focus.collectIsFocusedAsState()
+    // The same accent ring the Buscar screen's field lights up with, at the
+    // size a title strip has room for.
+    val ring by animateFloatAsState(if (focused) 1f else 0f, Motion.standard(), label = "searchRing")
+    val icon by animateColorAsState(if (focused) accent else c.onSurfaceVariant, Motion.standard(), label = "searchIcon")
+    val submit: () -> Unit = {
+        // Recording the query is the Buscar screen's to do, once it knows the
+        // search found something; here it is only shown.
+        if (query.trim().length >= 2) {
+            nav.tab = Tab.Search
+            nav.popToRoot()
+        }
+    }
+    Row(
+        modifier.height(28.dp)
+            .glassPane(CircleShape, c.surfaceVariant.copy(alpha = .6f), c.isDark)
+            .drawWithContent {
+                drawContent()
+                if (ring > 0f) {
+                    drawRoundRect(
+                        accent.copy(alpha = .7f * ring),
+                        cornerRadius = CornerRadius(size.height / 2),
+                        style = Stroke(1.5.dp.toPx()),
+                    )
+                }
+            }
+            .padding(start = 10.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Search, null, tint = icon, modifier = Modifier.size(15.dp))
+        BasicTextField(
+            query, { query = it },
+            Modifier.weight(1f).padding(horizontal = 8.dp).focusRequester(search)
+                .onPreviewKeyEvent { event ->
+                    val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
+                    if (event.type == KeyEventType.KeyDown && enter) {
+                        submit()
+                        true
+                    } else {
+                        false
+                    }
+                },
+            singleLine = true,
+            interactionSource = focus,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
+            cursorBrush = SolidColor(c.onSurface),
+            decorationBox = { field ->
+                if (query.isEmpty()) {
+                    Text(
+                        "O que queres ouvir?", color = c.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                field()
+            },
+        )
+        if (query.isNotEmpty()) {
+            Icon(
+                Icons.Rounded.Close, "Limpar busca", tint = c.onSurfaceVariant,
+                modifier = Modifier.clip(CircleShape).clickable { query = "" }.padding(4.dp).size(14.dp),
+            )
+        }
+    }
 }
 
 /** Greyed out rather than gone, so the strip does not shift as pages open. */
@@ -741,6 +861,7 @@ private fun Volume(s: PlaybackSnapshot, actions: AppActions) {
 /** What the right-hand column is showing. */
 private enum class PanelTab(val label: String) {
     Art("Capa"),
+    Details("Detalhes"),
     Queue("A seguir"),
     Lyrics("Letra"),
 }
@@ -784,6 +905,7 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
             )
             when (tab) {
                 PanelTab.Art -> CoverPane(s, Modifier.weight(1f))
+                PanelTab.Details -> DetailsPane(s, actions, Modifier.weight(1f))
                 PanelTab.Queue -> QueueList(s, actions, Modifier.weight(1f))
                 PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.weight(1f))
             }
@@ -825,6 +947,93 @@ private fun CoverPane(s: PlaybackSnapshot, modifier: Modifier) {
                 )
             }
         }
+    }
+}
+
+/**
+ * The song's own facts, the way a sleeve prints them: the name of each in
+ * the quiet column, what it says in the other. Only what the core really
+ * carries is here, and a fact it does not carry leaves no row behind — a
+ * blank line reads as a fault, where a missing one reads as nothing.
+ */
+@Composable
+private fun DetailsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    val info = s.track
+    if (info == null) {
+        Box(modifier.fillMaxWidth(), Alignment.Center) {
+            Text("Nada tocando", color = c.onSurfaceVariant, fontSize = 13.sp)
+        }
+        return
+    }
+    // What plays carries only what the bar draws. The catalogue row behind it
+    // knows which album the song belongs to, and the album knows the year it
+    // came out and where the song stands in it; both are read from the cache
+    // first, so the list is filled in the moment the tab is opened again.
+    val song by produceState<Track?>(null, info.uri) {
+        value = runCatching { actions.core.tracksInfo(listOf(info.uri)) }.getOrNull()?.firstOrNull()
+    }
+    val albumId = song?.albumId
+    val album by produceState<AlbumDetail?>(null, albumId) {
+        val id = albumId ?: return@produceState
+        value = runCatching { actions.core.album(id, false) }.getOrNull()
+    }
+    val place = album?.tracks?.indexOfFirst { it.uri == info.uri }?.takeIf { it >= 0 }
+    Column(modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
+        DetailRow("Tocando de", playingFrom(s, album, actions))
+        DetailRow("Álbum", info.album.takeIf { it.isNotBlank() })
+        DetailRow("Artistas", info.artists.takeIf { it.isNotBlank() })
+        DetailRow("Duração", durationLabel(info.durationMs.toLong()).takeIf { info.durationMs > 0u })
+        DetailRow("Ano", album?.album?.year?.takeIf { it.isNotBlank() })
+        DetailRow("Faixa", place?.let { i -> album?.let { "${i + 1} de ${it.tracks.size}" } })
+    }
+}
+
+/** One fact, under a hairline that keeps the two columns reading as a list. */
+@Composable
+private fun DetailRow(label: String, value: String?) {
+    if (value.isNullOrBlank()) return
+    val c = MaterialTheme.colorScheme
+    Column {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 9.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(
+                label, Modifier.width(88.dp),
+                color = c.onSurfaceVariant.copy(alpha = .75f), fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                value, Modifier.weight(1f), color = c.onSurface, fontSize = 13.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(Hairline).background(c.onSurface.copy(alpha = .06f)))
+    }
+}
+
+/**
+ * What the queue was started from, named: the album itself, the playlist by
+ * the name the library already knows it under, or the user's own songs.
+ * Anything else the context can be is left unsaid rather than guessed at.
+ */
+@Composable
+private fun playingFrom(s: PlaybackSnapshot, album: AlbumDetail?, actions: AppActions): String? {
+    val uri = s.queue.contextUri
+    val target = remember(uri) { uri?.let { SpotifyLinks.parse(it) } }
+    val playlistId = (target as? LinkTarget.Playlist)?.id
+    val playlist by produceState<String?>(null, playlistId) {
+        val id = playlistId ?: return@produceState
+        value = runCatching { actions.core.knownPlaylist(id)?.name }.getOrNull()
+    }
+    return when {
+        uri == null -> null
+        // The collection is a user's own context, which no link parses.
+        uri.endsWith(":collection") -> "Músicas curtidas"
+        target is LinkTarget.Album -> album?.album?.takeIf { it.id == target.id }?.name
+        target is LinkTarget.Playlist -> playlist
+        else -> null
     }
 }
 

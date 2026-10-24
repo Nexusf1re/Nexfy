@@ -173,6 +173,13 @@ data class Screen(val tab: Tab, val route: Route?, val depth: Int = 0)
 @Stable
 class NavState {
     var tab by mutableStateOf(Tab.Home)
+
+    /**
+     * What is being searched for. It lives here, not in the Buscar screen,
+     * because a window has a second field for it in the title bar: typed in
+     * either one, both show the same query and one search runs.
+     */
+    var searchQuery by mutableStateOf("")
     private val stacks = mutableStateMapOf<Tab, List<Route>>()
     private val lists = HashMap<String, LazyListState>()
     private val peeks = HashMap<String, Peek>()

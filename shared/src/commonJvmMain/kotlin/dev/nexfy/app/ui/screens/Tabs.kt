@@ -113,7 +113,9 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
     val c = MaterialTheme.colorScheme
     val keyboard = LocalSoftwareKeyboardController.current
     val collapse = rememberTitleCollapse(list)
-    var query by rememberSaveable { mutableStateOf("") }
+    // Held by the nav state: the window's title bar searches through the same
+    // field (see NavState.searchQuery), and the query outlives this screen.
+    var query by actions.nav::searchQuery
     var results by remember { mutableStateOf<SearchResults?>(null) }
     var searching by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
