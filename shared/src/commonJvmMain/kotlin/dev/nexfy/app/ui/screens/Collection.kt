@@ -548,16 +548,23 @@ private const val MAX_FACES = 60
 
 /**
  * Narrower than this even a table of number, title and length is too tight,
- * and the list stays the column of rows a phone is built around. Opening the
- * side panel is what usually brings a window here.
+ * and the list stays the column of rows a phone is built around. A 1100px
+ * window with the panel open and the library kept wide leaves the page about
+ * 480dp, which is the case this number exists to let through: the point of
+ * shedding columns is that asking for the words does not cost the table.
  */
-private val TableWidth = 560.dp
+private val TableWidth = 440.dp
 
 /** Wide enough for the album column as well as the title's own share. */
-private val AlbumColumnWidth = 680.dp
+private val AlbumColumnWidth = 600.dp
 
-/** Wide enough for the date too, which is the first thing a narrower page drops. */
-private val DateColumnWidth = 820.dp
+/**
+ * Wide enough for the date too, which is the first thing a narrower page
+ * drops. A 1100px window gives the page about 815dp with the sidebar open,
+ * and the whole set reads cleanly there, so this sits below that and not at
+ * it: the date should go when the panel opens, not while there is room.
+ */
+private val DateColumnWidth = 760.dp
 
 enum class TrackSort(val label: String) {
     Original("Ordem original"),
