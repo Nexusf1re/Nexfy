@@ -28,12 +28,16 @@ import kotlinx.coroutines.flow.map
 
 actual fun openInBrowser(context: PlatformContext, url: String) {
     val open = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(open)
+    // A device can have nothing that answers ACTION_VIEW, and the throw would
+    // land in composition: a link that does not open is not worth a crash.
+    runCatching { context.startActivity(open) }
 }
 
-actual fun copyText(context: PlatformContext, text: String) {
+actual fun copyText(context: PlatformContext, text: String, label: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    clipboard.setPrimaryClip(ClipData.newPlainText(text, text))
+    // The label is what Android 13 and later shows in its clipboard preview,
+    // so a copied link reads as the song's name rather than as the URL again.
+    clipboard.setPrimaryClip(ClipData.newPlainText(label.ifBlank { text }, text))
 }
 
 actual fun pasteText(context: PlatformContext): String? {

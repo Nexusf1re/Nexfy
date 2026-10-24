@@ -32,6 +32,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import dev.nexfy.app.playback.PlaybackService
+import dev.nexfy.app.ui.SpotifyLinks
 import dev.nexfy.app.ui.NexfyRoot
 import dev.nexfy.app.ui.player.OpenPlayer
 import dev.nexfy.app.ui.trackJank
@@ -56,10 +57,7 @@ class MainActivity : ComponentActivity() {
         // Reconnect playback with the saved credential, if any.
         lifecycleScope.launch { runCatching { app.core.restoreSession() } }
         // A widget tap opens the full player; not again on recreation.
-        if (savedInstanceState == null) {
-            OpenPlayer.from(intent)
-            dev.nexfy.app.ui.SpotifyLinks.from(intent)
-        }
+        if (savedInstanceState == null) openedWith(intent)
 
         enableEdgeToEdge()
         jank = trackJank(window)
@@ -96,13 +94,16 @@ class MainActivity : ComponentActivity() {
                 // Silences the framework's own feedback too (long presses), not just Nexfy's Haptics.
                 val feedback = LocalHapticFeedback.current
                 CompositionLocalProvider(LocalHapticFeedback provides if (haptics) feedback else NoHaptics) {
-                    NexfyRoot(
-                        app = app,
-                        controller = controller,
-                        openBrowser = { url ->
-                            CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url))
-                        },
-                    )
+                    // What the player sheet and the menus reach for instead of
+                    // casting the context back to the Application.
+                    CompositionLocalProvider(LocalServices provides app) {
+                        NexfyRoot(
+                            services = app,
+                            openBrowser = { url ->
+                                CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url))
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -113,8 +114,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        OpenPlayer.from(intent)
-        dev.nexfy.app.ui.SpotifyLinks.from(intent)
+        openedWith(intent)
+    }
+
+    /**
+     * What the intent asks for. The shared code knows nothing of Intents, so
+     * the asking is translated here: a widget tap into a request for the full
+     * player, a Spotify link into the link the app opens once it is up.
+     */
+    private fun openedWith(intent: Intent) {
+        if (intent.getBooleanExtra(OpenPlayer.EXTRA, false)) OpenPlayer.request()
+        if (intent.action == Intent.ACTION_VIEW) intent.data?.toString()?.let { SpotifyLinks.pending.value = it }
     }
 
     override fun onStart() {

@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 expect fun openInBrowser(context: PlatformContext, url: String)
 
 /** Put [text] on the clipboard. */
-expect fun copyText(context: PlatformContext, text: String)
+expect fun copyText(context: PlatformContext, text: String, label: String = "")
 
 /** What is on the clipboard, if it is text. */
 expect fun pasteText(context: PlatformContext): String?

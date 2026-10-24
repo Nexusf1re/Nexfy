@@ -17,40 +17,29 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** A Nexfy release on GitHub. */
-data class Release(val version: String, val notes: String, val apkUrl: String?, val pageUrl: String)
-
-/** Where the update's APK is: not asked for, coming in ([fraction] once its size is known), in, or failed. */
-sealed interface UpdateDownload {
-    data object Idle : UpdateDownload
-    data class Running(val fraction: Float?) : UpdateDownload
-    data class Ready(val file: File) : UpdateDownload
-    data object Failed : UpdateDownload
-}
-
 /**
  * New versions: asks GitHub for the latest release, at most once a day or
  * when asked, and offers it for as long as it is newer than this install.
  * The last answer is kept, so the offer survives a day without asking again.
  */
-class Updates(context: Context, private val scope: CoroutineScope) {
+class Updates(context: Context, private val scope: CoroutineScope) : UpdateOffers {
     private val app = context.applicationContext
     private val prefs = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
 
     /** This install's version, as GitHub names it ("0.2.5"). */
-    val installed: String = runCatching {
+    override val installed: String = runCatching {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName
     }.getOrNull().orEmpty()
 
     private val _offer = MutableStateFlow<Release?>(null)
 
     /** A newer release than this install, until it is installed. */
-    val offer: StateFlow<Release?> = _offer
+    override val offer: StateFlow<Release?> = _offer
 
     private val _bannerHidden = MutableStateFlow(false)
 
     /** The floating banner was closed: hidden until the app next starts. */
-    val bannerHidden: StateFlow<Boolean> = _bannerHidden
+    override val bannerHidden: StateFlow<Boolean> = _bannerHidden
 
     init {
         prefs.getString(LATEST, null)?.let(::parse)?.let(::consider)
@@ -66,7 +55,7 @@ class Updates(context: Context, private val scope: CoroutineScope) {
      * Ask GitHub now. Returns the latest release when it is newer than this
      * install, null when this is the latest; throws when GitHub cannot be read.
      */
-    suspend fun check(): Release? = withContext(Dispatchers.IO) {
+    override suspend fun check(): Release? = withContext(Dispatchers.IO) {
         val connection = URL(LATEST_URL).openConnection() as HttpURLConnection
         connection.setRequestProperty("Accept", "application/vnd.github+json")
         connection.setRequestProperty("User-Agent", "Nexfy")
@@ -87,14 +76,14 @@ class Updates(context: Context, private val scope: CoroutineScope) {
     private val _download = MutableStateFlow<UpdateDownload>(UpdateDownload.Idle)
 
     /** The update's APK coming in, in the app: what the sheet shows. */
-    val download: StateFlow<UpdateDownload> = _download
+    override val download: StateFlow<UpdateDownload> = _download
 
     /**
      * Download [release]'s APK and hand it to the installer. Neither a
      * browser nor the system download manager was reliable: one parks the
      * download behind a folder prompt, the other left it pending.
      */
-    fun download(offered: Release) {
+    override fun download(offered: Release) {
         if (offered.apkUrl == null) return
         if (_download.value is UpdateDownload.Running) return
         _download.value = UpdateDownload.Running(null)
@@ -159,7 +148,7 @@ class Updates(context: Context, private val scope: CoroutineScope) {
      * install apps, it opens that setting instead; back from it, "Instalar"
      * tries again.
      */
-    fun install(file: File) {
+    override fun install(file: File) {
         val intent = if (!app.packageManager.canRequestPackageInstalls()) {
             Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${app.packageName}"))
         } else {
@@ -172,7 +161,7 @@ class Updates(context: Context, private val scope: CoroutineScope) {
     }
 
     /** Close the floating banner for now; the settings keep the update pending. */
-    fun hideBanner() {
+    override fun hideBanner() {
         _bannerHidden.value = true
     }
 
@@ -200,17 +189,3 @@ class Updates(context: Context, private val scope: CoroutineScope) {
     }
 }
 
-/**
- * Whether version [a] comes after [b], comparing their numbers in order
- * ("0.2.10" after "0.2.9"). A suffix ("0.2.5-dev") counts as that version.
- */
-fun newer(a: String, b: String): Boolean {
-    fun parts(v: String) = v.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
-    val x = parts(a)
-    val y = parts(b)
-    for (i in 0 until maxOf(x.size, y.size)) {
-        val d = x.getOrElse(i) { 0 } - y.getOrElse(i) { 0 }
-        if (d != 0) return d > 0
-    }
-    return false
-}

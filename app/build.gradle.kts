@@ -5,9 +5,9 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// The Rust core (../core) builds into jniLibs and its UniFFI Kotlin bindings
-// into src/main/java/uniffi before every build. Both outputs are gitignored,
-// and both tasks are skipped while their inputs are unchanged.
+// The Rust core (../core) builds into jniLibs before every build; the output
+// is gitignored, and the task is skipped while its inputs are unchanged. The
+// core's UniFFI bindings are :shared's, which generates them for both targets.
 val ndkVersionPinned = "30.0.16248370"
 val coreDir: File = rootProject.file("core")
 val jniLibsDir: File = file("src/main/jniLibs")
@@ -15,7 +15,6 @@ val jniLibsDir: File = file("src/main/jniLibs")
 val abis: List<String> =
     ((findProperty("ABIS") as String?) ?: "arm64-v8a").split(",").map { it.trim() }.filter { it.isNotEmpty() }
 val coreLibrary: File = jniLibsDir.resolve("${abis[0]}/libnexfy_core.so")
-val bindingsDir: File = file("src/main/java/uniffi")
 
 // Full LTO only when a release APK is requested; debug builds use the
 // faster android-dev profile (see core/Cargo.toml).
@@ -52,21 +51,9 @@ val buildRustCore by tasks.registering(Exec::class) {
     )
 }
 
-val generateUniffiBindings by tasks.registering(Exec::class) {
-    group = "rust"
-    description = "Generates the Kotlin bindings for the core library."
-    dependsOn(buildRustCore)
-    inputs.file(coreLibrary)
-    outputs.dir(bindingsDir)
-    workingDir = coreDir
-    commandLine(
-        cargo, "run", "--release", "--manifest-path", "uniffi-bindgen/Cargo.toml", "--",
-        "generate", "--library", coreLibrary.path,
-        "--language", "kotlin", "--out-dir", bindingsDir.parentFile.path, "--no-format",
-    )
-}
-
-tasks.named("preBuild") { dependsOn(generateUniffiBindings) }
+// The .so still has to be in jniLibs before the APK is assembled; the
+// bindings that call into it come from :shared.
+tasks.named("preBuild") { dependsOn(buildRustCore) }
 
 // Release signing: a keystore kept outside the repo, given as Gradle properties
 // (~/.gradle/gradle.properties) or environment variables (CI). Without one,
@@ -130,6 +117,12 @@ android {
 }
 
 dependencies {
+    // Without the exclude the plain jna jar arrives through :shared and every
+    // com.sun.jna class is on the APK's classpath twice: once from the jar,
+    // once from the aar below, which is the one that carries Android natives.
+    implementation(project(":shared")) {
+        exclude(group = "net.java.dev.jna", module = "jna")
+    }
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)

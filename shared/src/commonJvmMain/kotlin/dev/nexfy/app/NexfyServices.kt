@@ -58,7 +58,12 @@ interface NexfyServices {
     suspend fun keptTracks(key: String): List<String>
 
     /** A short message the system shows over the app, outside its own windows. */
-    fun toast(message: String)
+    /**
+     * Says [message] where the platform says such things. [long] for a
+     * sentence that has to be read rather than glanced at: an explanation of
+     * why something will not play is no use if it is gone first.
+     */
+    fun toast(message: String, long: Boolean = false)
 
     /**
      * Run [block] with the process kept awake. A phone freezes a

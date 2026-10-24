@@ -124,7 +124,7 @@ fun TrackActionsSheet(track: TrackInfo, controls: PlayerControls, onNavigate: ()
                 }
             }
             Action(Icons.Rounded.Link, "Copiar link") {
-                copyText(context, webLink(track.uri))
+                copyText(context, webLink(track.uri), track.title)
                 services.toast("Link copiado")
                 onDismiss()
             }

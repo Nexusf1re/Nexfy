@@ -60,7 +60,9 @@ class DesktopServices(
     override val unmetered: StateFlow<Boolean> = MutableStateFlow(true)
 
     /** No system notification here: the message goes over the dock, where the app's own do. */
-    override fun toast(message: String) = edits.tell(message)
+    // The notice bar stays until it is dismissed either way, so a window has
+    // nothing to do with the distinction.
+    override fun toast(message: String, long: Boolean) = edits.tell(message)
 
     /** Nothing freezes a window on a computer. */
     override suspend fun <T> keepingAwake(block: suspend () -> T): T = block()

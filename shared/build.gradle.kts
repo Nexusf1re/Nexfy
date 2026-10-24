@@ -90,7 +90,9 @@ kotlin {
             implementation(libs.androidx.metrics.performance)
         }
         commonJvmMain.dependencies {
-            // UniFFI's bindings call the core through JNA.
+            // UniFFI's bindings call the core through JNA. The plain jar is
+            // what a JVM wants; an APK takes the same classes from the aar
+            // instead, which is why :app excludes this one (see its build).
             implementation(libs.jna)
             api(libs.coil.compose)
             api(libs.coil.network.okhttp)

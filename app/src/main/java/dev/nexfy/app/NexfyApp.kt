@@ -12,6 +12,8 @@ import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import okio.Path.Companion.toOkioPath
 import coil3.request.crossfade
+import android.widget.Toast
+import dev.nexfy.app.playback.OutputGain
 import androidx.core.content.ContextCompat
 import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
@@ -48,31 +50,53 @@ private const val WARM_EVERY_MS = 86_400_000L
 private const val WARM_PER_DAY = 12
 private const val WARM_MAX_TRACKS = 200
 
-/** Whether the phone reaches the internet now: kept by [NexfyApp], read by the screens. */
-object Connectivity {
-    val online = MutableStateFlow(true)
-}
-
-class NexfyApp : Application(), SingletonImageLoader.Factory {
+class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    val core: NexfyCore by lazy {
+    override val core: NexfyCore by lazy {
         NativeInit.init(this)
         NexfyCore(filesDir.resolve("spotify").path, deviceName())
     }
 
-    val bridge: CoreBridge by lazy { CoreBridge(core) }
+    override val bridge: CoreBridge by lazy { CoreBridge(core) }
 
-    val library: LibraryPrefs by lazy { LibraryPrefs(this) }
+    override val library: LibraryPrefs by lazy { LibraryPrefs(openPrefs(this, "library")) }
 
     /** Playback commands for the screens and the widget. */
-    val commands: Commands by lazy { Commands(this, scope) }
-    val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
-    val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
-    val updates: Updates by lazy { Updates(this, scope) }
+    override val commands: Commands by lazy { Commands(this, scope) }
+    override val sleep: SleepTimer by lazy { SleepTimer(this, scope) }
+    override val edits: LibraryEdits by lazy { LibraryEdits(this, scope) }
+    private val updater: Updates by lazy { Updates(this, scope) }
+    override val updates: UpdateOffers get() = updater
 
     /** Songs played here, for the listening stats. */
     val playLog: PlayLog by lazy { PlayLog(this, scope) { core } }
+
+    override val listens get() = playLog.listens
+
+    /**
+     * One gain from the user's own level and the sleep timer's fade. Nothing
+     * on the phone sets a level of its own — the volume keys are the system's
+     * — so it stays at full and only the fade moves.
+     */
+    override val output: OutputGain by lazy { OutputGain(core) }
+
+    /**
+     * Android says this sort of thing in a toast. It is posted to the main
+     * thread because a failure explains itself from whichever thread it
+     * happened on, and a toast from another one throws.
+     */
+    override fun toast(message: String, long: Boolean) {
+        scope.launch {
+            Toast.makeText(this@NexfyApp, message, if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * A phone stops an app it thinks is idle, and signing in waits on a
+     * browser: the work is held by a foreground service while it runs.
+     */
+    override suspend fun <T> keepingAwake(block: suspend () -> T): T = LoginService.during(this, block)
 
     /** Covers fade in as they load instead of popping over their placeholder. */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
@@ -113,7 +137,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
                 delay(3_000)
                 playLog.importElsewhere()
                 // And whether a newer Nexfy is out, once a day.
-                runCatching { updates.checkDaily() }.onFailure { Log.d("Nexfy", "update check: ${it.message}") }
+                runCatching { updater.checkDaily() }.onFailure { Log.d("Nexfy", "update check: ${it.message}") }
             }
         }
         // Playback can start from another device (Spotify Connect) while no
@@ -320,7 +344,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     }
 
     /** Whether the network is unmetered (Wi-Fi), where songs are downloaded ahead. */
-    val unmetered: StateFlow<Boolean> by lazy {
+    override val unmetered: StateFlow<Boolean> by lazy {
         val connectivity = getSystemService(ConnectivityManager::class.java)
         callbackFlow {
             val callback = object : ConnectivityManager.NetworkCallback() {
@@ -347,7 +371,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     }
 
     /** The songs of a kept playlist (`pl:<id>`) or album (`al:<id>`). */
-    suspend fun keptTracks(key: String): List<String> {
+    override suspend fun keptTracks(key: String): List<String> {
         val id = key.substringAfter(':')
         return when {
             key.startsWith("pl:") -> core.playlist(id, false).tracks
@@ -357,14 +381,14 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     }
 
     /** Whether a screen of the app is showing; remote playback is only polled then. */
-    val visible = MutableStateFlow(false)
+    override val visible = MutableStateFlow(false)
 
     /**
      * Read what the account is playing now and mirror it. Not without a
      * network: each try would start a reconnect bound to fail, every few
      * seconds; the network coming back reads it at once.
      */
-    suspend fun refreshRemote() {
+    override suspend fun refreshRemote() {
         if (!core.isConnected() || !Connectivity.online.value) return
         runCatching { core.remoteState() }
             .onSuccess { bridge.setRemote(it) }
@@ -372,7 +396,7 @@ class NexfyApp : Application(), SingletonImageLoader.Factory {
     }
 
     /** Poll again shortly: after a command, Spotify takes a moment to report it. */
-    fun refreshRemoteSoon() {
+    override fun refreshRemoteSoon() {
         scope.launch {
             delay(700)
             refreshRemote()

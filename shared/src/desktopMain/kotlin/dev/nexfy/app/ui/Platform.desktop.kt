@@ -20,7 +20,7 @@ actual fun openInBrowser(context: PlatformContext, url: String) {
     runCatching { Desktop.getDesktop().browse(URI(url)) }
 }
 
-actual fun copyText(context: PlatformContext, text: String) {
+actual fun copyText(context: PlatformContext, text: String, label: String) {
     runCatching { Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null) }
 }
 

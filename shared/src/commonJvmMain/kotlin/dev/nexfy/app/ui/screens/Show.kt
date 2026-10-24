@@ -256,7 +256,7 @@ private fun playEpisode(actions: AppActions, showId: String, episode: Episode) {
         return
     }
     if (!episode.playable) {
-        app.toast("Este episódio não toca aqui: fica fora do Spotify ou não está liberado na tua região")
+        app.toast("Este episódio não toca aqui: fica fora do Spotify ou não está liberado na tua região", long = true)
         return
     }
     val from = if (episode.started) episode.resumePositionMs else 0u
@@ -266,7 +266,7 @@ private fun playEpisode(actions: AppActions, showId: String, episode: Episode) {
         } catch (e: Exception) {
             // The core explains why (hosted outside Spotify, no audio); say it plainly.
             val reason = e.message?.substringAfter(": ")?.replaceFirstChar { it.uppercase() } ?: "Não deu para tocar este episódio"
-            app.toast(reason)
+            app.toast(reason, long = true)
         }
     }
 }
