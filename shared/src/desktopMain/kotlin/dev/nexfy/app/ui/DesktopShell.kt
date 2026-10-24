@@ -47,6 +47,7 @@ import androidx.compose.material.icons.rounded.KeyboardDoubleArrowRight
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
@@ -105,6 +106,7 @@ import dev.nexfy.app.playScores
 import dev.nexfy.app.playback.PlaybackSnapshot
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.GlassBackdrop
+import dev.nexfy.app.ui.design.artInk
 import dev.nexfy.app.ui.design.GlassLevel
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.LocalHaze
@@ -186,6 +188,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     val backdrop = remember { GlassBackdrop() }
     var panelOpen by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(PanelTab.Queue) }
+    var nowPlaying by remember { mutableStateOf(false) }
     // The strip's field is the one search box of the window, so the shortcut
     // that reaches for it is held here, beside the key dispatch that fires it.
     val searchFocus = remember { FocusRequester() }
@@ -221,6 +224,9 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     // Esc goes back a page, then out of a tab, as the phone's back does.
     BackGesture(enabled = nav.stack().isNotEmpty()) { nav.pop() }
     BackGesture(enabled = nav.stack().isEmpty() && nav.tab != Tab.Home) { nav.tab = Tab.Home }
+    // Registered last, so it is the first asked: the layer on top leaves
+    // before the page under it does, as the phone's player does.
+    BackGesture(enabled = nowPlaying) { nowPlaying = false }
 
     CompositionLocalProvider(
         LocalHaze provides backdrop,
@@ -249,6 +255,12 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
             )
             Column(Modifier.fillMaxSize()) {
             TitleBar(actions, frame, searchFocus)
+            // Tocando agora takes everything under the strip: the library, the
+            // page and the bar step aside for it, and the strip itself stays so
+            // an undecorated window can still be moved, minimised and closed.
+            if (nowPlaying) {
+                NowPlaying(snapshot, actions, Modifier.weight(1f).fillMaxWidth()) { nowPlaying = false }
+            } else {
             Row(Modifier.weight(1f).fillMaxWidth()) {
                 Sidebar(
                     actions, rail,
@@ -263,16 +275,20 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 }
             }
             }
-            PlayingBar(
-                snapshot, actions,
-                panelOpen = panelOpen,
-                onPanel = { tab: PanelTab ->
-                    panelOpen = !(panelOpen && panelTab == tab)
-                    panelTab = tab
-                },
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            )
+            }
+            if (!nowPlaying) {
+                PlayingBar(
+                    snapshot, actions,
+                    panelOpen = panelOpen,
+                    onPanel = { tab: PanelTab ->
+                        panelOpen = !(panelOpen && panelTab == tab)
+                        panelTab = tab
+                    },
+                    onExpand = { nowPlaying = true },
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
             NoticeBar(
                 services.edits,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = BarHeight + 18.dp, start = 24.dp, end = 24.dp),
@@ -695,6 +711,7 @@ private fun PlayingBar(
     actions: AppActions,
     panelOpen: Boolean,
     onPanel: ((PanelTab) -> Unit)?,
+    onExpand: () -> Unit,
     modifier: Modifier,
 ) {
     val c = MaterialTheme.colorScheme
@@ -743,6 +760,9 @@ private fun PlayingBar(
                 NavIcon(Icons.Rounded.Lyrics, "Letra") { open(PanelTab.Lyrics) }
                 NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, "A seguir") { open(PanelTab.Queue) }
             }
+            // The whole window for the song, the way the phone's bar pulls up
+            // into the full player.
+            NavIcon(Icons.Rounded.OpenInFull, "Tocando agora", onExpand)
             NavIcon(Icons.Rounded.Devices, "Dispositivos") { actions.openDevices() }
             Volume(s, actions)
         }
@@ -788,9 +808,13 @@ private fun Transport(s: PlaybackSnapshot, actions: AppActions) {
     }
 }
 
-/** The line, with where the song is and how long it runs either side of it. */
+/**
+ * The line, with where the song is and how long it runs either side of it.
+ * [large] is the full-window player, where the clock is read from a chair
+ * rather than a hand's length away and sits over living artwork.
+ */
 @Composable
-private fun SeekLine(s: PlaybackSnapshot, actions: AppActions) {
+internal fun SeekLine(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier = Modifier, large: Boolean = false) {
     val c = MaterialTheme.colorScheme
     val duration = s.track?.durationMs?.toLong() ?: 0L
     // Dragged, the head follows the mouse and the clock with it; let go, the
@@ -804,8 +828,10 @@ private fun SeekLine(s: PlaybackSnapshot, actions: AppActions) {
         }
     }
     val shown = if (dragging) (held * duration).toLong() else position.coerceIn(0L, duration.coerceAtLeast(0L))
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(durationLabel(shown), color = c.onSurfaceVariant, fontSize = 11.sp)
+    val clock = if (large) artInk().copy(alpha = .66f) else c.onSurfaceVariant
+    val size = if (large) 13.sp else 11.sp
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(durationLabel(shown), color = clock, fontSize = size)
         ThinSlider(
             progress = { if (duration <= 0) 0f else (shown.toFloat() / duration).coerceIn(0f, 1f) },
             onChange = { dragging = true; held = it },
@@ -818,7 +844,7 @@ private fun SeekLine(s: PlaybackSnapshot, actions: AppActions) {
             waiting = { s.loading },
             lit = s.playing,
         )
-        Text(durationLabel(duration), color = c.onSurfaceVariant, fontSize = 11.sp)
+        Text(durationLabel(duration), color = clock, fontSize = size)
     }
 }
 
@@ -828,7 +854,7 @@ private fun SeekLine(s: PlaybackSnapshot, actions: AppActions) {
  * for it to be let go, which is what a volume should do.
  */
 @Composable
-private fun Volume(s: PlaybackSnapshot, actions: AppActions) {
+internal fun Volume(s: PlaybackSnapshot, actions: AppActions) {
     val c = MaterialTheme.colorScheme
     val output = actions.services.output
     val remote = s.remote
@@ -980,7 +1006,7 @@ private fun DetailsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modi
     }
     val place = album?.tracks?.indexOfFirst { it.uri == info.uri }?.takeIf { it >= 0 }
     Column(modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
-        DetailRow("Tocando de", playingFrom(s, album, actions))
+        DetailRow("Tocando de", playingFrom(s, info.album, actions))
         DetailRow("Álbum", info.album.takeIf { it.isNotBlank() })
         DetailRow("Artistas", info.artists.takeIf { it.isNotBlank() })
         DetailRow("Duração", durationLabel(info.durationMs.toLong()).takeIf { info.durationMs > 0u })
@@ -1017,9 +1043,12 @@ private fun DetailRow(label: String, value: String?) {
  * What the queue was started from, named: the album itself, the playlist by
  * the name the library already knows it under, or the user's own songs.
  * Anything else the context can be is left unsaid rather than guessed at.
+ *
+ * [albumName] is what to call an album context, which the caller already
+ * has: while a song plays from an album, that album is the one it is on.
  */
 @Composable
-private fun playingFrom(s: PlaybackSnapshot, album: AlbumDetail?, actions: AppActions): String? {
+internal fun playingFrom(s: PlaybackSnapshot, albumName: String?, actions: AppActions): String? {
     val uri = s.queue.contextUri
     val target = remember(uri) { uri?.let { SpotifyLinks.parse(it) } }
     val playlistId = (target as? LinkTarget.Playlist)?.id
@@ -1031,7 +1060,7 @@ private fun playingFrom(s: PlaybackSnapshot, album: AlbumDetail?, actions: AppAc
         uri == null -> null
         // The collection is a user's own context, which no link parses.
         uri.endsWith(":collection") -> "Músicas curtidas"
-        target is LinkTarget.Album -> album?.album?.takeIf { it.id == target.id }?.name
+        target is LinkTarget.Album -> albumName?.takeIf { it.isNotBlank() }
         target is LinkTarget.Playlist -> playlist
         else -> null
     }
@@ -1072,7 +1101,7 @@ private fun QueueList(s: PlaybackSnapshot, actions: AppActions, modifier: Modifi
  * the phone's player shows, which seeks to a line when one is clicked.
  */
 @Composable
-private fun LyricsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+internal fun LyricsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
     val track = s.track
     if (track == null) {
         Box(modifier.fillMaxWidth(), Alignment.Center) {

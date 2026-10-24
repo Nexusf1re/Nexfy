@@ -1047,7 +1047,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
 }
 
 @Composable
-private fun PlayButton(
+internal fun PlayButton(
     s: PlaybackSnapshot,
     controls: PlayerControls,
     size: Dp,
@@ -1085,7 +1085,7 @@ private fun PlayButton(
 }
 
 @Composable
-private fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, dir: Int, onClick: () -> Unit) {
+internal fun SideButton(icon: ImageVector, description: String, modifier: Modifier, enabled: Boolean, dir: Int, onClick: () -> Unit) {
     val ink = artInk()
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
@@ -1119,10 +1119,10 @@ private fun SideButton(icon: ImageVector, description: String, modifier: Modifie
 }
 
 /** How a row button answers a tap, beyond filling in. */
-private enum class ToggleMotion { Bounce, Spin, Wiggle }
+internal enum class ToggleMotion { Bounce, Spin, Wiggle }
 
 @Composable
-private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, motion: ToggleMotion = ToggleMotion.Bounce, onClick: () -> Unit) {
+internal fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, motion: ToggleMotion = ToggleMotion.Bounce, onClick: () -> Unit) {
     val ink = artInk()
     val wash = artWash()
     val source = remember { MutableInteractionSource() }
@@ -1174,7 +1174,7 @@ private fun ToggleIcon(icon: ImageVector, description: String, on: Boolean, moti
 
 /** The song's heart, beside its title: fills and pops when liked. */
 @Composable
-private fun LikeButton(uri: String) {
+internal fun LikeButton(uri: String) {
     val ink = artInk()
     val edits = dev.nexfy.app.LocalServices.current.edits
     val haptics = rememberHaptics()
