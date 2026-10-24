@@ -121,7 +121,9 @@ fun rememberDominant(url: String?, key: String): Color {
         try {
             val pixels = coverPixels(context, url, 64) ?: return@LaunchedEffect
             val swatches = withContext(Dispatchers.Default) { quantize(pixels, 12) }
-            (swatches.pick(1f, .5f) ?: swatches.firstOrNull()?.color)?.let {
+            // Vibrant, then the most common colour, then a muted one: a cover
+            // with nothing vivid in it still has a colour to be read by.
+            (swatches.pick(1f, .5f) ?: swatches.firstOrNull()?.color ?: swatches.pick(.3f, .5f))?.let {
                 color = it
                 DominantCache[url] = it
             }
