@@ -46,6 +46,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.nexfy.app.ui.theme.isDark
@@ -65,10 +66,12 @@ import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.Listen
 import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
@@ -99,12 +102,116 @@ import dev.nexfy.app.ui.design.weightedPress
 import dev.nexfy.app.ui.theme.accentColor
 import uniffi.nexfy_core.SearchResults
 import uniffi.nexfy_core.Track
+import java.time.Instant
 import java.time.LocalTime
+import java.time.ZoneId
 
-internal fun greeting(): String = when (LocalTime.now().hour) {
-    in 5..11 -> "Bom dia"
-    in 12..17 -> "Boa tarde"
-    else -> "Boa noite"
+/** The salutation alone, where there is no room for the line under it. */
+internal fun greeting(): String = clockRung(LocalTime.now().hour, null).headline
+
+/**
+ * The home's two first lines. One rung of the ladder writes both, so the
+ * title can never claim one thing and the line below it another.
+ */
+private data class Greeting(val headline: String, val line: String)
+
+/** Further ahead of now than this, a play's stamp is a wrong clock. */
+private const val FutureSlack = 5 * 60 * 1000L
+
+/**
+ * The home's first words: what this person's listening has been like, not
+ * what time it is. The first rung that fires writes both lines, the clock
+ * being only the last resort; a rung names a pattern and never a song, an
+ * artist or an album, and nothing is read but the play log already on disk.
+ *
+ * The reference app has two more rungs, for a calm and for an energetic
+ * stretch, which weigh each play's genre. No play here carries one, and the
+ * core exposes no genre at all, so they are left out rather than guessed at
+ * from some other field.
+ */
+private fun greetingFor(plays: List<Listen>, name: String?, now: Long, zone: ZoneId): Greeting {
+    // The log is kept oldest first, so the newest plays are its tail: reading
+    // forty of them stays forty steps however long the log has grown. A play
+    // stamped before the epoch or well ahead of now is a clock that was
+    // wrong, and says nothing about anybody's listening.
+    val recent = plays.asReversed().asSequence()
+        .filter { it.at > 0L && it.at <= now + FutureSlack }
+        .take(40)
+        .toList()
+    val clock = Instant.ofEpochMilli(now).atZone(zone)
+    if (recent.size < 5) return clockRung(clock.hour, name)
+
+    // One song three times over the last eight plays.
+    if (recent.take(8).groupingBy { it.uri }.eachCount().any { (_, times) -> times >= 3 }) {
+        return Greeting("Direto no repeat", "O botão de repetir não tem tido descanso.")
+    }
+
+    // Wall-clock hour of each play, over a window wide enough that one late
+    // night is not a habit: six plays of it, and half of what was played.
+    val lately = recent.take(30)
+    val hours = lately.map { Instant.ofEpochMilli(it.at).atZone(zone).hour }
+    val night = hours.count { it >= 22 || it < 5 }
+    if (night >= 6 && night * 2 >= lately.size) {
+        return Greeting("Coruja", "Teu ritmo de ouvir tarde da noite segue firme.")
+    }
+    val early = hours.count { it in 5..8 }
+    if (early >= 6 && early * 2 >= lately.size) {
+        return Greeting("Madrugador", "As primeiras horas do dia vêm com trilha sonora.")
+    }
+
+    // Four of the last seven days with something played on them.
+    val week = clock.toLocalDate().minusDays(6)
+    val days = recent.asSequence()
+        .map { Instant.ofEpochMilli(it.at).atZone(zone).toLocalDate() }
+        .filter { !it.isBefore(week) }
+        .distinct()
+        .count()
+    if (days >= 4) return Greeting("No embalo", "Teus dias de música vêm emendando um no outro.")
+
+    // Whoever is credited first, not the whole credit line the log keeps: a
+    // name that only ever appears beside another would otherwise pass for
+    // variety of its own. Eight named plays, four fifths of them different.
+    val credited = recent.map { it.artists.substringBefore(',').trim().lowercase() }.filter { it.isNotEmpty() }
+    if (credited.size >= 8 && credited.distinct().size * 5 >= credited.size * 4) {
+        return Greeting("Rotação variada", "Tem passado bastante coisa diferente na tua rotação.")
+    }
+
+    return clockRung(clock.hour, name)
+}
+
+/** The last resort, and the one rung that greets by name. */
+private fun clockRung(hour: Int, name: String?): Greeting {
+    val (salutation, line) = when (hour) {
+        in 5..11 -> "Bom dia" to "Boa hora para começar o dia com música."
+        in 12..17 -> "Boa tarde" to "Escolhe algo para a tarde seguir."
+        in 18..22 -> "Boa noite" to "A noite fica melhor com algo tocando."
+        else -> "Boa noite" to "Companhia para as horas tardias."
+    }
+    return Greeting(if (name != null) "$salutation, $name" else salutation, line)
+}
+
+/**
+ * The home's headline and the line under it, from the play log. Both come
+ * from the same rung, and the work is forty steps over a list already in
+ * time order, which is why it can sit in a [remember] instead of going off
+ * to another thread.
+ */
+@Composable
+internal fun HomeGreeting(name: String?, actions: AppActions, collapse: State<Float>) {
+    val plays by actions.services.listens.collectAsState()
+    val said = remember(plays, name) { greetingFor(plays, name, System.currentTimeMillis(), ZoneId.systemDefault()) }
+    Column {
+        LargeTitle(said.headline, collapse)
+        // The line goes with the title it belongs to, read as it draws so that
+        // scrolling moves it without recomposing the words.
+        Text(
+            said.line,
+            Modifier.graphicsLayer { alpha = 1f - collapse.value.coerceIn(0f, 1f) }.padding(top = 2.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 15.sp,
+            lineHeight = 20.sp,
+        )
+    }
 }
 
 /** Shown when the Web API is not signed in yet. */

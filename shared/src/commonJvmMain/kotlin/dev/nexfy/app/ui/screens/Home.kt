@@ -151,7 +151,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             contentPadding = PaddingValues(start = 24.dp, end = 24.dp, bottom = LocalBottomSpace.current),
         ) {
             item(key = "title") {
-                LargeTitle(if (name != null) "${greeting()}, $name" else greeting(), collapse)
+                HomeGreeting(name, actions, collapse)
                 StatsShortcut(actions)
                 Spacer(Modifier.height(8.dp))
             }
