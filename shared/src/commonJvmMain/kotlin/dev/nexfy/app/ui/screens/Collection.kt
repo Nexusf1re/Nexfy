@@ -278,7 +278,7 @@ fun CollectionScreen(
     val showFaces = addedByOn && contributors.size > 1
     // What a table of these songs can label: no album column when they all
     // come from the same one, no date column where nothing is dated.
-    val columns = remember(all, all.size, showFaces) {
+    val afforded = remember(all, all.size, showFaces) {
         TrackColumns(
             album = all.asSequence().map { it.album }.distinct().take(2).count() > 1,
             date = all.any { it.addedAtMs != null },
@@ -297,6 +297,14 @@ fun CollectionScreen(
                 // a table, the way a window lists them. A finger, or a window
                 // this narrow, keeps the rows a phone is built around.
                 val table = LocalPointer.current && maxWidth >= TableWidth
+                // Narrowing the window, or opening the side panel, used to
+                // cost the whole table at once. It gives a column at a time
+                // instead, least telling first: the date, then the album.
+                val columns = when {
+                    maxWidth >= DateColumnWidth -> afforded
+                    maxWidth >= AlbumColumnWidth -> afforded.copy(date = false)
+                    else -> afforded.copy(date = false, album = false)
+                }
                 // The table carries a heart on each row: one lookup answers
                 // the whole list, out of the saved set the core already keeps.
                 LaunchedEffect(table, all.size) { if (table) edits.load(all.map { it.uri }) }
@@ -539,11 +547,17 @@ fun CollectionScreen(
 private const val MAX_FACES = 60
 
 /**
- * Narrower than this the columns of a table would be too tight to read, and
- * the list stays a column of rows. Above it the header is already side by
- * side with the cover, so the whole page reads as a window's page.
+ * Narrower than this even a table of number, title and length is too tight,
+ * and the list stays the column of rows a phone is built around. Opening the
+ * side panel is what usually brings a window here.
  */
-private val TableWidth = 760.dp
+private val TableWidth = 560.dp
+
+/** Wide enough for the album column as well as the title's own share. */
+private val AlbumColumnWidth = 680.dp
+
+/** Wide enough for the date too, which is the first thing a narrower page drops. */
+private val DateColumnWidth = 820.dp
 
 enum class TrackSort(val label: String) {
     Original("Ordem original"),
