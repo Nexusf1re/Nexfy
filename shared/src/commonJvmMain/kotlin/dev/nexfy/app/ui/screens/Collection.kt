@@ -29,7 +29,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +46,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -47,6 +57,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -94,10 +105,14 @@ import dev.nexfy.app.ui.design.glassSource
 import dev.nexfy.app.ui.design.GlassBox
 import dev.nexfy.app.ui.design.GlassIcon
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.RoundIconButton
 import dev.nexfy.app.ui.design.TopBarHeight
+import dev.nexfy.app.ui.design.TrackColumns
 import dev.nexfy.app.ui.design.TrackRow
 import dev.nexfy.app.ui.design.TrackRowSkeleton
+import dev.nexfy.app.ui.design.TrackTable
+import dev.nexfy.app.ui.design.TrackTableRow
 import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.collapseOf
 import dev.nexfy.app.ui.design.dragToDismiss
@@ -217,8 +232,14 @@ fun CollectionScreen(
         }
     }
     var query by rememberSaveable { mutableStateOf("") }
+    // A window asks for the search before it gives the field: a button in the
+    // action row, as every desktop player has it. A phone keeps its own field
+    // standing, where a thumb can always reach it.
+    val pointer = LocalPointer.current
+    var searching by rememberSaveable { mutableStateOf(false) }
     // Each list keeps the order last chosen for it, across launches.
     val library = actions.services.library
+    val edits = actions.services.edits
     var sort by remember(source) {
         mutableStateOf(source?.let(library::trackSort)?.let { saved -> TrackSort.entries.firstOrNull { it.name == saved } } ?: TrackSort.Original)
     }
@@ -255,13 +276,30 @@ fun CollectionScreen(
         }
     }
     val showFaces = addedByOn && contributors.size > 1
+    // What a table of these songs can label: no album column when they all
+    // come from the same one, no date column where nothing is dated.
+    val columns = remember(all, all.size, showFaces) {
+        TrackColumns(
+            album = all.asSequence().map { it.album }.distinct().take(2).count() > 1,
+            date = all.any { it.addedAtMs != null },
+            addedBy = showFaces,
+        )
+    }
 
     // The page's own glass backdrop: the top bar floats over it as liquid glass.
     val pageGlass = remember { GlassBackdrop() }
     Box(modifier) {
         Box(Modifier.fillMaxSize().glassSource(pageGlass)) {
-            CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
+            dev.nexfy.app.ui.design.LivingArtwork(imageUrl, Modifier.fillMaxSize(), dim = .25f) // PROBE: was CollectionBackdrop
             Box(Modifier.fillMaxSize().dragToDismiss(dismiss, back)) {
+                BoxWithConstraints {
+                // A mouse and room for real columns: the songs are listed as
+                // a table, the way a window lists them. A finger, or a window
+                // this narrow, keeps the rows a phone is built around.
+                val table = LocalPointer.current && maxWidth >= TableWidth
+                // The table carries a heart on each row: one lookup answers
+                // the whole list, out of the saved set the core already keeps.
+                LaunchedEffect(table, all.size) { if (table) edits.load(all.map { it.uri }) }
                 LazyColumn(
                     Modifier.fillMaxSize(),
                     state = list,
@@ -381,6 +419,13 @@ fun CollectionScreen(
                                         Text("Tocar", color = ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                                     }
                                 }
+                                if (pointer && all.size > 1) {
+                                    if (searching) {
+                                        ListSearch(query, { query = it }, ink, dark) { searching = false }
+                                    } else {
+                                        GlassIcon(Icons.Rounded.Search, "Buscar nesta lista", { searching = true }, light = !dark, selected = query.isNotBlank())
+                                    }
+                                }
                                 if (keepKey != null) {
                                     GlassIcon(if (kept) Icons.Rounded.OfflinePin else Icons.Rounded.DownloadForOffline, if (kept) "Tirar do aparelho" else "Manter no aparelho", {
                                         haptics.press()
@@ -411,7 +456,7 @@ fun CollectionScreen(
                             TrackTools(query, { query = it }, sort, { new ->
                                 sort = new
                                 source?.let { library.setTrackSort(it, new.name) }
-                            }, shown.size, all.size, dated = all.any { it.addedAtMs != null })
+                            }, shown.size, all.size, dated = columns.date, standing = !pointer)
                         }
                     }
                     if (loading) {
@@ -436,27 +481,53 @@ fun CollectionScreen(
                             )
                         }
                     }
+                    if (table && shown.isNotEmpty()) {
+                        item(key = "columns") { TrackTable(columns, Modifier.padding(horizontal = 16.dp)) }
+                    }
                     itemsIndexed(shown, key = { _, entry -> "${entry.index}:${entry.value.uri}" }) { i, entry ->
                         val track = entry.value
+                        // The queue keeps the URI as listed; the playing one may be relinked.
+                        val playing = playingUris.first == track.uri || playingUris.second == track.uri
+                        val play = { actions.play(shownTracks, i, shuffle = shuffleOn, source = source, contextUri = rowContext) }
+                        val addedBy = if (showFaces) track.addedBy?.let(faces::get) else null
                         Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = reorderSpring, fadeOutSpec = null)) {
-                            Box(Modifier.padding(horizontal = 16.dp)) {
-                                TrackRow(
+                            if (table) {
+                                val liked = edits.saved[track.uri] == true
+                                TrackTableRow(
                                     track,
-                                    { actions.play(shownTracks, i, shuffle = shuffleOn, source = source, contextUri = rowContext) },
-                                    number = if (numbered) entry.index + 1 else null,
-                                    // The queue keeps the URI as listed; the playing one may be relinked.
-                                    playing = playingUris.first == track.uri || playingUris.second == track.uri,
-                                    onLongClick = { menuFor = track },
-                                    onSwipe = { actions.addToQueue(track) },
-                                    addedBy = if (showFaces) track.addedBy?.let(faces::get) else null,
+                                    // The place in the list as it was given, whatever this view shows.
+                                    number = entry.index + 1,
+                                    columns = columns,
+                                    onClick = play,
+                                    onMenu = { menuFor = track },
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                    playing = playing,
+                                    liked = liked,
+                                    onLike = {
+                                        edits.setSaved(track.uri, !liked, if (liked) "Removida das curtidas" else "Adicionada às curtidas")
+                                    },
+                                    addedBy = addedBy,
                                 )
-                            }
-                            if (i < shown.lastIndex) {
-                                HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
+                            } else {
+                                Box(Modifier.padding(horizontal = 16.dp)) {
+                                    TrackRow(
+                                        track,
+                                        play,
+                                        number = if (numbered) entry.index + 1 else null,
+                                        playing = playing,
+                                        onLongClick = { menuFor = track },
+                                        onSwipe = { actions.addToQueue(track) },
+                                        addedBy = addedBy,
+                                    )
+                                }
+                                if (i < shown.lastIndex) {
+                                    HorizontalDivider(Modifier.padding(start = if (numbered) 66.dp else 86.dp, end = 16.dp), color = c.outlineVariant)
+                                }
                             }
                         }
                     }
                     footer()
+                }
                 }
             }
         }
@@ -466,6 +537,13 @@ fun CollectionScreen(
 
 /** Most contributors looked up for one playlist. */
 private const val MAX_FACES = 60
+
+/**
+ * Narrower than this the columns of a table would be too tight to read, and
+ * the list stays a column of rows. Above it the header is already side by
+ * side with the cover, so the whole page reads as a window's page.
+ */
+private val TableWidth = 760.dp
 
 enum class TrackSort(val label: String) {
     Original("Ordem original"),
@@ -502,6 +580,59 @@ private fun filterTracks(tracks: List<Track>, query: String): List<IndexedValue<
     }
 }
 
+/**
+ * The per-list search as a window shows it: a glass field in the header's
+ * action row, there only while it is in use. [onClose] gives the button its
+ * place back, which Esc and leaving an empty field behind also do.
+ */
+@Composable
+private fun RowScope.ListSearch(
+    query: String,
+    onQuery: (String) -> Unit,
+    ink: Color,
+    dark: Boolean,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    // Asking for the search is asking to type: the caret is already there.
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    // The field reports itself unfocused before the caret reaches it, which
+    // must not count as leaving it: only a field that had the caret can.
+    var had by remember { mutableStateOf(false) }
+    GlassBox(Modifier.weight(1f).widthIn(max = 360.dp).height(48.dp), CircleShape, dark = dark) {
+        Row(Modifier.matchParentSize().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Search, null, tint = ink.copy(.7f), modifier = Modifier.size(20.dp))
+            BasicTextField(
+                query,
+                onQuery,
+                Modifier.weight(1f).padding(horizontal = 10.dp).focusRequester(focus)
+                    // Clicking away from a field with nothing in it was never
+                    // a search: the row takes its button back.
+                    .onFocusChanged {
+                        if (it.isFocused) had = true else if (had && query.isBlank()) onClose()
+                    }
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                            onQuery("")
+                            onClose()
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = ink),
+                cursorBrush = SolidColor(ink),
+                decorationBox = { field ->
+                    if (query.isEmpty()) Text("Buscar nesta lista", color = ink.copy(.6f), style = MaterialTheme.typography.bodyLarge)
+                    field()
+                },
+            )
+            IconButton({ onQuery(""); onClose() }) { Icon(Icons.Rounded.Close, "Fechar a busca", tint = ink.copy(.7f)) }
+        }
+    }
+}
+
 /** Search field and sort menu above a track list. */
 @Composable
 private fun TrackTools(
@@ -513,11 +644,17 @@ private fun TrackTools(
     total: Int,
     /** Whether the tracks carry an added date (playlists, liked songs). */
     dated: Boolean,
+    /** The field stands here; off, the header's button carries the search. */
+    standing: Boolean,
 ) {
     val c = MaterialTheme.colorScheme
     var menu by remember { mutableStateOf(false) }
     Column(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!standing) {
+                // Only the order is left to set here; the search went up to the header.
+                Spacer(Modifier.weight(1f))
+            } else {
             Row(
                 Modifier.weight(1f).height(48.dp).clip(CircleShape).background(c.surfaceVariant).padding(start = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -540,6 +677,7 @@ private fun TrackTools(
                 }
             }
             Spacer(Modifier.width(8.dp))
+            }
             Box {
                 Box(
                     Modifier.size(48.dp).clip(CircleShape)
