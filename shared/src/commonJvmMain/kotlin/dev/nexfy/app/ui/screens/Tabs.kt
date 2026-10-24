@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.Icon
@@ -36,7 +38,9 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,11 +78,18 @@ import dev.nexfy.app.ui.design.CoverCard
 import dev.nexfy.app.ui.design.EmptyState
 import dev.nexfy.app.ui.design.LargeTitle
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.LocalCardWidth
+import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.PillButton
 import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.SectionTitle
+import dev.nexfy.app.ui.design.TrackColumns
 import dev.nexfy.app.ui.design.TrackRow
 import dev.nexfy.app.ui.design.TrackRowSkeleton
+import dev.nexfy.app.ui.design.TrackTable
+import dev.nexfy.app.ui.design.TrackTableRow
+import dev.nexfy.app.ui.design.gridColumns
+import dev.nexfy.app.ui.design.springPress
 import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.cascade
 import dev.nexfy.app.ui.design.rememberCascade
@@ -87,6 +98,7 @@ import dev.nexfy.app.ui.design.rememberTitleCollapse
 import dev.nexfy.app.ui.design.weightedPress
 import dev.nexfy.app.ui.theme.accentColor
 import uniffi.nexfy_core.SearchResults
+import uniffi.nexfy_core.Track
 import java.time.LocalTime
 
 internal fun greeting(): String = when (LocalTime.now().hour) {
@@ -118,6 +130,10 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
     var query by actions.nav::searchQuery
     var results by remember { mutableStateOf<SearchResults?>(null) }
     var searching by remember { mutableStateOf(false) }
+    // The window's title strip already carries a field on this same query, an
+    // inch above this screen's own, so here the screen does not draw a second
+    // one; a phone has no strip and keeps its field.
+    val pointer = LocalPointer.current
     var error by remember { mutableStateOf<String?>(null) }
     val cascadeClock = rememberCascade(results)
     var menuFor by remember { mutableStateOf<uniffi.nexfy_core.Track?>(null) }
@@ -156,7 +172,9 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             item(key = "title") { LargeTitle("Buscar", collapse, Modifier.padding(start = 4.dp)) }
-            item(key = "field") {
+            // What the field's own sweep says on a phone: a search is on its way.
+            if (pointer) item(key = "working") { SearchProgress(searching) }
+            if (!pointer) item(key = "field") {
                 // A pane of glass that lights up in the accent while focused; a
                 // light runs along its lower edge while a search is on its way.
                 val focus = remember { MutableInteractionSource() }
@@ -243,13 +261,17 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                 } else if (query.isBlank()) {
                     item(key = "hint") {
                         Text(
-                            "Toque num resultado para ouvir na hora.",
+                            if (pointer) "Clique num resultado para ouvir na hora." else "Toque num resultado para ouvir na hora.",
                             color = c.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(4.dp),
                         )
                     }
                 }
             } else if (r.tracks.isEmpty() && r.albums.isEmpty() && r.artists.isEmpty() && r.playlists.isEmpty()) {
                 item(key = "none") { EmptyState(Icons.Rounded.SearchOff, "Nada encontrado para “${query.trim()}”", "Confira a grafia ou tente o nome do artista.") }
+            } else if (pointer) {
+                // Ten of each at most, so the whole arrangement is one item of
+                // the list rather than a page of items to keep track of.
+                item(key = "window") { WindowResults(r, actions) { menuFor = it } }
             } else {
                 if (r.tracks.isNotEmpty()) item(key = "s-tracks") { SectionTitle("Músicas", Modifier.padding(start = 4.dp)) }
                 itemsIndexed(r.tracks, key = { _, t -> "t:" + t.uri }) { i, t ->
@@ -299,4 +321,159 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
             }
         }
     }
+}
+
+/** The gap between the result cards, across and down. */
+private val CardGap = 16.dp
+
+/** A card in a window's grid of results, whatever kind of thing it stands for. */
+private data class ResultCard(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val imageUrl: String?,
+    val shared: String,
+    val open: () -> Unit,
+)
+
+/**
+ * The results as a window lists them: each kind under its own label, the
+ * card kinds in a grid that divides the width, and the songs as the table
+ * the collections use, with a way to play the lot. A phone's one column of
+ * rows is still the phone's.
+ */
+@Composable
+private fun WindowResults(r: SearchResults, actions: AppActions, onMenu: (Track) -> Unit) {
+    val edits = actions.services.edits
+    // One lookup answers the heart on every row, out of the saved set the core keeps.
+    LaunchedEffect(r) { edits.load(r.tracks.map { it.uri }) }
+    val playback = actions.services.bridge.state.collectAsState()
+    // Only the playing song's URIs: a row recomposes when the song changes,
+    // not on every playback update.
+    val playing by remember { derivedStateOf { playback.value.queue.current?.uri to playback.value.track?.uri } }
+    Column {
+        if (r.tracks.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                SectionTitle("Músicas", Modifier.weight(1f).padding(start = 4.dp))
+                PlayAll { actions.play(r.tracks, 0) }
+            }
+            // Songs from all over the catalogue, and nothing dated: the album
+            // is worth a column, the added-at date has nothing to put in one.
+            val columns = remember { TrackColumns(album = true, date = false) }
+            TrackTable(columns)
+            r.tracks.forEachIndexed { i, track ->
+                val liked = edits.saved[track.uri] == true
+                TrackTableRow(
+                    track,
+                    number = i + 1,
+                    columns = columns,
+                    onClick = { actions.play(r.tracks, i) },
+                    onMenu = { onMenu(track) },
+                    playing = playing.first == track.uri || playing.second == track.uri,
+                    liked = liked,
+                    onLike = {
+                        edits.setSaved(track.uri, !liked, if (liked) "Removida das curtidas" else "Adicionada às curtidas")
+                    },
+                )
+            }
+        }
+        CardSection(
+            "Artistas",
+            r.artists.map { a ->
+                ResultCard("ar-${a.id}", a.name, "Artista", a.imageUrl, "search-ar/${a.id}") {
+                    actions.open(Route.Artist(a.id), Peek(a.name, imageUrl = a.imageUrl), "search-ar/${a.id}")
+                }
+            },
+            circle = true,
+        )
+        CardSection(
+            "Álbuns",
+            r.albums.map { a ->
+                ResultCard("al-${a.id}", a.name, a.artists, a.imageUrl, "search-al/${a.id}") {
+                    actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "search-al/${a.id}")
+                }
+            },
+        )
+        CardSection(
+            "Playlists",
+            r.playlists.map { p ->
+                ResultCard("pl-${p.id}", p.name, p.owner, p.imageUrl, "search-pl/${p.id}") {
+                    actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "search-pl/${p.id}")
+                }
+            },
+        )
+    }
+}
+
+/** One labelled kind of card result; nothing at all when none came back. */
+@Composable
+private fun CardSection(title: String, cards: List<ResultCard>, circle: Boolean = false) {
+    if (cards.isEmpty()) return
+    SectionTitle(title, Modifier.padding(start = 4.dp))
+    BoxWithConstraints {
+        // As many as fit the width, which they then divide between them, the
+        // way the shelves and the library's grid do.
+        val columns = gridColumns(maxWidth)
+        val card = (maxWidth - CardGap * (columns - 1)) / columns
+        CompositionLocalProvider(LocalCardWidth provides card) {
+            Column(verticalArrangement = Arrangement.spacedBy(CardGap)) {
+                cards.chunked(columns).forEach { line ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(CardGap)) {
+                        line.forEach { entry ->
+                            CoverCard(
+                                entry.imageUrl, entry.title, entry.subtitle, entry.key,
+                                circle = circle, shared = entry.shared, onClick = entry.open,
+                            )
+                        }
+                        // A short last line keeps the columns of the lines above.
+                        repeat(columns - line.size) { Spacer(Modifier.width(card)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "Tocar todas", in the accent, at the end of the songs' label. */
+@Composable
+private fun PlayAll(onClick: () -> Unit) {
+    val accent = accentColor()
+    val source = remember { MutableInteractionSource() }
+    Row(
+        Modifier.springPress(source).clip(CircleShape).clickable(source, null, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.PlayArrow, null, tint = accent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("Tocar todas", color = accent, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+/**
+ * A light crossing the page while a search runs, in place of the sweep along
+ * the field this screen does not draw under a pointer. It keeps its 2 dp
+ * whether it shows or not, so nothing below it moves when a search starts.
+ */
+@Composable
+private fun SearchProgress(searching: Boolean) {
+    val accent = accentColor()
+    val sweep = remember { Animatable(0f) }
+    LaunchedEffect(searching) {
+        while (searching) {
+            sweep.snapTo(0f)
+            sweep.animateTo(1f, tween(Motion.scaled(950), easing = LinearEasing))
+        }
+    }
+    Box(
+        Modifier.fillMaxWidth().height(2.dp).drawWithContent {
+            drawContent()
+            if (!searching) return@drawWithContent
+            val w = size.width * .35f
+            val x = sweep.value * (size.width + w) - w
+            drawRect(
+                Brush.horizontalGradient(listOf(Color.Transparent, accent, Color.Transparent), startX = x, endX = x + w),
+            )
+        },
+    )
 }
