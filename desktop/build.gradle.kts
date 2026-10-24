@@ -61,6 +61,11 @@ compose.desktop {
     application {
         mainClass = "dev.nexfy.desktop.MainKt"
         nativeDistributions {
+            // The runtime jlink builds carries only the root locale unless this
+            // is asked for, and the app is written in Portuguese: without it a
+            // date formatted "d 'de' MMM" with a pt-BR locale comes out
+            // "16 de Oct", because the month names fall back to English.
+            modules("jdk.localedata")
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Nexfy"
             packageVersion = (findProperty("versionName") as String?) ?: "1.0.0"
