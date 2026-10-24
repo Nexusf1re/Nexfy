@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import coil3.ImageLoader
@@ -40,7 +41,6 @@ import coil3.disk.DiskCache
 import coil3.memory.MemoryCache
 import coil3.request.crossfade
 import dev.nexfy.app.ui.WindowFrame
-import java.awt.Dimension
 import dev.nexfy.app.DesktopServices
 import dev.nexfy.app.LocalServices
 import dev.nexfy.app.ThemeMode
@@ -75,9 +75,26 @@ fun main() {
             .build()
     }
     application {
-        val windowState = rememberWindowState(size = DpSize(1100.dp, 760.dp))
+        // Where the window was last time, if that still suits the screens
+        // attached now; read before the state so the window is never placed
+        // twice, once by the OS and once by us.
+        val remembered = remember { readWindowGeometry() }
+        val windowState = rememberWindowState(
+            size = remembered?.size ?: DpSize(1100.dp, 760.dp),
+            position = remembered?.position ?: WindowPosition.PlatformDefault,
+            // Compose sizes the window before it is shown and maximizes it
+            // after, so the bounds above become the ones it unmaximizes to.
+            placement = if (remembered?.maximized == true) {
+                WindowPlacement.Maximized
+            } else {
+                WindowPlacement.Floating
+            },
+        )
+        val geometry = rememberWindowGeometry(windowState, remembered)
+        // Closing is the one move with no 250ms afterwards to write in.
+        val quit = remember(geometry) { { geometry.flush(); exitApplication() } }
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = quit,
             title = "Nexfy",
             state = windowState,
             // The app draws its own frame, so the window wears the theme
@@ -96,16 +113,14 @@ fun main() {
                 }
             },
         ) {
-            // Below this the three columns have nowhere to go; the shell drops
-            // the right panel on its own before that.
             LaunchedEffect(Unit) {
-                window.minimumSize = Dimension(940, 620)
+                window.minimumSize = MinWindowSize
                 // Undecorated, the window had lost the shell's own motion,
                 // its rounded corners and its resizing border.
                 dressWindow(window)
             }
             val scope = this
-            val frame = remember(scope, windowState) {
+            val frame = remember(scope, windowState, quit) {
                 object : WindowFrame {
                     override val maximized get() = windowState.placement == WindowPlacement.Maximized
 
@@ -118,7 +133,7 @@ fun main() {
                             if (maximized) WindowPlacement.Floating else WindowPlacement.Maximized
                     }
 
-                    override fun close() = exitApplication()
+                    override fun close() = quit()
 
                     @Composable
                     override fun DragArea(content: @Composable () -> Unit) {
