@@ -148,7 +148,9 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
     // UniFFI's Kotlin bindings call the core through JNA.
-    implementation("${libs.jna.get()}@aar")
+    // asProvider(): the catalog also holds jna-platform, which makes `libs.jna`
+    // the pair of them until this asks for the one named plainly.
+    implementation("${libs.jna.asProvider().get()}@aar")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

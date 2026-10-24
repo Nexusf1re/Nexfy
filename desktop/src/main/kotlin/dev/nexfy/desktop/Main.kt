@@ -100,8 +100,9 @@ fun main() {
             // the right panel on its own before that.
             LaunchedEffect(Unit) {
                 window.minimumSize = Dimension(940, 620)
-                // Undecorated, the window had lost the shell's own motion.
-                restoreWindowAnimations(window)
+                // Undecorated, the window had lost the shell's own motion,
+                // its rounded corners and its resizing border.
+                dressWindow(window)
             }
             val scope = this
             val frame = remember(scope, windowState) {

@@ -20,6 +20,7 @@ dependencies {
     // Windows keeps the animations of a window behind its styles, which an
     // undecorated one is missing (see WindowsChrome.kt).
     implementation(libs.jna)
+    implementation(libs.jna.platform)
 }
 
 /**
