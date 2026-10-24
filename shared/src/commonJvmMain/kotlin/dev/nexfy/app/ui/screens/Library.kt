@@ -1,6 +1,7 @@
 package dev.nexfy.app.ui.screens
 
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Close
@@ -57,12 +58,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.ui.design.GlassMenu
+import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.glassMenuColor
 import dev.nexfy.app.ui.design.glassMenuEdge
 import dev.nexfy.app.ui.design.GlassSheet
@@ -77,6 +81,7 @@ import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.LargeTitle
 import dev.nexfy.app.ui.design.ListRowSkeleton
 import dev.nexfy.app.ui.design.gridColumns
+import dev.nexfy.app.ui.design.secondaryClickAt
 import dev.nexfy.app.ui.design.skeletonFade
 import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.PillSelector
@@ -154,6 +159,9 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
     val likedShown = needle.isEmpty() || fold("Músicas curtidas").contains(needle)
     val cascadeClock = rememberCascade(shelf to (entries != null))
     var menuFor by remember { mutableStateOf<Entry?>(null) }
+    // Where the menu was asked for, in window pixels; null for a long press,
+    // which has no point of its own and keeps the sheet.
+    var menuAt by remember { mutableStateOf<Offset?>(null) }
     var grid by remember { mutableStateOf(library.libraryGrid) }
     var creating by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<Entry?>(null) }
@@ -254,7 +262,8 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                                     pinned = e.key in pinned,
                                     sharedKey = "lib/${e.key}",
                                     onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
-                                    onLongClick = { menuFor = e },
+                                    onLongClick = { menuAt = null; menuFor = e },
+                                    onMenu = { at -> menuAt = at; menuFor = e },
                                 )
                             }
                         }
@@ -269,7 +278,8 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                             pinned = e.key in pinned,
                             sharedKey = "lib/${e.key}",
                             onClick = { actions.open(e.route, e.peek, "lib/${e.key}") },
-                            onLongClick = { menuFor = e },
+                            onLongClick = { menuAt = null; menuFor = e },
+                            onMenu = { at -> menuAt = at; menuFor = e },
                         )
                     }
                 }
@@ -279,16 +289,7 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
 
     menuFor?.let { entry ->
         val isPinned = entry.key in pinned
-        GlassSheet(onDismissRequest = { menuFor = null }) {
-            Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
-                Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Cover(entry.imageUrl, Modifier.size(52.dp), 10.dp)
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(entry.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
-                    }
-                }
+        val actionsBody: @Composable ColumnScope.() -> Unit = {
                 SheetAction(Icons.Rounded.PushPin, if (isPinned) "Desafixar" else "Fixar no topo") {
                     library.togglePin(entry.key)
                     menuFor = null
@@ -307,6 +308,26 @@ fun LibraryScreen(actions: AppActions, list: LazyListState) {
                         menuFor = null
                         actions.services.edits.setSaved(entry.uri, false, "Removida da biblioteca")
                     }
+                }
+        }
+        val at = menuAt
+        if (at != null) {
+            // Asked for with the right button: it stands where it was asked.
+            GlassMenu(at, { menuFor = null }, actionsBody)
+        } else {
+            GlassSheet(onDismissRequest = { menuFor = null }) {
+                Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
+                    // The sheet says what it is about; a menu standing on the
+                    // row does not have to.
+                    Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Cover(entry.imageUrl, Modifier.size(52.dp), 10.dp)
+                        Spacer(Modifier.width(14.dp))
+                        Column {
+                            Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(entry.subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
+                    actionsBody()
                 }
             }
         }
@@ -365,12 +386,15 @@ private fun LibraryRow(
     sharedKey: String? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    /** Asked for with the right button, at that point in the window. */
+    onMenu: ((Offset) -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     Row(
         Modifier.fillMaxWidth().weightedPress(source, 16.dp).clip(RoundedCornerShape(16.dp))
+            .then(if (onMenu != null && LocalPointer.current) Modifier.secondaryClickAt(onMenu) else Modifier)
             .combinedClickable(
                 source, null,
                 onClick = {
@@ -423,12 +447,15 @@ private fun LibraryTile(
     sharedKey: String? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    /** Asked for with the right button, at that point in the window. */
+    onMenu: ((Offset) -> Unit)? = null,
 ) {
     val c = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
     Column(
         modifier.weightedPress(source, 14.dp).clip(RoundedCornerShape(14.dp))
+            .then(if (onMenu != null && LocalPointer.current) Modifier.secondaryClickAt(onMenu) else Modifier)
             .combinedClickable(
                 source, null,
                 onClick = {
