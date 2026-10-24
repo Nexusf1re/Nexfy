@@ -4,6 +4,7 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -151,9 +152,9 @@ fun ListRowSkeleton(seed: Int, modifier: Modifier = Modifier) {
 
 /** Same footprint as [CoverCard]. */
 @Composable
-fun CoverCardSkeleton(seed: Int, circle: Boolean = false) {
-    Column(Modifier.width(156.dp).padding(bottom = if (circle) 0.dp else 10.dp)) {
-        Bone(Modifier.size(156.dp), if (circle) CircleShape else RoundedCornerShape(14.dp))
+fun CoverCardSkeleton(seed: Int, circle: Boolean = false, width: Dp = 156.dp) {
+    Column(Modifier.width(width).padding(bottom = if (circle) 0.dp else 10.dp)) {
+        Bone(Modifier.size(width), if (circle) CircleShape else RoundedCornerShape(14.dp))
         Spacer(Modifier.height(8.dp))
         Column(
             Modifier.padding(horizontal = if (circle) 0.dp else 10.dp),
@@ -168,6 +169,19 @@ fun CoverCardSkeleton(seed: Int, circle: Boolean = false) {
 /** A row of card skeletons running off the right edge, like [Carousel]. */
 @Composable
 fun CarouselSkeleton(circle: Boolean = false) {
+    // Under a pointer the shelf divides its width between whole cards (see
+    // Carousel), and the skeleton stands where those cards will: dividing it
+    // the same way is what keeps them from changing size as they arrive.
+    if (LocalPointer.current) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val cards = gridColumns(maxWidth)
+            val card = (maxWidth - 16.dp * (cards - 1)) / cards
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                repeat(cards) { CoverCardSkeleton(it, circle, card) }
+            }
+        }
+        return
+    }
     Row(
         Modifier.fillMaxWidth().wrapContentWidth(Alignment.Start, unbounded = true),
         horizontalArrangement = Arrangement.spacedBy(16.dp),

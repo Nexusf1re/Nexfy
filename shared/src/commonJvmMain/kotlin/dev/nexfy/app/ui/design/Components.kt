@@ -6,7 +6,12 @@ import kotlin.math.sin
 import kotlin.math.PI
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.foundation.Canvas
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.animateFloatAsState
@@ -15,14 +20,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -41,6 +50,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -63,6 +74,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -91,6 +103,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
@@ -107,6 +120,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import dev.nexfy.app.ui.theme.LocalLook
 import dev.nexfy.app.ui.theme.isDark
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Track
 import uniffi.nexfy_core.UserFace
@@ -451,6 +465,16 @@ fun Cover(url: String?, modifier: Modifier, radius: Dp = 14.dp, motion: Boolean 
     }
 }
 
+/**
+ * The width a shelf hands its cards, where it divides itself between whole
+ * ones ([PointerCarousel]). Unset on a phone, whose cards keep the width
+ * they were drawn at and run off the screen edge on purpose.
+ */
+val LocalCardWidth = staticCompositionLocalOf<Dp?> { null }
+
+/** What a card measures where nothing above it says otherwise. */
+private val CardWidth = 156.dp
+
 /** Cover card on a pane of glass tinted by its cover, with a weighted press. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -472,8 +496,9 @@ fun CoverCard(
     // A pane of glass tinted by the cover; the text stays in the theme's ink on it.
     val pane = if (circle) Color.Transparent else tileColor(imageUrl, key).copy(alpha = if (c.isDark) .3f else .36f)
     val ink = c.onSurface
+    val width = LocalCardWidth.current ?: CardWidth
     Column(
-        Modifier.carouselDepth().width(156.dp).weightedPress(source, 16.dp)
+        Modifier.carouselDepth().width(width).weightedPress(source, 16.dp)
             .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
             .combinedClickable(
                 source, null,
@@ -490,7 +515,7 @@ fun CoverCard(
             )
             .padding(bottom = if (circle) 0.dp else 10.dp),
     ) {
-        Cover(imageUrl, Modifier.size(156.dp), if (circle) 78.dp else 14.dp, sharedKey = shared)
+        Cover(imageUrl, Modifier.size(width), if (circle) width / 2 else 14.dp, sharedKey = shared)
         Spacer(Modifier.height(8.dp))
         Column(Modifier.padding(horizontal = if (circle) 0.dp else 10.dp)) {
             val align = if (circle) TextAlign.Center else null
@@ -506,10 +531,15 @@ fun CoverCard(
     }
 }
 
+/** The gap between a shelf's cards; with a card, what its arrows step by. */
+private val CarouselGap = 16.dp
+
 /**
  * Horizontal row that bleeds to the screen edges and snaps cards to the left margin.
  * When [firstKey] changes (items arrived at the front), the row returns to the start;
  * a keyed LazyRow would otherwise stay anchored on the old first card.
+ * Under a pointer it is [PointerCarousel] instead, which keeps to the page's
+ * gutter and can be worked without a drag.
  */
 @Composable
 fun Carousel(state: LazyListState, firstKey: Any? = null, content: LazyListScope.() -> Unit) {
@@ -518,6 +548,10 @@ fun Carousel(state: LazyListState, firstKey: Any? = null, content: LazyListScope
     if (firstKey != shownFirst[0]) {
         shownFirst[0] = firstKey
         if (!state.isScrollInProgress) state.requestScrollToItem(0)
+    }
+    if (LocalPointer.current) {
+        PointerCarousel(state, content)
+        return
     }
     val bleed = 24.dp
     LazyRow(
@@ -532,6 +566,101 @@ fun Carousel(state: LazyListState, firstKey: Any? = null, content: LazyListScope
         flingBehavior = rememberSnapFlingBehavior(state, SnapPosition.Start),
         content = content,
     )
+}
+
+/**
+ * The same shelf as a mouse needs it: it divides the width it is given
+ * between whole cards, as the library's grid does, so the row's edge never
+ * cuts one in half; arrows reach over its ends while the pointer is on it,
+ * and the wheel moves it sideways. The snap and the fling are the row's
+ * own, as on a phone — a trackpad still swipes it by hand.
+ */
+@Composable
+private fun PointerCarousel(state: LazyListState, content: LazyListScope.() -> Unit) {
+    val scope = rememberCoroutineScope()
+    val hover = remember { MutableInteractionSource() }
+    val hovered by hover.collectIsHoveredAsState()
+    // Wheel notches add up while the row is already moving, so a fast flick
+    // of the wheel travels its whole distance instead of starting over.
+    val pending = remember { FloatArray(1) }
+    val drain = remember { arrayOfNulls<Job>(1) }
+    BoxWithConstraints(Modifier.hoverable(hover)) {
+        val cards = gridColumns(maxWidth)
+        // The cards and the gaps between them fill the row exactly, so one
+        // page is every card on show and the next starts at the left margin.
+        val card = (maxWidth - CarouselGap * (cards - 1)) / cards
+        val step = with(LocalDensity.current) { (card + CarouselGap).toPx() }
+        val page = cards * step
+        CompositionLocalProvider(LocalCardWidth provides card) {
+            LazyRow(
+                Modifier.pointerInput(state, step) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            // A sideways wheel the row answers itself, and has consumed
+                            // by the time the event climbs back out to here.
+                            if (event.type != PointerEventType.Scroll || event.changes.any { it.isConsumed }) continue
+                            val notches = event.changes.fold(0f) { sum, c -> sum + c.scrollDelta.x + c.scrollDelta.y }
+                            if (notches == 0f) continue
+                            // Once the row is at that end the wheel is the page's again,
+                            // so a shelf never traps the way down the page.
+                            if (!(if (notches > 0f) state.canScrollForward else state.canScrollBackward)) continue
+                            event.changes.forEach { it.consume() }
+                            pending[0] += notches * step
+                            if (drain[0]?.isActive != true) {
+                                drain[0] = scope.launch {
+                                    while (pending[0] != 0f) {
+                                        val by = pending[0]
+                                        pending[0] = 0f
+                                        state.animateScrollBy(by, Motion.standard(Motion.Short))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                state = state,
+                horizontalArrangement = Arrangement.spacedBy(CarouselGap),
+                flingBehavior = rememberSnapFlingBehavior(state, SnapPosition.Start),
+                content = content,
+            )
+        }
+        CarouselArrow(false, state, hovered, Modifier.align(Alignment.CenterStart).padding(start = 4.dp)) {
+            scope.launch { state.animateScrollBy(-page, Motion.standard()) }
+        }
+        CarouselArrow(true, state, hovered, Modifier.align(Alignment.CenterEnd).padding(end = 4.dp)) {
+            scope.launch { state.animateScrollBy(page, Motion.standard()) }
+        }
+    }
+}
+
+/**
+ * One of a shelf's arrows: there only while the pointer is on the shelf and
+ * the row can still go that way, and arriving on the app's own enter curve
+ * rather than a bare fade.
+ */
+@Composable
+private fun CarouselArrow(
+    forward: Boolean,
+    state: LazyListState,
+    hovered: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    val can = if (forward) state.canScrollForward else state.canScrollBackward
+    AnimatedVisibility(
+        hovered && can,
+        modifier,
+        enter = fadeIn(Motion.enter(Motion.Short)) + scaleIn(Motion.enter(Motion.Short), initialScale = .85f),
+        exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = .85f),
+        label = if (forward) "next" else "previous",
+    ) {
+        GlassIcon(
+            if (forward) Icons.AutoMirrored.Rounded.KeyboardArrowRight else Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+            if (forward) "Próximos" else "Anteriores",
+            onClick,
+        )
+    }
 }
 
 fun durationLabel(ms: Long): String =
@@ -680,9 +809,34 @@ fun UserAvatar(user: UserFace, modifier: Modifier = Modifier, description: Strin
     }
 }
 
+/**
+ * A section's heading, with a way to the screen that holds all of it on the
+ * right where [onOpenAll] is given. Callers leave it out where no such
+ * screen exists: a control that leads nowhere is worse than none.
+ */
 @Composable
-fun SectionTitle(text: String, modifier: Modifier = Modifier) =
-    Text(text, modifier.padding(top = 18.dp, bottom = 10.dp), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+fun SectionTitle(text: String, modifier: Modifier = Modifier, onOpenAll: (() -> Unit)? = null) {
+    if (onOpenAll == null) {
+        Text(text, modifier.padding(top = 18.dp, bottom = 10.dp), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        return
+    }
+    val c = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    Row(
+        modifier.fillMaxWidth().padding(top = 18.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, Modifier.weight(1f), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Row(
+            Modifier.springPress(source).clip(CircleShape).clickable(source, null, onClick = onOpenAll)
+                .padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Ver tudo", color = c.onSurfaceVariant, style = MaterialTheme.typography.labelLarge)
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, Modifier.size(18.dp), tint = c.onSurfaceVariant)
+        }
+    }
+}
 
 @Composable
 fun EmptyState(icon: ImageVector, title: String, body: String, modifier: Modifier = Modifier) {

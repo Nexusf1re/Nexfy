@@ -51,11 +51,13 @@ import dev.nexfy.app.ui.AppActions
 import dev.nexfy.app.ui.Loaded
 import dev.nexfy.app.ui.Peek
 import dev.nexfy.app.ui.Route
+import dev.nexfy.app.ui.Tab
 import dev.nexfy.app.ui.design.Carousel
 import dev.nexfy.app.ui.design.CarouselSkeleton
 import dev.nexfy.app.ui.design.CoverCard
 import dev.nexfy.app.ui.design.LargeTitle
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.SectionTitle
 import dev.nexfy.app.ui.design.rememberHaptics
 import dev.nexfy.app.ui.design.skeletonFade
@@ -129,6 +131,11 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
     val myPlaylists = playlists.state.value?.let { all ->
         pinnedFirst(PlaylistSort.MostPlayed.apply(all, scores), pinned) { "pl:${it.id}" }
     }
+    // Under a pointer a shelf that the library holds the whole of says so in
+    // its title: a mouse cannot simply flick the row on. The others have no
+    // screen of their own to open.
+    val pointer = LocalPointer.current
+    val allOf: (String) -> (() -> Unit)? = { shelf -> if (pointer) ({ actions.openLibrary(shelf) }) else null }
     // Held down, a card opens the menu its row in the library has.
     val me = remember { core.username() }
     var menuFor by remember { mutableStateOf<Track?>(null) }
@@ -186,7 +193,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                     }
                 }
             }
-            homeRow("playlists", "Tuas playlists", playlists.state.pending(), myPlaylists?.takeIf { it.isNotEmpty() }) { items ->
+            homeRow("playlists", "Tuas playlists", playlists.state.pending(), myPlaylists?.takeIf { it.isNotEmpty() }, openAll = allOf("Playlists")) { items ->
                 Carousel(actions.nav.list("row:home-pl"), items.first().id) {
                     items(items.take(20), key = { it.id }) { p ->
                         val peek = Peek(p.name, p.owner, p.imageUrl)
@@ -211,7 +218,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                     }
                 }
             }
-            homeRow("albums", "Álbuns salvos", albums.state.pending(), albums.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "al:${it.id}" } }) { items ->
+            homeRow("albums", "Álbuns salvos", albums.state.pending(), albums.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "al:${it.id}" } }, openAll = allOf("Albums")) { items ->
                 Carousel(actions.nav.list("row:home-al"), items.first().id) {
                     items(items.take(20), key = { it.id }) { a ->
                         val peek = Peek(a.name, a.artists, a.imageUrl)
@@ -225,7 +232,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 }
             }
             // Never a skeleton: the row is there only for people who follow podcasts.
-            homeRow("shows", "Teus podcasts", false, shows.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "sh:${it.id}" } }) { items ->
+            homeRow("shows", "Teus podcasts", false, shows.state.value?.takeIf { it.isNotEmpty() }?.let { all -> pinnedFirst(all, pinned) { "sh:${it.id}" } }, openAll = allOf("Podcasts")) { items ->
                 Carousel(actions.nav.list("row:home-sh"), items.first().id) {
                     items(items.take(20), key = { it.id }) { s ->
                         val peek = Peek(s.name, s.publisher.ifEmpty { null }, s.imageUrl)
@@ -246,9 +253,22 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
 private fun Loaded<*>.pending() = value == null && loading
 
 /**
+ * The library tab, on the shelf that holds the whole of a home row. The tab
+ * reads the shelf it last showed as it opens, so the choice goes in first;
+ * [shelf] is one of the library's own names for them.
+ */
+private fun AppActions.openLibrary(shelf: String) {
+    services.library.shelf = shelf
+    nav.tab = Tab.Library
+    // The tab may have been left on a page of its own, which would come up instead.
+    nav.popToRoot()
+}
+
+/**
  * A titled home row: the cards once [data] is there, a skeleton of the same
  * size while it is [pending], nothing otherwise. The cards slide in over
- * the fading skeleton.
+ * the fading skeleton. [openAll] is the screen that holds all of them, for
+ * the rows that have one.
  */
 private fun <T> LazyListScope.homeRow(
     key: String,
@@ -256,13 +276,14 @@ private fun <T> LazyListScope.homeRow(
     pending: Boolean,
     data: T?,
     circle: Boolean = false,
+    openAll: (() -> Unit)? = null,
     content: @Composable (T) -> Unit,
 ) {
     if (data == null && !pending) return
     // One item for both states: the title stays put and only the cards cross-fade.
     item(key = key) {
         Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
-            SectionTitle(title)
+            SectionTitle(title, onOpenAll = openAll)
             AnimatedContent(data != null, transitionSpec = { Motion.arrive using SizeTransform(clip = false) }, label = key) { loaded ->
                 if (loaded && data != null) content(data) else CarouselSkeleton(circle)
             }
