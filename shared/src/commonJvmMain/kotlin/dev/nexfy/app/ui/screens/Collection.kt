@@ -290,7 +290,7 @@ fun CollectionScreen(
     val pageGlass = remember { GlassBackdrop() }
     Box(modifier) {
         Box(Modifier.fillMaxSize().glassSource(pageGlass)) {
-            dev.nexfy.app.ui.design.LivingArtwork(imageUrl, Modifier.fillMaxSize(), dim = .25f) // PROBE: was CollectionBackdrop
+            CollectionBackdrop(imageUrl, collapse, Modifier.fillMaxSize())
             Box(Modifier.fillMaxSize().dragToDismiss(dismiss, back)) {
                 BoxWithConstraints {
                 // A mouse and room for real columns: the songs are listed as

@@ -83,7 +83,9 @@ private val NumberWidth = 40.dp
 private val CoverSize = 40.dp
 private val CoverGap = 12.dp
 private val FaceWidth = 34.dp
-private val DateWidth = 124.dp
+// Wide enough for the long form, "24 de dez. de 2024": the title column has
+// room to give, and a date that reads "de 20…" says nothing at all.
+private val DateWidth = 152.dp
 private val DurationWidth = 72.dp
 private val ActionsWidth = 72.dp
 private val ColumnGap = 16.dp
