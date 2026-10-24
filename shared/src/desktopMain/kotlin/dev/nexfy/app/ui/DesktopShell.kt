@@ -1,6 +1,7 @@
 package dev.nexfy.app.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -89,6 +90,7 @@ import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
 import dev.nexfy.app.ui.design.LocalPointer
 import dev.nexfy.app.ui.design.LocalShellHeader
+import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.PillSelector
 import dev.nexfy.app.ui.design.PlayingBars
 import dev.nexfy.app.ui.design.ShimmerDriver
@@ -136,6 +138,9 @@ private val TitleHeight = 42.dp
 private val BarHeight = 84.dp
 private val SidebarWidth = 268.dp
 private val PanelWidth = 332.dp
+
+/** The sidebar folded to covers alone, to make room for the song's panel. */
+private val RailWidth = 78.dp
 
 /**
  * The app on a computer: a column of the library on the left, the page in
@@ -195,26 +200,33 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
         LocalPointer provides true,
     ) {
         BoxWithConstraints(Modifier.fillMaxSize().background(c.background)) {
-            // A narrow window keeps the page wide enough to read: the panel
-            // waits until there is room for all three columns.
-            val roomForPanel = maxWidth >= 1180.dp
+            // Three columns at their full width need a wide window. Where
+            // there is less, the sidebar folds to a rail of covers rather
+            // than the panel being refused: the words and the queue are what
+            // the user asked to see, and the page stays wide enough to read.
+            val rail = panelOpen && maxWidth < 1180.dp
+            val sidebar by animateDpAsState(
+                if (rail) RailWidth else SidebarWidth,
+                Motion.standard(Motion.Medium),
+                label = "sidebar",
+            )
             Column(Modifier.fillMaxSize()) {
             TitleBar(actions, frame)
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                Sidebar(actions, Modifier.width(SidebarWidth).fillMaxHeight())
+                Sidebar(actions, rail, Modifier.width(sidebar).fillMaxHeight())
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
-                if (panelOpen && roomForPanel) {
+                if (panelOpen) {
                     SongPanel(snapshot, actions, panelTab, { panelTab = it }, Modifier.width(PanelWidth).fillMaxHeight())
                 }
             }
             }
             PlayingBar(
                 snapshot, actions,
-                panelOpen = panelOpen && roomForPanel,
+                panelOpen = panelOpen,
                 onPanel = { tab: PanelTab ->
                     panelOpen = !(panelOpen && panelTab == tab)
                     panelTab = tab
-                }.takeIf { roomForPanel },
+                },
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             )
@@ -308,39 +320,49 @@ private fun WindowButton(
 
 // ------------------------------------------------------------------ sidebar
 
-/** The wordmark, where to go, and the library itself: one standing panel. */
+/**
+ * The wordmark, where to go, and the library itself: one standing panel.
+ * Folded to a [rail], the same column keeps only what a cover and an icon
+ * can say, which is enough to find a playlist already known by its art.
+ */
 @Composable
-private fun Sidebar(actions: AppActions, modifier: Modifier) {
-    val c = MaterialTheme.colorScheme
+private fun Sidebar(actions: AppActions, rail: Boolean, modifier: Modifier) {
     val nav = actions.nav
     Column(modifier.padding(start = 12.dp, top = 12.dp, end = 6.dp, bottom = BarHeight + 16.dp)) {
         Panel {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "nexfy", Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleLarge, letterSpacing = (-1).sp,
-                )
-                NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
+            if (rail) {
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 18.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "nexfy", Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleLarge, letterSpacing = (-1).sp,
+                    )
+                    NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
+                }
             }
-            NavRow(Icons.Rounded.Home, "Início", nav.tab == Tab.Home && nav.stack().isEmpty()) {
+            NavRow(Icons.Rounded.Home, "Início", nav.tab == Tab.Home && nav.stack().isEmpty(), rail) {
                 nav.tab = Tab.Home
                 nav.popToRoot()
             }
-            NavRow(Icons.Rounded.Search, "Buscar", nav.tab == Tab.Search && nav.stack().isEmpty()) {
+            NavRow(Icons.Rounded.Search, "Buscar", nav.tab == Tab.Search && nav.stack().isEmpty(), rail) {
                 nav.tab = Tab.Search
                 nav.popToRoot()
             }
-            NavRow(Icons.Rounded.LibraryMusic, "Biblioteca", nav.tab == Tab.Library && nav.stack().isEmpty()) {
+            NavRow(Icons.Rounded.LibraryMusic, "Biblioteca", nav.tab == Tab.Library && nav.stack().isEmpty(), rail) {
                 nav.tab = Tab.Library
                 nav.popToRoot()
             }
             Spacer(Modifier.height(10.dp))
         }
         Spacer(Modifier.height(12.dp))
-        Panel(Modifier.weight(1f)) { LibraryList(actions) }
+        Panel(Modifier.weight(1f)) { LibraryList(actions, rail) }
     }
 }
 
@@ -356,7 +378,7 @@ private fun Panel(modifier: Modifier = Modifier, content: @Composable () -> Unit
 }
 
 @Composable
-private fun NavRow(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
+private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Boolean = false, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
     val accent = accentColor()
@@ -368,14 +390,17 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, onClick:
             .clickable { haptics.tick(); onClick() }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
     ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
-        Text(
-            label, Modifier.padding(start = 14.dp),
-            color = if (selected) c.onSurface else c.onSurfaceVariant,
-            fontSize = 15.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-        )
+        Icon(icon, if (rail) label else null, tint = tint, modifier = Modifier.size(20.dp))
+        if (!rail) {
+            Text(
+                label, Modifier.padding(start = 14.dp),
+                color = if (selected) c.onSurface else c.onSurfaceVariant,
+                fontSize = 15.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            )
+        }
     }
 }
 
@@ -391,30 +416,32 @@ private fun NavIcon(icon: ImageVector, description: String, onClick: () -> Unit)
 
 /** The user's playlists and saved albums, the way the library page reads them. */
 @Composable
-private fun LibraryList(actions: AppActions) {
+private fun LibraryList(actions: AppActions, rail: Boolean = false) {
     val c = MaterialTheme.colorScheme
     val version by actions.services.edits.version.collectAsState()
     val playlists = rememberLoaded("side-pl", reloadOn = version) { actions.core.myPlaylists(it) }
     val albums = rememberLoaded("side-al", reloadOn = version) { actions.core.savedAlbums(it) }
     val list = rememberLazyListState()
     LazyColumn(Modifier.fillMaxSize(), list, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp)) {
-        item {
-            Text(
-                "Sua biblioteca",
-                Modifier.padding(start = 20.dp, top = 18.dp, bottom = 10.dp),
-                color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-            )
+        if (!rail) {
+            item {
+                Text(
+                    "Sua biblioteca",
+                    Modifier.padding(start = 20.dp, top = 18.dp, bottom = 10.dp),
+                    color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                )
+            }
         }
         item {
-            ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite) { actions.open(Route.Liked) }
+            ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite, rail) { actions.open(Route.Liked) }
         }
         items(playlists.state.value.orEmpty(), key = { "pl:${it.id}" }) { p ->
-            ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}") {
+            ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}", rail = rail) {
                 actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl))
             }
         }
         items(albums.state.value.orEmpty(), key = { "al:${it.id}" }) { a ->
-            ShelfRow(a.imageUrl, a.name, "Álbum · ${a.artists}") {
+            ShelfRow(a.imageUrl, a.name, "Álbum · ${a.artists}", rail = rail) {
                 actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl))
             }
         }
@@ -422,26 +449,39 @@ private fun LibraryList(actions: AppActions) {
 }
 
 @Composable
-private fun ShelfRow(art: String?, title: String, subtitle: String, icon: ImageVector? = null, onClick: () -> Unit) {
+private fun ShelfRow(
+    art: String?,
+    title: String,
+    subtitle: String,
+    icon: ImageVector? = null,
+    rail: Boolean = false,
+    onClick: () -> Unit,
+) {
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 1.dp)
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (rail) 3.dp else 1.dp)
             .clip(RoundedCornerShape(12.dp)).clickable { haptics.tick(); onClick() }
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = if (rail) 6.dp else 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
     ) {
+        // Folded, the cover is the only name the row has, so it is given the
+        // space the two lines of words took.
+        val size = if (rail) 46.dp else 42.dp
         if (icon != null) {
             Box(
-                Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(accentColor().copy(.18f)),
+                Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(accentColor().copy(.18f)),
                 Alignment.Center,
-            ) { Icon(icon, null, tint = accentColor(), modifier = Modifier.size(20.dp)) }
+            ) { Icon(icon, if (rail) title else null, tint = accentColor(), modifier = Modifier.size(20.dp)) }
         } else {
-            Cover(art, Modifier.size(42.dp), radius = 10.dp)
+            Cover(art, Modifier.size(size), radius = 10.dp)
         }
-        Column(Modifier.padding(start = 12.dp)) {
-            Text(title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (!rail) {
+            Column(Modifier.padding(start = 12.dp)) {
+                Text(title, color = c.onSurface, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
