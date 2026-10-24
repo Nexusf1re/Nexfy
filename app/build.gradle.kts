@@ -76,10 +76,11 @@ val releaseKeystore: String? = secret("NEXFY_KEYSTORE")
 
 android {
     namespace = "dev.nexfy.app"
+    // 37 because :shared compiles against it: a library's compile level is a
+    // floor for everything that depends on it. What the app asks of the system
+    // at run time is targetSdk below, and that is left where it was.
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version = release(37)
     }
     ndkVersion = ndkVersionPinned
 
