@@ -39,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -46,6 +47,8 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -159,7 +162,11 @@ fun TrackTableRow(
     number: Int,
     columns: TrackColumns,
     onClick: () -> Unit,
-    onMenu: () -> Unit,
+    /**
+     * Asked for the song's menu. The point is where in the window it was
+     * asked for, so a menu can open there; the ⋯ reports its own corner.
+     */
+    onMenu: (Offset) -> Unit,
     modifier: Modifier = Modifier,
     playing: Boolean = false,
     /** The song is in the user's library (false until the answer arrives). */
@@ -189,7 +196,7 @@ fun TrackTableRow(
             // Outside the click, so the right button is answered on the way
             // in and the row never plays as well. Not even installed where a
             // finger drives the UI, which has no second button to press.
-            .then(if (LocalPointer.current) Modifier.pointerInput(onMenu) { secondaryClick(onMenu) } else Modifier)
+            .then(if (LocalPointer.current) Modifier.secondaryClickAt(onMenu) else Modifier)
             .clickable(press, null, onClick = onClick)
             .alpha(if (track.playable) 1f else .4f)
             .padding(horizontal = CellInset),
@@ -245,7 +252,7 @@ fun TrackTableRow(
                 }
             }
             RowAction(over || playing) {
-                RowIcon(Icons.Rounded.MoreHoriz, "Mais opções", c.onSurfaceVariant, onMenu)
+                MenuIcon(Icons.Rounded.MoreHoriz, "Mais opções", c.onSurfaceVariant, onMenu)
             }
         }
     }
@@ -288,19 +295,27 @@ private fun RowIcon(icon: ImageVector, description: String, tint: Color, onClick
 ) { Icon(icon, description, tint = tint, modifier = Modifier.size(18.dp)) }
 
 /**
- * Calls [onMenu] on a press of the right button, and eats the press so the
- * row does not play as well. Written out of [awaitPointerEvent] because the
- * matcher that reads a mouse button directly is desktop's alone, while the
- * buttons themselves are common ground; a touchscreen never reports a
- * secondary button, so on a phone this would simply never fire.
+ * The same glyph, reporting the corner it sits in: a menu asked for by a
+ * button belongs under that button, not wherever the pointer last was.
  */
-private suspend fun PointerInputScope.secondaryClick(onMenu: () -> Unit) = awaitPointerEventScope {
-    while (true) {
-        // The way in, before the row's own click gesture is offered the press.
-        val event = awaitPointerEvent(PointerEventPass.Initial)
-        if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
-            event.changes.forEach { it.consume() }
-            onMenu()
-        }
-    }
+@Composable
+private fun MenuIcon(icon: ImageVector, description: String, tint: Color, onClick: (Offset) -> Unit) {
+    // Not state: it changes on every scroll and nothing needs redrawing for it.
+    val place = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    Box(
+        Modifier.size(32.dp).clip(CircleShape)
+            .onGloballyPositioned { place[0] = it }
+            .clickable {
+                val coords = place[0]
+                onClick(
+                    if (coords != null && coords.isAttached) {
+                        coords.localToWindow(Offset(0f, coords.size.height.toFloat()))
+                    } else {
+                        Offset.Zero
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, description, tint = tint, modifier = Modifier.size(18.dp)) }
 }
+

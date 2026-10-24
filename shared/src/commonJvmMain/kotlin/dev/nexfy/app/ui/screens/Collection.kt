@@ -1,8 +1,10 @@
 package dev.nexfy.app.ui.screens
 
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.geometry.Offset
 import dev.nexfy.app.ui.design.GlassBackdrop
 import dev.nexfy.app.ui.design.LocalShellHeader
+import dev.nexfy.app.ui.design.closesMenus
 import dev.nexfy.app.ui.rememberUpdateOffer
 import dev.nexfy.app.ui.theme.accentColor
 import androidx.compose.foundation.border
@@ -262,7 +264,12 @@ fun CollectionScreen(
         actions.play(all, if (shuffleOn) all.indices.random() else 0, shuffle = shuffleOn, source = source, contextUri = contextUri)
     }
     var menuFor by remember { mutableStateOf<Track?>(null) }
-    menuFor?.let { t -> TrackMenu(t, actions, ownPlaylist, all.indexOf(t).takeIf { it >= 0 }) { menuFor = null } }
+    // Where the menu was asked for, in window pixels; null for a long press,
+    // which has no point of its own and keeps the phone's sheet.
+    var menuAt by remember { mutableStateOf<Offset?>(null) }
+    menuFor?.let { t ->
+        TrackMenu(t, actions, ownPlaylist, all.indexOf(t).takeIf { it >= 0 }, menuAt) { menuFor = null }
+    }
     // Who added each song, shown only where more than one person adds (and
     // "Mostrar quem adicionou" is on: off, the faces are not even looked up).
     val addedByOn = LocalLook.current.showAddedBy
@@ -309,7 +316,7 @@ fun CollectionScreen(
                 // the whole list, out of the saved set the core already keeps.
                 LaunchedEffect(table, all.size) { if (table) edits.load(all.map { it.uri }) }
                 LazyColumn(
-                    Modifier.fillMaxSize(),
+                    Modifier.fillMaxSize().closesMenus(),
                     state = list,
                     contentPadding = PaddingValues(bottom = LocalBottomSpace.current),
                 ) {
@@ -507,7 +514,7 @@ fun CollectionScreen(
                                     number = entry.index + 1,
                                     columns = columns,
                                     onClick = play,
-                                    onMenu = { menuFor = track },
+                                    onMenu = { at -> menuAt = at; menuFor = track },
                                     modifier = Modifier.padding(horizontal = 16.dp),
                                     playing = playing,
                                     liked = liked,
@@ -523,7 +530,7 @@ fun CollectionScreen(
                                         play,
                                         number = if (numbered) entry.index + 1 else null,
                                         playing = playing,
-                                        onLongClick = { menuFor = track },
+                                        onLongClick = { menuAt = null; menuFor = track },
                                         onSwipe = { actions.addToQueue(track) },
                                         addedBy = addedBy,
                                     )
