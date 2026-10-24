@@ -144,6 +144,20 @@ class LibraryPrefs(private val prefs: Prefs) {
         get() = prefs.long(VOLUME, 100).toInt().coerceIn(0, 100)
         set(value) = prefs.putLong(VOLUME, value.coerceIn(0, 100).toLong())
 
+    private val _wideSidebar = MutableStateFlow(prefs.boolean(WIDE_SIDEBAR, false))
+
+    /**
+     * On a computer, the library column keeps its names even where the
+     * window is too narrow for three full columns: it then takes the room
+     * the window can spare rather than folding to covers alone.
+     */
+    val wideSidebar: StateFlow<Boolean> = _wideSidebar
+
+    fun setWideSidebar(on: Boolean) {
+        _wideSidebar.value = on
+        prefs.putBoolean(WIDE_SIDEBAR, on)
+    }
+
     private val _coverAccent = MutableStateFlow(prefs.boolean(COVER_ACCENT, true))
 
     /** The accent takes the colour of the playing song's cover ("Cor da música"). */
@@ -331,6 +345,7 @@ class LibraryPrefs(private val prefs: Prefs) {
         const val MOBILE_DOWNLOADS = "mobile_downloads"
         const val WARMED_AT = "warmed_at"
         const val COVER_ACCENT = "cover_accent"
+        const val WIDE_SIDEBAR = "wide_sidebar"
         const val SHUFFLE = "shuffle"
         const val VOLUME = "volume"
         const val SHELF = "shelf"

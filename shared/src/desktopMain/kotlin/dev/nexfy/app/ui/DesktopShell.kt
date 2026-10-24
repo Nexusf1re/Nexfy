@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,6 +39,8 @@ import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FilterNone
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.KeyboardDoubleArrowLeft
+import androidx.compose.material.icons.rounded.KeyboardDoubleArrowRight
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreHoriz
@@ -75,12 +78,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.nexfy.app.AlbumSort
 import dev.nexfy.app.NexfyServices
+import dev.nexfy.app.PlaylistSort
 import dev.nexfy.app.elapsedRealtimeMs
+import dev.nexfy.app.pinnedFirst
+import dev.nexfy.app.playScores
 import dev.nexfy.app.playback.PlaybackSnapshot
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.GlassBackdrop
@@ -204,16 +212,27 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
             // there is less, the sidebar folds to a rail of covers rather
             // than the panel being refused: the words and the queue are what
             // the user asked to see, and the page stays wide enough to read.
-            val rail = panelOpen && maxWidth < 1180.dp
+            // Asked to stay wide, it keeps its names and takes instead the
+            // share of the window the other two columns can spare.
+            val wide by services.library.wideSidebar.collectAsState()
+            val tight = panelOpen && maxWidth < 1180.dp
+            val rail = tight && !wide
+            val open = if (tight) minOf(SidebarWidth, (maxWidth - PanelWidth) * .36f) else SidebarWidth
             val sidebar by animateDpAsState(
-                if (rail) RailWidth else SidebarWidth,
+                if (rail) RailWidth else open,
                 Motion.standard(Motion.Medium),
                 label = "sidebar",
             )
             Column(Modifier.fillMaxSize()) {
             TitleBar(actions, frame)
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                Sidebar(actions, rail, Modifier.width(sidebar).fillMaxHeight())
+                Sidebar(
+                    actions, rail,
+                    // The fold is only ever in the way on a narrow window, so
+                    // that is the only place it is offered.
+                    fold = { services.library.setWideSidebar(!wide) }.takeIf { tight },
+                    modifier = Modifier.width(sidebar).fillMaxHeight(),
+                )
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
                 if (panelOpen) {
                     SongPanel(snapshot, actions, panelTab, { panelTab = it }, Modifier.width(PanelWidth).fillMaxHeight())
@@ -326,12 +345,15 @@ private fun WindowButton(
  * can say, which is enough to find a playlist already known by its art.
  */
 @Composable
-private fun Sidebar(actions: AppActions, rail: Boolean, modifier: Modifier) {
+private fun Sidebar(actions: AppActions, rail: Boolean, fold: (() -> Unit)?, modifier: Modifier) {
     val nav = actions.nav
     Column(modifier.padding(start = 12.dp, top = 12.dp, end = 6.dp, bottom = BarHeight + 16.dp)) {
         Panel {
             if (rail) {
                 Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowRight, "Expandir a biblioteca", it) }
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
                 }
@@ -344,6 +366,7 @@ private fun Sidebar(actions: AppActions, rail: Boolean, modifier: Modifier) {
                         "nexfy", Modifier.weight(1f),
                         style = MaterialTheme.typography.titleLarge, letterSpacing = (-1).sp,
                     )
+                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowLeft, "Recolher a biblioteca", it) }
                     NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
                 }
             }
@@ -418,9 +441,24 @@ private fun NavIcon(icon: ImageVector, description: String, onClick: () -> Unit)
 @Composable
 private fun LibraryList(actions: AppActions, rail: Boolean = false) {
     val c = MaterialTheme.colorScheme
+    val library = actions.services.library
     val version by actions.services.edits.version.collectAsState()
     val playlists = rememberLoaded("side-pl", reloadOn = version) { actions.core.myPlaylists(it) }
     val albums = rememberLoaded("side-al", reloadOn = version) { actions.core.savedAlbums(it) }
+    // The home page's own key, so the plays it already fetched are on screen
+    // from the first frame instead of the column reordering itself later.
+    val recent = rememberLoaded("home-recent") { actions.core.recentlyPlayed(it) }
+    val pinned by library.pinned.collectAsState()
+    val plays by library.plays.collectAsState()
+    // What is played most stands at the top, with anything pinned above it:
+    // the order the library page and the home page already use.
+    val scores = playScores(plays, recent.state.value.orEmpty())
+    val orderedPlaylists = playlists.state.value?.let {
+        pinnedFirst(PlaylistSort.MostPlayed.apply(it, scores), pinned) { p -> "pl:${p.id}" }
+    }
+    val orderedAlbums = albums.state.value?.let {
+        pinnedFirst(AlbumSort.MostPlayed.apply(it, scores), pinned) { a -> "al:${a.id}" }
+    }
     val list = rememberLazyListState()
     LazyColumn(Modifier.fillMaxSize(), list, contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp)) {
         if (!rail) {
@@ -435,12 +473,12 @@ private fun LibraryList(actions: AppActions, rail: Boolean = false) {
         item {
             ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite, rail) { actions.open(Route.Liked) }
         }
-        items(playlists.state.value.orEmpty(), key = { "pl:${it.id}" }) { p ->
+        items(orderedPlaylists.orEmpty(), key = { "pl:${it.id}" }) { p ->
             ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}", rail = rail) {
                 actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl))
             }
         }
-        items(albums.state.value.orEmpty(), key = { "al:${it.id}" }) { a ->
+        items(orderedAlbums.orEmpty(), key = { "al:${it.id}" }) { a ->
             ShelfRow(a.imageUrl, a.name, "Álbum · ${a.artists}", rail = rail) {
                 actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl))
             }
@@ -455,6 +493,7 @@ private fun ShelfRow(
     subtitle: String,
     icon: ImageVector? = null,
     rail: Boolean = false,
+    place: Int? = null,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -466,6 +505,14 @@ private fun ShelfRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
     ) {
+        // In a queue, where a song stands is worth as much as its name.
+        place?.let {
+            Text(
+                "$it", Modifier.widthIn(min = 20.dp).padding(end = 6.dp),
+                color = c.onSurfaceVariant.copy(alpha = .7f), fontSize = 12.sp,
+                textAlign = TextAlign.End,
+            )
+        }
         // Folded, the cover is the only name the row has, so it is given the
         // space the two lines of words took.
         val size = if (rail) 46.dp else 42.dp
@@ -693,6 +740,7 @@ private fun Volume(s: PlaybackSnapshot, actions: AppActions) {
 
 /** What the right-hand column is showing. */
 private enum class PanelTab(val label: String) {
+    Art("Capa"),
     Queue("A seguir"),
     Lyrics("Letra"),
 }
@@ -708,27 +756,34 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
     val track = s.track
     Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp, bottom = BarHeight + 16.dp)) {
         Panel(Modifier.weight(1f)) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Cover(track?.coverUrl, Modifier.size(44.dp), radius = 10.dp)
-                Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                    Text(
-                        track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        track?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+            // The cover's own tab says all this and larger, so the strip of
+            // it stands down there rather than saying it twice.
+            if (tab != PanelTab.Art) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Cover(track?.coverUrl, Modifier.size(44.dp), radius = 10.dp)
+                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                        Text(
+                            track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            track?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
+            } else {
+                Spacer(Modifier.height(14.dp))
             }
             PillSelector(
                 PanelTab.entries, tab, { it.label }, onTab,
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
             )
             when (tab) {
+                PanelTab.Art -> CoverPane(s, Modifier.weight(1f))
                 PanelTab.Queue -> QueueList(s, actions, Modifier.weight(1f))
                 PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.weight(1f))
             }
@@ -736,7 +791,47 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
     }
 }
 
-/** The cover large, then the songs lined up behind this one. */
+/**
+ * The cover alone, as large as the column allows, with the song named
+ * under it. Nothing to read and nothing to do: the record sleeve, for
+ * when the window is left on the second monitor.
+ */
+@Composable
+private fun CoverPane(s: PlaybackSnapshot, modifier: Modifier) {
+    val c = MaterialTheme.colorScheme
+    val track = s.track
+    Column(
+        modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Cover(track?.coverUrl, Modifier.fillMaxWidth().aspectRatio(1f), radius = 18.dp)
+        Spacer(Modifier.height(18.dp))
+        Text(
+            track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 19.sp,
+            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
+        if (track != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                track.artists, color = c.onSurfaceVariant, fontSize = 14.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+            )
+            if (track.album.isNotBlank() && track.album != track.title) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    track.album, color = c.onSurfaceVariant.copy(alpha = .7f), fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The songs lined up behind this one, numbered from the one playing now.
+ * The cover is the tab beside this one, so the list starts at the music.
+ */
 @Composable
 private fun QueueList(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
@@ -746,11 +841,8 @@ private fun QueueList(s: PlaybackSnapshot, actions: AppActions, modifier: Modifi
         value = if (uris.isEmpty()) emptyList() else runCatching { actions.core.tracksInfo(uris) }.getOrDefault(emptyList())
     }
     LazyColumn(modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 8.dp, end = 8.dp, bottom = 16.dp)) {
-        item {
-            Cover(s.track?.coverUrl, Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), radius = 16.dp)
-        }
         itemsIndexed(songs) { i, song ->
-            ShelfRow(song.imageUrl, song.title, song.artists) {
+            ShelfRow(song.imageUrl, song.title, song.artists, place = i + 1) {
                 next.getOrNull(i)?.let { actions.skipTo(it, i) }
             }
         }
