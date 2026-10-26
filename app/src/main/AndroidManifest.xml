@@ -64,6 +64,23 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!--
+            Where a media button lands. The buttons Media3 draws on the
+            notification are broadcasts of ACTION_MEDIA_BUTTON, and with
+            nothing declared to receive them they went nowhere: a watch, a
+            headset or a car mirrors that notification and presses those,
+            while the phone's own media panel drives the session directly and
+            therefore always worked. That is why play and skip answered here
+            and not on the wrist.
+        -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"
