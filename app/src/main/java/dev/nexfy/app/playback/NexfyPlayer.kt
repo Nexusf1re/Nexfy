@@ -362,6 +362,14 @@ class NexfyPlayer(
                 COMMAND_PREPARE,
                 COMMAND_STOP,
                 COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+                // Nothing in the app offers these, and the app is not who
+                // asks for them: a Bluetooth media profile refuses a player
+                // whose advertised actions lack rewind and fast forward, and
+                // a watch or a car then shows controls that do nothing.
+                // SimpleBasePlayer works out the target itself and seeks
+                // through handleSeek, so declaring them costs no new code.
+                COMMAND_SEEK_BACK,
+                COMMAND_SEEK_FORWARD,
                 COMMAND_SEEK_TO_DEFAULT_POSITION,
                 COMMAND_SEEK_TO_PREVIOUS,
                 COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
