@@ -7,8 +7,12 @@ import dev.nexfy.app.playback.Commands
 import dev.nexfy.app.playback.CoreBridge
 import dev.nexfy.app.playback.OutputGain
 import dev.nexfy.app.playback.SleepTimer
+import java.net.DatagramSocket
+import java.net.InetAddress
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -22,6 +26,16 @@ import uniffi.nexfy_core.NexfyCore
 private const val WARM_EVERY_MS = 86_400_000L
 private const val WARM_PER_DAY = 12
 private const val WARM_MAX_TRACKS = 200
+
+/** How often the route to the internet is looked at; the look costs no traffic. */
+private const val NETWORK_CHECK_MS = 3_000L
+
+/** How often the clock is compared, and how far past that it must jump to mean the computer slept. */
+private const val SLEEP_CHECK_MS = 10_000L
+private const val SLEPT_MS = 60_000L
+
+/** Any public address works: only the route to it is asked for. */
+private const val ROUTE_PROBE = "1.1.1.1"
 
 /**
  * The app on a computer: the same services the screens read on the phone,
@@ -53,7 +67,11 @@ class DesktopServices(
 
     override val updates: UpdateOffers? = null
 
-    /** A window is up for as long as the app runs, so the account is always followed. */
+    /**
+     * Whether the window has the focus. The account is followed either way,
+     * since the window is up for as long as the app runs; coming back to it
+     * is what wakes a session left paused for long.
+     */
     override val visible = MutableStateFlow(true)
 
     /** A computer is on a wired or home network: songs are read ahead freely. */
@@ -83,12 +101,45 @@ class DesktopServices(
         }
         // Each song played long enough joins the log.
         bridge.listening.onListen = playLog::record
+        // Nothing here is a metered connection the way mobile data is.
+        core.setMetered(false)
+        // The network gone, back, or another one (Wi-Fi to cable): as on the
+        // phone, the session comes back at once instead of at the next click.
         scope.launch {
-            // Nothing tells a desktop app the network went away the way Android
-            // does; the core's own failures are what shows it here.
-            core.setOnline(true)
-            // Nothing here is a metered connection the way mobile data is.
-            core.setMetered(false)
+            var last = withContext(Dispatchers.IO) { route() }
+            Connectivity.online.value = last != null
+            core.setOnline(last != null)
+            while (true) {
+                delay(NETWORK_CHECK_MS)
+                val now = withContext(Dispatchers.IO) { route() }
+                if (now == last) continue
+                Connectivity.online.value = now != null
+                core.setOnline(now != null)
+                // What another device plays cannot be read or driven offline.
+                if (now == null) bridge.setRemote(null)
+                if (now != null) {
+                    runCatching { core.networkBack() }
+                    refreshRemote()
+                }
+                last = now
+            }
+        }
+        // Back from sleep, or the window brought back after a long pause: the
+        // session had likely died unnoticed, so it is renewed before the
+        // first click needs it (the phone does this when a screen opens).
+        scope.launch {
+            var before = System.currentTimeMillis()
+            while (true) {
+                delay(SLEEP_CHECK_MS)
+                val now = System.currentTimeMillis()
+                if (now - before > SLEEP_CHECK_MS + SLEPT_MS) wake()
+                before = now
+            }
+        }
+        scope.launch {
+            visible.collect { shown -> if (shown) wake() }
+        }
+        scope.launch {
             var seen = 0uL
             while (true) {
                 refreshRemote()
@@ -203,13 +254,33 @@ class DesktopServices(
         }
     }
 
+    /** Renews a session that sat paused for long; the core decides whether it did. */
+    private suspend fun wake() {
+        runCatching { core.wake() }
+        refreshRemote()
+    }
+
+    /**
+     * The address this computer would reach the internet from, null when it
+     * has no route there: the desktop's counterpart of the phone's default
+     * network. Connecting a UDP socket only asks the routing table, so no
+     * packet leaves; a new address is a new network.
+     */
+    private fun route(): String? = runCatching {
+        DatagramSocket().use { socket ->
+            socket.connect(InetAddress.getByName(ROUTE_PROBE), 53)
+            socket.localAddress.takeUnless { it.isAnyLocalAddress }?.hostAddress
+        }
+    }.getOrNull()
+
     private fun prefetchCovers(urls: List<String>) {
         val images = SingletonImageLoader.get(context)
         urls.forEach { images.enqueue(ImageRequest.Builder(context).data(it).build()) }
     }
 
     override suspend fun refreshRemote() {
-        if (!core.isConnected()) return
+        // Offline, each try would start a reconnect bound to fail.
+        if (!core.isConnected() || !Connectivity.online.value) return
         runCatching { core.remoteState() }.onSuccess { bridge.setRemote(it) }
     }
 
