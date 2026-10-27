@@ -57,6 +57,14 @@ sourceSets.main {
 
 tasks.named("processResources") { dependsOn(bundleRustCore) }
 
+// From Gradle there is no $APPDIR: the class archive lives in build/.
+afterEvaluate {
+    tasks.named<JavaExec>("run") {
+        val archive = layout.buildDirectory.file("nexfy.jsa").get().asFile.path
+        jvmArgs = jvmArgs.orEmpty().map { it.replace("\$APPDIR/nexfy.jsa", archive) }
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "dev.nexfy.desktop.MainKt"
@@ -84,6 +92,12 @@ compose.desktop {
         // claiming a quarter of the computer's memory, which is what it does
         // unasked, and the covers' memory cache is sized from it.
         jvmArgs("-Xms96m", "-Xmx640m", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=20")
+        // The classes the app loads are kept in an archive the JVM writes on
+        // the first clean exit and maps on every launch after it: a page
+        // opened for the first time cost ~290 ms of loading code, ~55 ms once
+        // the code was in. $APPDIR is the installed app's own folder, which a
+        // per-user install can write to; the run task points it at build/.
+        jvmArgs("-XX:+AutoCreateSharedArchive", "-XX:SharedArchiveFile=\$APPDIR/nexfy.jsa")
         // `gradlew :desktop:run -Pperf`: the window times its own frames (PerfTour.kt).
         if (project.hasProperty("perf")) jvmArgs("-Dnexfy.perf=true")
         // `-PperfJfr=<file>`: a Flight Recorder profile of the same run, to see where the frames go.

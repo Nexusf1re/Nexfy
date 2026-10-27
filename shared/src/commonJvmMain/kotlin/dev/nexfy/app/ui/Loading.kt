@@ -20,6 +20,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.nexfy.app.Connectivity
 import dev.nexfy.app.ui.design.PillButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** A value loaded from the core, with its error and loading flags. */
 data class Loaded<T>(val value: T? = null, val error: String? = null, val loading: Boolean = true)
@@ -44,8 +46,13 @@ fun <T> rememberLoaded(vararg keys: Any?, reloadOn: Any? = null, load: suspend (
     var refreshes by remember(*keys) { mutableIntStateOf(0) }
     LaunchedEffect(*keys, refreshes, reloadOn) {
         state = state.copy(loading = true, error = null)
+        val refresh = refreshes > 0
         state = try {
-            Loaded(load(refreshes > 0).also { value -> value?.let { lastValues[memoryKey] = it } }, null, false)
+            // Read off the main thread: the core answers on its own, but turning
+            // a playlist of hundreds of songs into Kotlin objects ran where the
+            // frames are drawn, and opening it cost a frame of ~200 ms.
+            val value = withContext(Dispatchers.Default) { load(refresh) }
+            Loaded(value.also { it?.let { lastValues[memoryKey] = it } }, null, false)
         } catch (e: Exception) {
             val message = e.message ?: e.toString()
             val offline = !Connectivity.online.value || message.contains("sem conexão")

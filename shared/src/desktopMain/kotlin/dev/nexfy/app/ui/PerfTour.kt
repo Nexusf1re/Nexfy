@@ -10,6 +10,7 @@ import java.lang.management.ManagementFactory
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.system.exitProcess
 
 /**
  * A measuring run of the window, for development: started with
@@ -30,7 +31,12 @@ internal object PerfTour {
 internal class PerfControls(
     val setPanel: (open: Boolean, tab: Int) -> Unit,
     val setNowPlaying: (Boolean) -> Unit,
+    /** Tocando agora reopened on its words. */
+    val setLyrics: (Boolean) -> Unit,
 )
+
+/** What the tour searches for: an artist anyone's catalogue has. */
+private const val PERF_QUERY = "daft punk"
 
 @Composable
 internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
@@ -41,10 +47,14 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
             .takeIf { it > 0 } ?: 60
         val report = StringBuilder()
         report.appendLine("Nexfy desktop, frame timing. Screen ${refresh} Hz (a frame every ${"%.1f".format(1000.0 / refresh)} ms)")
-        report.appendLine("step                          frames   fps   p50 ms  p95 ms  p99 ms  max ms  missed  cpu%")
+        report.appendLine("step                          frames   fps   p50 ms  p95 ms  p99 ms  max ms  missed  cpu%  1st ms")
         // Let the first page and its covers settle before anything is timed.
         delay(6_000)
-        val playlist = runCatching { actions.core.myPlaylists(false) }.getOrNull()?.firstOrNull()
+        // The user's own fullest playlist: a real table to open and scroll, not
+        // one of Spotify's generated ones that arrive empty (the DJ).
+        val playlist = runCatching { actions.core.myPlaylists(false) }.getOrNull().orEmpty()
+            .filter { it.owner != "Spotify" && it.trackCount > 0u }
+            .maxByOrNull { it.trackCount }
 
         suspend fun step(name: String, run: suspend () -> Unit) {
             val gaps = ArrayList<Double>(2048)
@@ -71,6 +81,22 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
 
         val home = nav.list("root:${Tab.Home.name}")
         step("parado na Início (2s)") { delay(2_000) }
+        // The rest runs with music playing here, as the app is used: the
+        // playing bar's clock and bars, a real song in the panel, words in
+        // Tocando agora. Paused again at the end if the tour started it.
+        val bridge = actions.services.bridge
+        val startedHere = playlist != null && bridge.state.value.track == null
+        if (startedHere) {
+            step("começar a tocar") {
+                actions.playCollection(Route.Playlist(playlist!!.id))
+                var waited = 0
+                while (!bridge.state.value.playing && waited < 40) {
+                    delay(250)
+                    waited++
+                }
+                delay(1_500)
+            }
+        }
         step("rolar a Início") {
             repeat(3) {
                 home.animateScrollBy(1_400f)
@@ -96,6 +122,16 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
                 }
             }
             step("voltar da playlist") {
+                nav.pop()
+                delay(1_200)
+            }
+            // The same page again: what is left is the page's own cost, not the
+            // first time the JVM met its code.
+            step("abrir playlist de novo") {
+                actions.open(Route.Playlist(playlist.id), Peek(playlist.name, playlist.owner, playlist.imageUrl))
+                delay(1_500)
+            }
+            step("voltar de novo") {
                 nav.pop()
                 delay(1_200)
             }
@@ -133,12 +169,80 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
             controls.setNowPlaying(false)
             delay(800)
         }
+        step("abrir a Biblioteca") {
+            nav.tab = Tab.Library
+            delay(1_200)
+        }
+        step("rolar a Biblioteca") {
+            val list = nav.list("root:${Tab.Library.name}")
+            repeat(2) {
+                list.animateScrollBy(1_600f)
+                list.animateScrollBy(-1_600f)
+            }
+        }
+        step("abrir Curtidas") {
+            actions.open(Route.Liked)
+            delay(1_800)
+        }
+        step("rolar Curtidas") {
+            val list = nav.list(Route.Liked.key)
+            repeat(2) {
+                list.animateScrollBy(3_000f)
+                list.animateScrollBy(-3_000f)
+            }
+        }
+        step("voltar de Curtidas") {
+            nav.pop()
+            delay(1_000)
+        }
+        step("buscar (digitar)") {
+            nav.tab = Tab.Search
+            delay(500)
+            for (n in 1..PERF_QUERY.length) {
+                nav.searchQuery = PERF_QUERY.take(n)
+                delay(110)
+            }
+            delay(2_000)
+        }
+        val artist = runCatching { actions.core.search(PERF_QUERY).artists.firstOrNull() }.getOrNull()
+        if (artist != null) {
+            step("abrir artista") {
+                actions.open(Route.Artist(artist.id), Peek(artist.name, imageUrl = artist.imageUrl))
+                delay(1_800)
+            }
+            step("rolar artista") {
+                val list = nav.list(Route.Artist(artist.id).key)
+                list.animateScrollBy(1_800f)
+                list.animateScrollBy(-1_800f)
+            }
+            step("voltar do artista") {
+                nav.pop()
+                delay(1_000)
+            }
+        }
+        nav.searchQuery = ""
+        nav.tab = Tab.Home
+        delay(800)
+        step("Tocando agora com letra") {
+            controls.setNowPlaying(true)
+            delay(700)
+            controls.setLyrics(true)
+            delay(3_000)
+            controls.setNowPlaying(false)
+            delay(900)
+        }
 
+        if (startedHere && bridge.state.value.playing) actions.services.commands.playPause()
+        val playedAll = bridge.state.value.track != null
+        report.appendLine(if (playedAll) "com música tocando: ${bridge.state.value.track?.title}" else "sem música tocando")
         val heap = Runtime.getRuntime().let { (it.totalMemory() - it.freeMemory()) / (1024 * 1024) }
         report.appendLine("heap em uso no fim: $heap MB")
         val text = report.toString()
         println(text)
         runCatching { nexfyDataDir().resolve("perf.txt").writeText(text) }
+        // A clean exit, so the JVM writes its class archive (see the desktop
+        // build) and the next run measures a launch that has one.
+        exitProcess(0)
     }
 }
 
@@ -152,7 +256,10 @@ private fun line(name: String, gaps: List<Double>, refresh: Int, cpu: Double): S
     val total = gaps.sum()
     val budget = 1000.0 / refresh
     val missed = gaps.sumOf { g -> ((g / budget) - .5).toInt().coerceAtLeast(0) }
-    return "%-28s %6d %5.0f %7.1f %7.1f %7.1f %7.1f %7d %5.1f".format(
-        name, gaps.size, gaps.size / (total / 1000), pct(.5), pct(.95), pct(.99), sorted.last(), missed, cpu,
+    // The worst of the first few frames: what the step's own change cost,
+    // a new screen composed or a panel laid out, apart from what follows.
+    val first = gaps.take(4).max()
+    return "%-28s %6d %5.0f %7.1f %7.1f %7.1f %7.1f %7d %5.1f %7.1f".format(
+        name, gaps.size, gaps.size / (total / 1000), pct(.5), pct(.95), pct(.99), sorted.last(), missed, cpu, first,
     )
 }

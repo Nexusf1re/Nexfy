@@ -1,5 +1,7 @@
 package dev.nexfy.app.ui.screens
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListState
@@ -238,7 +240,8 @@ fun LikedScreen(actions: AppActions, list: LazyListState, modifier: Modifier) {
         if (!nearEnd && !filtering && tracks.isNotEmpty() || loading) return@LaunchedEffect
         loading = true
         try {
-            val page = actions.core.likedTracks(offset, 50u, false)
+            // Each page is read off the main thread, as rememberLoaded reads.
+            val page = withContext(Dispatchers.Default) { actions.core.likedTracks(offset, 50u, false) }
             tracks.addAll(page.tracks)
             total = page.total.toInt()
             nextOffset = page.nextOffset

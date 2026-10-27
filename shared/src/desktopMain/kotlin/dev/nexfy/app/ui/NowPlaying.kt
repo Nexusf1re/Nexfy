@@ -95,7 +95,7 @@ internal fun NowPlaying(
     // The player's own glass source: the buttons standing over the art refract
     // the living backdrop behind them, not the page they are covering.
     val backdrop = remember { GlassBackdrop() }
-    var lyrics by remember { mutableStateOf(startWithLyrics) }
+    var lyrics by remember(startWithLyrics) { mutableStateOf(startWithLyrics) }
     var menu by remember { mutableStateOf(false) }
     // Nothing follows: the skip forward goes quiet rather than acting as if a
     // song would come. Another device keeps a queue of its own.

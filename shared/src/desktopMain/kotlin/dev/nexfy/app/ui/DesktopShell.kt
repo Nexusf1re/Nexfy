@@ -276,6 +276,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                     panelOpen = open
                 },
                 setNowPlaying = { nowPlaying = it },
+                setLyrics = { nowPlayingLyrics = it },
             )
         },
     )
