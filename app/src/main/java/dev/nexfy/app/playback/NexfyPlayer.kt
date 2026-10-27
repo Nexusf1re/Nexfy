@@ -41,6 +41,8 @@ class NexfyPlayer(
     private val core: NexfyCore,
     private val bridge: CoreBridge,
     private val commands: Commands,
+    /** A cover's image as JPEG bytes, small enough for a watch; null if it will not load. */
+    private val loadCover: suspend (String) -> ByteArray?,
 ) : SimpleBasePlayer(Looper.getMainLooper()) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -53,6 +55,33 @@ class NexfyPlayer(
 
     /** Whether the last state given to Media3 was another device's. */
     private var remoteShown = false
+
+    /**
+     * The cover of the song shown, as bytes. A link alone reaches the watch
+     * as no cover: its plugin opens a cover's URI through the content
+     * resolver, which cannot fetch https, and takes the bytes when they come.
+     * They also give the car and the headset profiles a cover.
+     */
+    private var cover: Pair<String, ByteArray>? = null
+    private var coverLoading: String? = null
+
+    /** The cover bytes for [url], loading them once if they are not here yet. */
+    private fun coverFor(url: String?): ByteArray? {
+        if (url == null) return null
+        cover?.takeIf { it.first == url }?.let { return it.second }
+        if (coverLoading != url) {
+            coverLoading = url
+            scope.launch {
+                val bytes = runCatching { loadCover(url) }.getOrNull()
+                if (coverLoading == url) coverLoading = null
+                if (bytes != null) {
+                    cover = url to bytes
+                    invalidateState()
+                }
+            }
+        }
+        return null
+    }
 
     init {
         scope.launch {
@@ -106,6 +135,7 @@ class NexfyPlayer(
                     .setArtist(track.artists)
                     .setAlbumTitle(track.album)
                     .setArtworkUri(track.coverUrl?.let(Uri::parse))
+                    .setArtworkData(coverFor(track.coverUrl), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
                     .setDurationMs(track.durationMs.toLong())
                     .build()
                 item.setMediaMetadata(metadata)
@@ -157,6 +187,7 @@ class NexfyPlayer(
                 .setSubtitle(where)
                 .setAlbumTitle(track.album)
                 .setArtworkUri(track.coverUrl?.let(Uri::parse))
+                .setArtworkData(coverFor(track.coverUrl), MediaMetadata.PICTURE_TYPE_FRONT_COVER)
                 .setDurationMs(track.durationMs.toLong())
                 .build()
             val current = MediaItemData.Builder("remote:${track.uri}")
