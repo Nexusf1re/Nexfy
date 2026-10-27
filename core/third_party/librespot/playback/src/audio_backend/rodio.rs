@@ -203,9 +203,24 @@ fn create_sink(
         AudioFormat::S16 => cpal::SampleFormat::I16,
     };
 
+    let mut stream_config = config.config();
+    // A computer's output gets a tenth of a second of room. WASAPI's own
+    // default is a single period, about 10 ms, and any busy moment (the
+    // window drawing, a download) left it with nothing to play: a crackle.
+    // The phone keeps AAudio's choice, which it tunes to the hardware.
+    #[cfg(not(target_os = "android"))]
+    {
+        let wanted = stream_config.sample_rate.0 / 10;
+        let frames = match config.buffer_size() {
+            cpal::SupportedBufferSize::Range { min, max } => wanted.clamp(*min, (*max).max(*min)),
+            cpal::SupportedBufferSize::Unknown => wanted,
+        };
+        stream_config.buffer_size = cpal::BufferSize::Fixed(frames);
+    }
+
     let mut stream = match rodio::OutputStreamBuilder::default()
         .with_device(cpal_device.clone())
-        .with_config(&config.config())
+        .with_config(&stream_config)
         .with_sample_format(sample_format)
         .open_stream()
     {
