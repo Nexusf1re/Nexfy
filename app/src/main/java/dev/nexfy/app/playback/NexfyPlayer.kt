@@ -206,7 +206,7 @@ class NexfyPlayer(
         return runCore(undo) {
             when {
                 s.queue.current == null -> Unit
-                playWhenReady -> core.resume()
+                playWhenReady -> commands.resume()
                 else -> core.pause()
             }
         }
