@@ -58,11 +58,9 @@ sourceSets.main {
 tasks.named("processResources") { dependsOn(bundleRustCore) }
 
 // From Gradle there is no $APPDIR: the class archive lives in build/.
-afterEvaluate {
-    tasks.named<JavaExec>("run") {
-        val archive = layout.buildDirectory.file("nexfy.jsa").get().asFile.path
-        jvmArgs = jvmArgs.orEmpty().map { it.replace("\$APPDIR/nexfy.jsa", archive) }
-    }
+tasks.withType<JavaExec>().matching { it.name == "run" }.configureEach {
+    val archive = layout.buildDirectory.file("nexfy.jsa").get().asFile.path
+    doFirst { jvmArgs = jvmArgs.orEmpty().map { it.replace("\$APPDIR/nexfy.jsa", archive) } }
 }
 
 compose.desktop {
