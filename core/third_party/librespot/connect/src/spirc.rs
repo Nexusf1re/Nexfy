@@ -1079,6 +1079,19 @@ impl SpircTask {
         } else if cluster.transfer_data.is_empty() {
             debug!("got empty transfer state, do nothing");
             return Ok(());
+        } else if self.connect_state.current_track(MessageField::is_some)
+            && !matches!(self.play_status, SpircPlayStatus::Stopped)
+        {
+            // Back from a connection that dropped (an app frozen in the
+            // background, a network that came back) with a song still loaded
+            // here: the server no longer lists this device as active, and
+            // taking over from its transfer state, which can lack the current
+            // track, stopped the song the user had paused. Keep it, and tell
+            // the server it is here again.
+            info!("connection back with playback here, keeping it");
+            self.handle_activate();
+            self.notify().await?;
+            return Ok(());
         } else {
             info!(
                 "trying to take over control automatically, session_id: {}",

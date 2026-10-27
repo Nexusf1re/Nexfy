@@ -1248,6 +1248,42 @@ impl NexfyCore {
         self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play()))
     }
 
+    /// Play again what the screen shows, with nothing in the player behind it.
+    /// Resuming then went nowhere: the counter ran with no sound, or the song
+    /// loaded for ever, until another song was tapped. The player is emptied
+    /// when the connection comes back and the server's copy of the playback
+    /// lacks the current song. With the song still loaded, an ordinary resume.
+    pub async fn resume_from(
+        &self,
+        track_uri: String,
+        context_uri: Option<String>,
+        next_uris: Vec<String>,
+        position_ms: u32,
+        shuffle: bool,
+    ) -> Result<(), CoreError> {
+        if self.inner.loaded.load(Ordering::Relaxed) || self.inner.offline_play().is_some() {
+            return self.resume().await;
+        }
+        log::info!("resume with nothing loaded: loading {track_uri} again at {position_ms} ms");
+        let request = match context_uri.filter(|uri| !uri.is_empty()) {
+            Some(context) => {
+                let mut options = self.inner.load_options(Some(PlayingTrack::Uri(track_uri)), shuffle);
+                options.seek_to = position_ms;
+                LoadRequest::from_context_uri(context, options)
+            }
+            None => {
+                let uris = std::iter::once(&track_uri)
+                    .chain(next_uris.iter())
+                    .map(|uri| parse_track(uri).map(|t| t.to_uri()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut options = self.inner.load_options(Some(PlayingTrack::Index(0)), false);
+                options.seek_to = position_ms;
+                LoadRequest::from_tracks(uris, options)
+            }
+        };
+        self.inner.load(request).await
+    }
+
     /// Toggles from what the player is doing, not what the screen last showed.
     pub async fn play_pause(&self) -> Result<(), CoreError> {
         if self.inner.playing.load(Ordering::Relaxed) {

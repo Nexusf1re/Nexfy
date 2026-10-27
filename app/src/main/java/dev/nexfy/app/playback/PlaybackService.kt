@@ -19,6 +19,23 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import android.os.Bundle
+import androidx.media3.session.CommandButton
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import android.graphics.Bitmap
+import coil3.SingletonImageLoader
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import coil3.toBitmap
+import java.io.ByteArrayOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.nexfy.app.MainActivity
@@ -59,7 +76,7 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         running = true
         val app = application as NexfyApp
-        player = NexfyPlayer(app.core, app.bridge, app.commands)
+        player = NexfyPlayer(app.core, app.bridge, app.commands) { url -> coverBytes(url) }
 
         audioManager = getSystemService(AudioManager::class.java)
         focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -115,8 +132,58 @@ class PlaybackService : MediaSessionService() {
         )
         session = MediaSession.Builder(this, player)
             .setSessionActivity(openApp)
-            .setCallback(SessionCallback)
+            .setCallback(SessionCallback())
+            // No position pushed every 3 s: Media3 republished the whole
+            // playback state each time, and every republish went to the watch
+            // over Bluetooth and to the car or headset profile, with nothing
+            // changed. Controllers work the position out from the speed, and a
+            // seek, a new song or a pause still reaches them at once.
+            .setPeriodicPositionUpdateEnabled(false)
             .build()
+        followButtons(app)
+    }
+
+    /**
+     * Like and shuffle beside the transport controls: on the watch's two
+     * upper slots, in the notification and on the lock screen. Each shows the
+     * state of the song shown (here or on another device) and changes with it.
+     */
+    private fun buttons(app: NexfyApp): List<CommandButton> {
+        val s = app.bridge.state.value
+        val uri = s.track?.uri ?: return emptyList()
+        val liked = app.edits.saved[uri] == true
+        val shuffle = s.queue.shuffle
+        return listOf(
+            CommandButton.Builder(if (liked) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED)
+                .setDisplayName(if (liked) "Descurtir" else "Curtir")
+                .setSessionCommand(LIKE)
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .setExtras(ON_WEAR)
+                .build(),
+            CommandButton.Builder(if (shuffle) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
+                .setDisplayName(if (shuffle) "Desligar aleatório" else "Aleatório")
+                .setSessionCommand(SHUFFLE)
+                .setSlots(CommandButton.SLOT_OVERFLOW)
+                .setExtras(ON_WEAR)
+                .build(),
+        )
+    }
+
+    private fun showButtons(app: NexfyApp) = session.setMediaButtonPreferences(buttons(app))
+
+    /** The buttons follow the song, its shuffle, and every like saved anywhere in the app. */
+    private fun followButtons(app: NexfyApp) = lifecycleScope.launch {
+        combine(
+            app.bridge.state.map { it.track?.uri to it.queue.shuffle }.distinctUntilChanged(),
+            app.edits.version,
+        ) { shown, _ -> shown }.collectLatest { (uri, _) ->
+            showButtons(app)
+            // A song not looked up yet reads as not liked until Spotify answers.
+            if (uri != null && uri !in app.edits.saved) {
+                app.edits.load(listOf(uri))
+                showButtons(app)
+            }
+        }
     }
 
     /**
@@ -124,7 +191,53 @@ class PlaybackService : MediaSessionService() {
      * how to resolve them. Ours are Spotify track URIs in `mediaId`, which
      * the core resolves itself, so they pass through unchanged.
      */
-    private object SessionCallback : MediaSession.Callback {
+    private inner class SessionCallback : MediaSession.Callback {
+        /**
+         * Every controller may drive playback, not only read it. Media3 gives a
+         * controller that is not part of the system the read-only commands
+         * unless the app says otherwise, and the Galaxy Watch reaches the
+         * phone through such a controller (the watch plugin, an ordinary app):
+         * it found no play, pause or skip, told the watch so, and the watch
+         * greyed its buttons and dropped every press. Spotify, on the older
+         * session API, never met the cut.
+         */
+        private fun everything(session: MediaSession): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailablePlayerCommands(MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
+                .setAvailableSessionCommands(
+                    MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(LIKE).add(SHUFFLE).build(),
+                )
+                .build()
+
+        /** The like and shuffle buttons, from the watch, the notification or the lock screen. */
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            val app = application as NexfyApp
+            val s = app.bridge.state.value
+            when (customCommand.customAction) {
+                LIKE.customAction -> {
+                    val uri = s.track?.uri ?: return Futures.immediateFuture(SessionResult(SessionError.ERROR_INVALID_STATE))
+                    val liked = app.edits.saved[uri] == true
+                    app.edits.setSaved(uri, !liked, if (liked) "Removida das curtidas" else "Adicionada às curtidas")
+                }
+                SHUFFLE.customAction -> app.commands.setShuffle(!s.queue.shuffle)
+                else -> return Futures.immediateFuture(SessionResult(SessionError.ERROR_NOT_SUPPORTED))
+            }
+            showButtons(app)
+            return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo) = everything(session)
+
+        override fun onConnectAsync(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): ListenableFuture<MediaSession.ConnectionResult> = Futures.immediateFuture(everything(session))
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -142,6 +255,20 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = session
+
+    /**
+     * A cover as JPEG bytes for the session, from the image cache the screens
+     * already filled: 320 px is what a watch draws, and keeps every update of
+     * the session small.
+     */
+    private suspend fun coverBytes(url: String): ByteArray? = withContext(Dispatchers.IO) {
+        val request = ImageRequest.Builder(this@PlaybackService).data(url).size(COVER_PX).allowHardware(false).build()
+        val bitmap = SingletonImageLoader.get(this@PlaybackService).execute(request).image?.toBitmap() ?: return@withContext null
+        ByteArrayOutputStream().use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
+    }
 
     /**
      * With no screen open nothing polls the other device, so follow it from
@@ -244,6 +371,20 @@ class PlaybackService : MediaSessionService() {
 
         /** As long as Media3 keeps a paused session in the foreground. */
         private const val REMOTE_PAUSED_LINGER_MS = 10 * 60_000L
+
+        /**
+         * Marks a button for the watch. Samsung's watch draws a custom action
+         * only when its extras say so; the watch plugin reads this key and
+         * sends it on as showOnWear.
+         */
+        private val ON_WEAR = Bundle().apply { putBoolean("android.support.wearable.media.extra.CUSTOM_ACTION_SHOW_ON_WEAR", true) }
+
+        /** The buttons beside the transport controls. */
+        private val LIKE = SessionCommand("dev.nexfy.LIKE", ON_WEAR)
+        private val SHUFFLE = SessionCommand("dev.nexfy.SHUFFLE", ON_WEAR)
+
+        /** The cover handed to the session, in pixels a side. */
+        private const val COVER_PX = 320
     }
 
     /**

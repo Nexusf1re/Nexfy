@@ -20,6 +20,9 @@ private const val COMMAND_TIMEOUT_MS = 12_000L
 /** How long a song may load before the wait is explained. */
 private const val LOADING_PATIENCE_MS = 8_000L
 
+/** Songs after the current one loaded with it, when it has to be loaded again without its playlist. */
+private const val RELOAD_AHEAD = 100
+
 /** How long a resume may take to sound, a renewed session included, before the button goes back. */
 private const val PLAYING_PATIENCE_MS = 10_000L
 
@@ -142,8 +145,26 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
             return
         }
         val undo = showPlaying(!playing)
-        run(undo) { if (playing) core.pause() else core.resume() }
+        run(undo) { if (playing) core.pause() else resume() }
         if (!playing) watchPlaying()
+    }
+
+    /**
+     * Resume, or load the song shown again where it stopped when the player
+     * behind it was emptied (a connection back in the background replaced the
+     * playback with the server's copy, which can lack the song).
+     */
+    suspend fun resume() {
+        val s = bridge.local.value
+        val track = s.track ?: return core.resume()
+        val position = if (s.stopped) 0 else s.currentPositionMs().coerceAtLeast(0)
+        core.resumeFrom(
+            track.uri,
+            s.queue.contextUri,
+            s.queue.next.take(RELOAD_AHEAD).map { it.uri },
+            position.toUInt(),
+            s.queue.shuffle,
+        )
     }
 
     private var playingWatch: Job? = null
