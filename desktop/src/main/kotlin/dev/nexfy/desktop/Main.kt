@@ -23,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
@@ -55,7 +54,11 @@ import dev.nexfy.app.ui.design.systemAnimationsOff
 import dev.nexfy.app.ui.openInBrowser
 import dev.nexfy.app.ui.theme.Look
 import dev.nexfy.app.ui.theme.NexfyTheme
+import androidx.compose.ui.awt.ComposeWindow
+import java.awt.Taskbar
 import javax.imageio.ImageIO
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -112,9 +115,12 @@ fun main() {
                 } else if (event.key == Key.Escape) {
                     DesktopBack.pressed()
                 } else {
-                    DesktopKeys.pressed(event.key, event.isCtrlPressed)
+                    DesktopKeys.pressed(event)
                 }
             },
+            // What the focused element let through: Space, the arrows with a
+            // modifier and the letters reach the player only from here.
+            onKeyEvent = { event -> event.type == KeyEventType.KeyDown && DesktopKeys.unhandled(event) },
         ) {
             LaunchedEffect(Unit) {
                 window.minimumSize = MinWindowSize
@@ -154,7 +160,7 @@ fun main() {
                     }
                 }
             }
-            Root(frame) { window.windowHandle }
+            Root(frame, window)
         }
     }
 }
@@ -165,7 +171,7 @@ fun main() {
  * device, so a phone can push a playlist here.
  */
 @Composable
-private fun Root(frame: WindowFrame, windowHandle: () -> Long) {
+private fun Root(frame: WindowFrame, window: ComposeWindow) {
     val scope = rememberCoroutineScope()
     var services by remember { mutableStateOf<DesktopServices?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -189,8 +195,34 @@ private fun Root(frame: WindowFrame, windowHandle: () -> Long) {
     val running = services
     when {
         failure != null -> Opening { Text(failure!!, style = MaterialTheme.typography.bodySmall) }
-        running != null -> App(running, frame, windowHandle)
+        running != null -> App(running, frame, window)
         else -> Opening { Text("opening the core…", style = MaterialTheme.typography.titleMedium) }
+    }
+}
+
+/**
+ * How far the song has gone, drawn on the app's taskbar button, as the
+ * system draws a download's: the bar runs while it plays and stands paused,
+ * in the system's paused colour, where it stopped; nothing playing, none.
+ */
+private suspend fun showProgressOnTaskbar(services: DesktopServices, window: ComposeWindow) {
+    val taskbar = Taskbar.getTaskbar().takeIf {
+        Taskbar.isTaskbarSupported() && it.isSupported(Taskbar.Feature.PROGRESS_STATE_WINDOW)
+    } ?: return
+    services.bridge.state.collectLatest { s ->
+        val duration = s.track?.durationMs?.toLong() ?: 0L
+        if (duration <= 0L) {
+            taskbar.setWindowProgressState(window, Taskbar.State.OFF)
+            return@collectLatest
+        }
+        taskbar.setWindowProgressState(window, if (s.playing) Taskbar.State.NORMAL else Taskbar.State.PAUSED)
+        while (true) {
+            val percent = (s.currentPositionMs().coerceIn(0L, duration) * 100 / duration).toInt()
+            taskbar.setWindowProgressValue(window, percent)
+            if (!s.playing) break
+            // One step of the bar is a hundredth of the song.
+            delay((duration / 100).coerceIn(1_000L, 5_000L))
+        }
     }
 }
 
@@ -211,15 +243,16 @@ private fun Opening(content: @Composable () -> Unit) {
 
 /** The app itself: the settings drive the theme, as they do on the phone. */
 @Composable
-private fun App(services: DesktopServices, frame: WindowFrame, windowHandle: () -> Long) {
+private fun App(services: DesktopServices, frame: WindowFrame, window: ComposeWindow) {
     val context: PlatformContext = PlatformContext.INSTANCE
     val library = services.library
     // The system's media controls, the phone's notification and watch here.
     // With them on, they take the media keys too, so the window leaves them.
     val scope = rememberCoroutineScope()
     LaunchedEffect(services) {
-        DesktopKeys.systemMedia = SystemMedia(services, scope).attach(windowHandle())
+        DesktopKeys.systemMedia = SystemMedia(services, scope).attach(window.windowHandle)
     }
+    LaunchedEffect(services) { showProgressOnTaskbar(services, window) }
     // Coming back to the window is the desktop's way of opening the app.
     val focused = LocalWindowInfo.current.isWindowFocused
     LaunchedEffect(focused) { services.visible.value = focused }

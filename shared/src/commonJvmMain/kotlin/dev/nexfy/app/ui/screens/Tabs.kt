@@ -407,7 +407,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Álbuns", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-al")) {
                                 items(r.albums, key = { it.id }) { a ->
-                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "search-al/${a.id}") { actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "search-al/${a.id}") }
+                                    CoverCard(a.imageUrl, a.name, a.artists, "al-${a.id}", shared = "search-al/${a.id}", onPlay = { actions.playCollection(Route.Album(a.id)) }) { actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "search-al/${a.id}") }
                                 }
                             }
                         }
@@ -419,7 +419,7 @@ fun SearchScreen(actions: AppActions, list: LazyListState) {
                             SectionTitle("Playlists", Modifier.padding(start = 4.dp))
                             Carousel(actions.nav.list("row:s-pl")) {
                                 items(r.playlists, key = { it.id }) { p ->
-                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}", shared = "search-pl/${p.id}") { actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "search-pl/${p.id}") }
+                                    CoverCard(p.imageUrl, p.name, p.owner, "pl-${p.id}", shared = "search-pl/${p.id}", onPlay = { actions.playCollection(Route.Playlist(p.id)) }) { actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl), "search-pl/${p.id}") }
                                 }
                             }
                         }

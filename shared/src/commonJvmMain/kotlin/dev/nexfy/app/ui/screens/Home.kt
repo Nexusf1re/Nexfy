@@ -172,7 +172,11 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
             homeRow("recent", "Tocadas recentemente", recent.state.pending() || playlists.state.pending(), recentCards.takeIf { it.isNotEmpty() }) { cards ->
                 Carousel(actions.nav.list("row:home-recent"), cards.first().key) {
                     items(cards, key = { it.key }) { r ->
-                        CoverCard(r.imageUrl, r.title, r.subtitle, r.key, shared = "home-recent/${r.key}") { actions.open(r.route, r.peek, "home-recent/${r.key}") }
+                        val playable = r.route is Route.Playlist || r.route is Route.Album
+                        CoverCard(
+                            r.imageUrl, r.title, r.subtitle, r.key, shared = "home-recent/${r.key}",
+                            onPlay = { actions.playCollection(r.route) }.takeIf { playable },
+                        ) { actions.open(r.route, r.peek, "home-recent/${r.key}") }
                     }
                 }
             }
@@ -180,7 +184,10 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                 Carousel(actions.nav.list("row:home-releases"), items.first().id) {
                     items(items, key = { it.id }) { a ->
                         val kind = if (a.trackCount in 1u..3u) "Single" else "Álbum"
-                        CoverCard(a.imageUrl, a.name, "$kind · ${a.artists}", "rel-${a.id}", shared = "home-rel/${a.id}") {
+                        CoverCard(
+                            a.imageUrl, a.name, "$kind · ${a.artists}", "rel-${a.id}", shared = "home-rel/${a.id}",
+                            onPlay = { actions.playCollection(Route.Album(a.id)) },
+                        ) {
                             actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl), "home-rel/${a.id}")
                         }
                     }
@@ -205,6 +212,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                                     Route.Playlist(p.id), peek, p.uri, own = p.ownerId == me,
                                 )
                             },
+                            onPlay = { actions.playCollection(Route.Playlist(p.id)) },
                         ) { actions.open(Route.Playlist(p.id), peek, "home-pl/${p.id}") }
                     }
                 }
@@ -227,6 +235,7 @@ fun HomeScreen(actions: AppActions, list: LazyListState) {
                             onLongClick = {
                                 shelfFor = Shelved("al:${a.id}", a.name, "Álbum · ${a.artists}", a.imageUrl, Route.Album(a.id), peek, a.uri)
                             },
+                            onPlay = { actions.playCollection(Route.Album(a.id)) },
                         ) { actions.open(Route.Album(a.id), peek, "home-al/${a.id}") }
                     }
                 }

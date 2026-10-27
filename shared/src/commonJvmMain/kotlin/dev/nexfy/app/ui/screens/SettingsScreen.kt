@@ -3,6 +3,7 @@ package dev.nexfy.app.ui.screens
 import coil3.compose.LocalPlatformContext
 import dev.nexfy.app.ui.appVersion
 import dev.nexfy.app.ui.design.LocalPointer
+import androidx.compose.ui.text.font.FontWeight
 import dev.nexfy.app.ui.design.awaitShown
 
 import androidx.compose.animation.core.animateFloatAsState
@@ -116,6 +117,7 @@ fun SettingsScreen(actions: AppActions, modifier: Modifier = Modifier) {
         SoundSection(actions)
         AppearanceSection(actions)
         BehaviourSection(actions)
+        if (LocalPointer.current) KeysSection()
         StorageSection(actions)
         AboutSection(actions)
     }
@@ -348,6 +350,42 @@ private fun BehaviourSection(actions: AppActions) {
             Toggle("Voltar arrastando", "Arraste uma página para o lado, de qualquer ponto, para voltar.", swipeBack, library::setSwipeBack)
         }
         TranslatorEmail(library)
+    }
+}
+
+/** The keys the window answers, and the mouse's own gestures. */
+private val Keys = listOf(
+    "Espaço" to "Tocar ou pausar",
+    "Ctrl + → / ←" to "Próxima ou anterior",
+    "Shift + → / ←" to "Avançar ou voltar 10 segundos",
+    "Ctrl + ↑ / ↓" to "Volume",
+    "Ctrl + S" to "Aleatório",
+    "Ctrl + L" to "Letra ao lado",
+    "Ctrl + F" to "Buscar",
+    "Ctrl + ," to "Ajustes",
+    "Esc" to "Voltar",
+    "Roda do mouse na barra" to "Volume",
+    "Botão voltar do mouse" to "Voltar",
+)
+
+/** On a computer: the shortcuts, so they need not be guessed. */
+@Composable
+private fun KeysSection() {
+    val c = MaterialTheme.colorScheme
+    Section("Teclado e mouse", "Atalhos que funcionam em qualquer página, fora de um campo de texto.") {
+        Column {
+            Keys.forEach { (keys, what) ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(what, Modifier.weight(1f), color = c.onSurface, fontSize = 14.sp)
+                    Text(
+                        keys,
+                        Modifier.clip(RoundedCornerShape(8.dp)).background(c.onSurface.copy(alpha = .07f))
+                            .padding(horizontal = 9.dp, vertical = 3.dp),
+                        color = c.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -304,6 +304,32 @@ class AppActions(
         services.commands.watchLoading()
     }
 
+    /**
+     * Play a playlist or an album from its card, without opening it: as its
+     * page's own play button would, with the shuffle the user left on.
+     */
+    fun playCollection(route: Route) {
+        val (source, context) = when (route) {
+            is Route.Playlist -> "pl:${route.id}" to "spotify:playlist:${route.id}"
+            is Route.Album -> "al:${route.id}" to "spotify:album:${route.id}"
+            else -> return
+        }
+        scope.launch {
+            val tracks = runCatching {
+                when (route) {
+                    is Route.Playlist -> core.playlist(route.id, false).tracks
+                    is Route.Album -> core.album(route.id, false).tracks
+                    else -> emptyList()
+                }
+            }.getOrElse {
+                services.toast("Não deu para abrir a lista", false)
+                return@launch
+            }
+            val shuffle = services.library.shuffle.value
+            play(tracks, if (shuffle && tracks.isNotEmpty()) tracks.indices.random() else 0, shuffle, source, context)
+        }
+    }
+
     /** Add a song to Spotify's queue; it plays after the current one. */
     fun addToQueue(track: Track) {
         // In a Jam the queue that counts is the Jam's, wherever it plays.

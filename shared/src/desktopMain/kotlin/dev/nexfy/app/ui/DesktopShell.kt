@@ -15,7 +15,19 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isBackPressed
+import androidx.compose.ui.unit.DpOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.hoverable
@@ -188,6 +200,30 @@ private val RailWidth = 78.dp
 /** The seek line never steps faster than this, however long the window makes it. */
 private const val LINE_STEP_MIN_MS = 33L
 
+/** How far Shift with an arrow seeks, and how much a notch of the wheel or Ctrl with an arrow moves the volume. */
+private const val SEEK_STEP_MS = 10_000L
+
+/** How long the pointer rests on an icon before its name shows. */
+private const val HINT_DELAY_MS = 550
+private const val VOLUME_STEP = .05f
+
+/** The last volume asked of another device, which reports it back only a moment later. */
+private var remoteVolumeAsked: Pair<Long, Int>? = null
+
+/** The volume moved by [delta] (a fraction of the whole), here or on the device playing. */
+private fun AppActions.nudgeVolume(delta: Float) {
+    val remote = services.bridge.state.value.remote
+    if (remote == null) {
+        services.output.setVolume((services.output.volume.value + delta).coerceIn(0.0, 1.0))
+        return
+    }
+    val now = System.currentTimeMillis()
+    val base = remoteVolumeAsked?.takeIf { now - it.first < 3_000 }?.second ?: remote.volume?.toInt() ?: 50
+    val target = (base + (delta * 100).roundToInt()).coerceIn(0, 100)
+    remoteVolumeAsked = now to target
+    setVolume(target)
+}
+
 /**
  * The app on a computer: a column of the library on the left, the page in
  * the middle, what is playing along the bottom, and the song's own panel on
@@ -215,31 +251,57 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     val searchFocus = remember { FocusRequester() }
 
     ShimmerDriver()
-    // The media keys, for as long as this shell is up.
+    // The keyboard, for as long as this shell is up: the media keys, and the
+    // shortcuts every desktop player answers (listed in the guide).
     DisposableEffect(actions) {
-        DesktopKeys.handler = { key, ctrl ->
+        DesktopKeys.handler = handler@{ event, first ->
+            val key = event.key
+            val ctrl = event.isCtrlPressed
+            val shift = event.isShiftPressed
             val media = !DesktopKeys.systemMedia
-            when {
-                media && (key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause) -> {
-                    actions.playPause()
-                    true
+            val s = services.bridge.state.value
+            if (first) {
+                return@handler when {
+                    media && (key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause) -> {
+                        actions.playPause()
+                        true
+                    }
+                    media && key == Key.MediaNext -> {
+                        actions.next()
+                        true
+                    }
+                    media && key == Key.MediaPrevious -> {
+                        actions.previous()
+                        true
+                    }
+                    // Ctrl+F is where every app puts "find": the strip's field
+                    // takes the caret, whatever page is open.
+                    ctrl && key == Key.F -> {
+                        runCatching { searchFocus.requestFocus() }
+                        true
+                    }
+                    else -> false
                 }
-                (media && key == Key.MediaNext) || (ctrl && key == Key.DirectionRight) -> {
-                    actions.next()
-                    true
-                }
-                (media && key == Key.MediaPrevious) || (ctrl && key == Key.DirectionLeft) -> {
-                    actions.previous()
-                    true
-                }
-                // Ctrl+F is where every app puts "find": the strip's field
-                // takes the caret, whatever page is open.
-                ctrl && key == Key.F -> {
-                    runCatching { searchFocus.requestFocus() }
-                    true
-                }
-                else -> false
             }
+            when {
+                key == Key.Spacebar && !ctrl && !shift -> actions.playPause()
+                ctrl && key == Key.DirectionRight -> actions.next()
+                ctrl && key == Key.DirectionLeft -> actions.previous()
+                shift && (key == Key.DirectionRight || key == Key.DirectionLeft) && s.track != null -> {
+                    val by = if (key == Key.DirectionRight) SEEK_STEP_MS else -SEEK_STEP_MS
+                    actions.seek((s.currentPositionMs() + by).coerceIn(0L, s.track!!.durationMs.toLong()))
+                }
+                ctrl && key == Key.DirectionUp -> actions.nudgeVolume(VOLUME_STEP)
+                ctrl && key == Key.DirectionDown -> actions.nudgeVolume(-VOLUME_STEP)
+                ctrl && key == Key.S -> actions.setShuffle(!s.queue.shuffle)
+                ctrl && key == Key.L -> {
+                    panelOpen = !(panelOpen && panelTab == PanelTab.Lyrics)
+                    panelTab = PanelTab.Lyrics
+                }
+                ctrl && key == Key.Comma -> actions.open(Route.Settings)
+                else -> return@handler false
+            }
+            true
         }
         onDispose { DesktopKeys.handler = null }
     }
@@ -259,7 +321,18 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
         LocalShellHeader provides true,
         LocalPointer provides true,
     ) {
-        BoxWithConstraints(Modifier.fillMaxSize().background(c.background)) {
+        BoxWithConstraints(
+            Modifier.fillMaxSize().background(c.background)
+                // The mouse's own back button (the thumb button) does what Esc does.
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.type == PointerEventType.Press && event.buttons.isBackPressed) DesktopBack.pressed()
+                        }
+                    }
+                },
+        ) {
             // Three columns at their full width need a wide window. Where
             // there is less, the sidebar folds to a rail of covers rather
             // than the panel being refused: the words and the queue are what
@@ -483,10 +556,12 @@ private fun BackButton(enabled: Boolean, onBack: () -> Unit) {
         if (enabled) c.onSurface else c.onSurfaceVariant.copy(.35f),
         label = "back",
     )
-    Box(
-        Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onBack),
-        Alignment.Center,
-    ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", tint = tint, modifier = Modifier.size(18.dp)) }
+    Hint("Voltar (Esc)") {
+        Box(
+            Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onBack),
+            Alignment.Center,
+        ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", tint = tint, modifier = Modifier.size(18.dp)) }
+    }
 }
 
 /** A flat round button that only shows its ground under the pointer. */
@@ -513,11 +588,13 @@ private fun WindowButton(
         if (over && danger) Color.White else c.onSurfaceVariant,
         label = "windowGlyph",
     )
-    Box(
-        Modifier.padding(start = 4.dp).size(30.dp).clip(CircleShape).background(ground)
-            .hoverable(hover).clickable(onClick = onClick),
-        Alignment.Center,
-    ) { Icon(icon, description, tint = tint, modifier = Modifier.size(glyph)) }
+    Hint(description) {
+        Box(
+            Modifier.padding(start = 4.dp).size(30.dp).clip(CircleShape).background(ground)
+                .hoverable(hover).clickable(onClick = onClick),
+            Alignment.Center,
+        ) { Icon(icon, description, tint = tint, modifier = Modifier.size(glyph)) }
+    }
 }
 
 // ------------------------------------------------------------------ sidebar
@@ -589,23 +666,25 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Bo
     val haptics = rememberHaptics()
     val accent = accentColor()
     val tint = if (selected) accent else c.onSurfaceVariant
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) accent.copy(.12f) else Color.Transparent)
-            .clickable { haptics.tick(); onClick() }
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
-    ) {
-        Icon(icon, if (rail) label else null, tint = tint, modifier = Modifier.size(20.dp))
-        if (!rail) {
-            Text(
-                label, Modifier.padding(start = 14.dp),
-                color = if (selected) c.onSurface else c.onSurfaceVariant,
-                fontSize = 15.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            )
+    Hint(label, shown = rail) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (selected) accent.copy(.12f) else Color.Transparent)
+                .clickable { haptics.tick(); onClick() }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
+        ) {
+            Icon(icon, if (rail) label else null, tint = tint, modifier = Modifier.size(20.dp))
+            if (!rail) {
+                Text(
+                    label, Modifier.padding(start = 14.dp),
+                    color = if (selected) c.onSurface else c.onSurfaceVariant,
+                    fontSize = 15.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                )
+            }
         }
     }
 }
@@ -614,10 +693,37 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Bo
 private fun NavIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
-    Icon(
-        icon, description, tint = c.onSurfaceVariant,
-        modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); onClick() }.padding(8.dp).size(20.dp),
-    )
+    Hint(description) {
+        Icon(
+            icon, description, tint = c.onSurfaceVariant,
+            modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); onClick() }.padding(8.dp).size(20.dp),
+        )
+    }
+}
+
+/**
+ * What a button that is only an icon does, in a word under the pointer after
+ * a moment's rest on it, as every desktop app says it. A folded sidebar's
+ * covers are named the same way.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun Hint(text: String, shown: Boolean = true, content: @Composable () -> Unit) {
+    if (!shown) return content()
+    val c = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(8.dp)
+    TooltipArea(
+        tooltip = {
+            Text(
+                text,
+                Modifier.shadow(8.dp, shape).clip(shape).background(c.inverseSurface)
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                color = c.inverseOnSurface, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            )
+        },
+        delayMillis = HINT_DELAY_MS,
+        tooltipPlacement = TooltipPlacement.CursorPoint(offset = DpOffset(0.dp, 22.dp)),
+    ) { content() }
 }
 
 /** The user's playlists and saved albums, the way the library page reads them. */
@@ -677,6 +783,20 @@ private fun ShelfRow(
     icon: ImageVector? = null,
     rail: Boolean = false,
     place: Int? = null,
+    onClick: () -> Unit,
+) {
+    // Folded to its cover, the row says its name under the pointer.
+    Hint(title, shown = rail) { ShelfRowContent(art, title, subtitle, icon, rail, place, onClick) }
+}
+
+@Composable
+private fun ShelfRowContent(
+    art: String?,
+    title: String,
+    subtitle: String,
+    icon: ImageVector?,
+    rail: Boolean,
+    place: Int?,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
@@ -800,10 +920,18 @@ private fun PlayingBar(
             // space used to go through to whatever row was under there and
             // play it. Everything inside the bar still takes its own clicks;
             // this only stops the rest falling through.
+            //
+            // The wheel over it is the volume, as in every desktop player: a
+            // notch is five per cent, up for louder.
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
-                        awaitPointerEvent().changes.forEach { it.consume() }
+                        val event = awaitPointerEvent()
+                        if (event.type == PointerEventType.Scroll) {
+                            val notches = event.changes.sumOf { it.scrollDelta.y.toDouble() }.toFloat()
+                            if (notches != 0f) actions.nudgeVolume(-notches * VOLUME_STEP)
+                        }
+                        event.changes.forEach { it.consume() }
                     }
                 }
             }
@@ -826,10 +954,16 @@ private fun PlayingBar(
                 label = "barSong",
                 contentKey = { it?.uri },
             ) { song ->
-                Column {
+                // A name too long for the bar reads to its end while the
+                // pointer rests on it, and nothing moves otherwise.
+                val hover = remember { MutableInteractionSource() }
+                val over by hover.collectIsHoveredAsState()
+                Column(Modifier.hoverable(hover)) {
                     Text(
                         song?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        overflow = if (over) TextOverflow.Clip else TextOverflow.Ellipsis,
+                        modifier = if (over && !Motion.reduced) Modifier.basicMarquee(initialDelayMillis = 300) else Modifier,
                     )
                     Text(
                         song?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
@@ -873,35 +1007,48 @@ private fun Transport(s: PlaybackSnapshot, actions: AppActions) {
     val haptics = rememberHaptics()
     val shuffle = s.queue.shuffle
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Icon(
-            Icons.Rounded.Shuffle, if (shuffle) "Desligar aleatório" else "Aleatório",
-            tint = if (shuffle) accent else c.onSurfaceVariant,
-            modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); actions.setShuffle(!shuffle) }
-                .padding(7.dp).size(18.dp),
-        )
+        val shuffleLabel = if (shuffle) "Desligar aleatório" else "Aleatório"
+        Hint("$shuffleLabel (Ctrl+S)") {
+            Icon(
+                Icons.Rounded.Shuffle, shuffleLabel,
+                tint = if (shuffle) accent else c.onSurfaceVariant,
+                modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); actions.setShuffle(!shuffle) }
+                    .padding(7.dp).size(18.dp),
+            )
+        }
         NavIcon(Icons.Rounded.SkipPrevious, "Anterior") { actions.previous() }
-        Box(
-            Modifier.size(40.dp).clip(CircleShape).background(c.onSurface)
-                .clickable { haptics.press(); actions.playPause() },
-            Alignment.Center,
-        ) { PlayPauseGlyph(s.playing, c.surface, Modifier.size(18.dp)) }
+        Hint(if (s.playing) "Pausar (Espaço)" else "Tocar (Espaço)") {
+            Box(
+                Modifier.size(40.dp).clip(CircleShape).background(c.onSurface)
+                    .clickable { haptics.press(); actions.playPause() },
+                Alignment.Center,
+            ) { PlayPauseGlyph(s.playing, c.surface, Modifier.size(18.dp)) }
+        }
         NavIcon(Icons.Rounded.SkipNext, "Próxima") { actions.next() }
         val repeat = s.queue.repeat
-        Icon(
-            if (repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
-            "Repetir",
-            tint = if (repeat == RepeatMode.OFF) c.onSurfaceVariant else accent,
-            modifier = Modifier.clip(CircleShape).clickable {
-                haptics.tick()
-                actions.setRepeat(
-                    when (repeat) {
-                        RepeatMode.OFF -> RepeatMode.ALL
-                        RepeatMode.ALL -> RepeatMode.ONE
-                        RepeatMode.ONE -> RepeatMode.OFF
-                    },
-                )
-            }.padding(7.dp).size(18.dp),
-        )
+        Hint(
+            when (repeat) {
+                RepeatMode.OFF -> "Repetir"
+                RepeatMode.ALL -> "Repetindo a fila"
+                RepeatMode.ONE -> "Repetindo a faixa"
+            },
+        ) {
+            Icon(
+                if (repeat == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                "Repetir",
+                tint = if (repeat == RepeatMode.OFF) c.onSurfaceVariant else accent,
+                modifier = Modifier.clip(CircleShape).clickable {
+                    haptics.tick()
+                    actions.setRepeat(
+                        when (repeat) {
+                            RepeatMode.OFF -> RepeatMode.ALL
+                            RepeatMode.ALL -> RepeatMode.ONE
+                            RepeatMode.ONE -> RepeatMode.OFF
+                        },
+                    )
+                }.padding(7.dp).size(18.dp),
+            )
+        }
     }
 }
 

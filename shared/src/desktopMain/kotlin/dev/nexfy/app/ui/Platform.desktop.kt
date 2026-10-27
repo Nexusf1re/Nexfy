@@ -4,7 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.unit.Dp
 import coil3.PlatformContext
 import java.awt.Desktop
@@ -102,16 +102,16 @@ actual fun appVersion(context: PlatformContext): String? =
 actual fun appDataDir(context: PlatformContext): java.io.File = dev.nexfy.app.nexfyDataDir()
 
 /**
- * The keys a music app answers: the media keys of a keyboard that has
- * them, and Ctrl with the arrows for the same on one that does not. The
- * window hands every key press here first.
- *
- * Space is deliberately not one of them: it would be taken from the
- * search field as the user typed.
+ * The keys a music app answers. The window hands each key press here twice:
+ * first, before anything focused sees it ([pressed]: the media keys and
+ * Ctrl+F, which no field has a use for), and again once the focused element
+ * has passed it up untouched ([unhandled]: Space, the arrows with a
+ * modifier, the letters). A field being typed in takes its keys first, so
+ * Space there is a space and Ctrl+← still moves by a word.
  */
 object DesktopKeys {
-    /** Set by the shell while it is up. */
-    internal var handler: ((key: Key, ctrl: Boolean) -> Boolean)? = null
+    /** Set by the shell while it is up; `first` is the pass before the focused element. */
+    internal var handler: ((event: KeyEvent, first: Boolean) -> Boolean)? = null
 
     /**
      * The system's media controls are on and take the media keys wherever
@@ -120,5 +120,8 @@ object DesktopKeys {
     var systemMedia = false
 
     /** True when the app took the key, so the window leaves it alone. */
-    fun pressed(key: Key, ctrl: Boolean): Boolean = handler?.invoke(key, ctrl) == true
+    fun pressed(event: KeyEvent): Boolean = handler?.invoke(event, true) == true
+
+    /** The same, for a key the focused element let through. */
+    fun unhandled(event: KeyEvent): Boolean = handler?.invoke(event, false) == true
 }

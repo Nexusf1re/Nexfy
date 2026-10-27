@@ -58,6 +58,9 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayCircle
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -488,11 +491,19 @@ fun CoverCard(
     shared: String? = null,
     /** Held down: the card's menu, as the rows in the lists have. */
     onLongClick: (() -> Unit)? = null,
+    /**
+     * Plays what the card stands for without opening it. Offered under a
+     * pointer only, as a round button rising on the cover while it is
+     * hovered; a phone opens the card, where the play button is.
+     */
+    onPlay: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
+    val play = onPlay?.takeIf { LocalPointer.current }
+    val hovered by source.collectIsHoveredAsState()
     // A pane of glass tinted by the cover; the text stays in the theme's ink on it.
     val pane = if (circle) Color.Transparent else tileColor(imageUrl, key).copy(alpha = if (c.isDark) .3f else .36f)
     val ink = c.onSurface
@@ -500,6 +511,7 @@ fun CoverCard(
     Column(
         Modifier.carouselDepth().width(width).weightedPress(source, 16.dp)
             .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
+            .then(if (play != null) Modifier.hoverable(source) else Modifier)
             .combinedClickable(
                 source, null,
                 onClick = {
@@ -515,7 +527,10 @@ fun CoverCard(
             )
             .padding(bottom = if (circle) 0.dp else 10.dp),
     ) {
-        Cover(imageUrl, Modifier.size(width), if (circle) width / 2 else 14.dp, sharedKey = shared)
+        Box(Modifier.size(width)) {
+            Cover(imageUrl, Modifier.fillMaxSize(), if (circle) width / 2 else 14.dp, sharedKey = shared)
+            if (play != null) HoverPlay(hovered, play, Modifier.align(Alignment.BottomEnd).padding(10.dp))
+        }
         Spacer(Modifier.height(8.dp))
         Column(Modifier.padding(horizontal = if (circle) 0.dp else 10.dp)) {
             val align = if (circle) TextAlign.Center else null
@@ -528,6 +543,34 @@ fun CoverCard(
                 maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp,
             )
         }
+    }
+}
+
+/**
+ * The card's play button: the accent's disc, rising a little and growing
+ * into place as the pointer comes over the card, and gone again after.
+ */
+@Composable
+private fun HoverPlay(shown: Boolean, onPlay: () -> Unit, modifier: Modifier) {
+    val haptics = rememberHaptics()
+    val accent = dev.nexfy.app.ui.theme.accentColor()
+    val rise by animateFloatAsState(if (shown) 1f else 0f, Motion.settle(420f), label = "hoverPlay")
+    if (rise <= .01f) return
+    Box(
+        modifier.size(44.dp)
+            .graphicsLayer {
+                alpha = rise
+                translationY = (1f - rise) * 10.dp.toPx()
+                scaleX = .85f + .15f * rise
+                scaleY = .85f + .15f * rise
+            }
+            .shadow(10.dp, CircleShape)
+            .clip(CircleShape)
+            .background(accent)
+            .clickable { haptics.press(); onPlay() },
+        Alignment.Center,
+    ) {
+        Icon(Icons.Rounded.PlayArrow, "Tocar", tint = if (accent.luminance() > .5f) Color.Black else Color.White, modifier = Modifier.size(24.dp))
     }
 }
 
