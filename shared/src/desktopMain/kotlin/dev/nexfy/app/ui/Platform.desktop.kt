@@ -113,6 +113,12 @@ object DesktopKeys {
     /** Set by the shell while it is up. */
     internal var handler: ((key: Key, ctrl: Boolean) -> Boolean)? = null
 
+    /**
+     * The system's media controls are on and take the media keys wherever
+     * the focus is; the window then leaves them, or a key would act twice.
+     */
+    var systemMedia = false
+
     /** True when the app took the key, so the window leaves it alone. */
     fun pressed(key: Key, ctrl: Boolean): Boolean = handler?.invoke(key, ctrl) == true
 }

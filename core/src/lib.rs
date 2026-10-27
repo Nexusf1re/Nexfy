@@ -11,6 +11,7 @@ mod android;
 mod collection;
 mod equalizer;
 mod lyrics;
+mod media_controls;
 mod offline;
 mod offline_play;
 mod playlist_edit;

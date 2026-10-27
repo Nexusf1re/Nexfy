@@ -27,6 +27,7 @@ import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -43,6 +44,7 @@ import coil3.request.crossfade
 import dev.nexfy.app.ui.WindowFrame
 import dev.nexfy.app.DesktopServices
 import dev.nexfy.app.LocalServices
+import dev.nexfy.app.SystemMedia
 import dev.nexfy.app.ThemeMode
 import dev.nexfy.app.nexfyDataDir
 import dev.nexfy.app.ui.DesktopBack
@@ -53,6 +55,7 @@ import dev.nexfy.app.ui.design.systemAnimationsOff
 import dev.nexfy.app.ui.openInBrowser
 import dev.nexfy.app.ui.theme.Look
 import dev.nexfy.app.ui.theme.NexfyTheme
+import javax.imageio.ImageIO
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -115,6 +118,9 @@ fun main() {
         ) {
             LaunchedEffect(Unit) {
                 window.minimumSize = MinWindowSize
+                // Every size the icon is drawn at, so the taskbar, Alt+Tab
+                // and the title of a dialog each take a sharp one.
+                window.iconImages = appIcons()
                 // Undecorated, the window had lost the shell's own motion,
                 // its rounded corners and its resizing border.
                 dressWindow(window)
@@ -148,7 +154,7 @@ fun main() {
                     }
                 }
             }
-            Root(frame)
+            Root(frame) { window.windowHandle }
         }
     }
 }
@@ -159,7 +165,7 @@ fun main() {
  * device, so a phone can push a playlist here.
  */
 @Composable
-private fun Root(frame: WindowFrame) {
+private fun Root(frame: WindowFrame, windowHandle: () -> Long) {
     val scope = rememberCoroutineScope()
     var services by remember { mutableStateOf<DesktopServices?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
@@ -183,9 +189,14 @@ private fun Root(frame: WindowFrame) {
     val running = services
     when {
         failure != null -> Opening { Text(failure!!, style = MaterialTheme.typography.bodySmall) }
-        running != null -> App(running, frame)
+        running != null -> App(running, frame, windowHandle)
         else -> Opening { Text("opening the core…", style = MaterialTheme.typography.titleMedium) }
     }
+}
+
+/** The icon at each size icons/MakeIcons.java draws it. */
+private fun appIcons(): List<java.awt.Image> = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).mapNotNull { size ->
+    object {}.javaClass.getResourceAsStream("/icons/nexfy-$size.png")?.use(ImageIO::read)
 }
 
 /** The window before the core is up, in plain dark so it is never a white flash. */
@@ -200,9 +211,18 @@ private fun Opening(content: @Composable () -> Unit) {
 
 /** The app itself: the settings drive the theme, as they do on the phone. */
 @Composable
-private fun App(services: DesktopServices, frame: WindowFrame) {
+private fun App(services: DesktopServices, frame: WindowFrame, windowHandle: () -> Long) {
     val context: PlatformContext = PlatformContext.INSTANCE
     val library = services.library
+    // The system's media controls, the phone's notification and watch here.
+    // With them on, they take the media keys too, so the window leaves them.
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(services) {
+        DesktopKeys.systemMedia = SystemMedia(services, scope).attach(windowHandle())
+    }
+    // Coming back to the window is the desktop's way of opening the app.
+    val focused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(focused) { services.visible.value = focused }
     val mode by library.themeMode.collectAsState()
     val dark = when (mode) {
         ThemeMode.System -> isSystemInDarkTheme()

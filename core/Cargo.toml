@@ -62,3 +62,9 @@ inherits = "release"
 lto = false
 codegen-units = 16
 incremental = true
+
+# The desktop's media controls (the volume flyout, the media keys, the lock
+# screen): Windows' System Media Transport Controls.
+[target.'cfg(windows)'.dependencies]
+souvlaki = "0.9"
+
