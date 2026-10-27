@@ -158,11 +158,13 @@ class PlaybackService : MediaSessionService() {
                 .setDisplayName(if (liked) "Descurtir" else "Curtir")
                 .setSessionCommand(LIKE)
                 .setSlots(CommandButton.SLOT_OVERFLOW)
+                .setExtras(ON_WEAR)
                 .build(),
             CommandButton.Builder(if (shuffle) CommandButton.ICON_SHUFFLE_ON else CommandButton.ICON_SHUFFLE_OFF)
                 .setDisplayName(if (shuffle) "Desligar aleatório" else "Aleatório")
                 .setSessionCommand(SHUFFLE)
                 .setSlots(CommandButton.SLOT_OVERFLOW)
+                .setExtras(ON_WEAR)
                 .build(),
         )
     }
@@ -370,9 +372,16 @@ class PlaybackService : MediaSessionService() {
         /** As long as Media3 keeps a paused session in the foreground. */
         private const val REMOTE_PAUSED_LINGER_MS = 10 * 60_000L
 
+        /**
+         * Marks a button for the watch. Samsung's watch draws a custom action
+         * only when its extras say so; the watch plugin reads this key and
+         * sends it on as showOnWear.
+         */
+        private val ON_WEAR = Bundle().apply { putBoolean("android.support.wearable.media.extra.CUSTOM_ACTION_SHOW_ON_WEAR", true) }
+
         /** The buttons beside the transport controls. */
-        private val LIKE = SessionCommand("dev.nexfy.LIKE", Bundle.EMPTY)
-        private val SHUFFLE = SessionCommand("dev.nexfy.SHUFFLE", Bundle.EMPTY)
+        private val LIKE = SessionCommand("dev.nexfy.LIKE", ON_WEAR)
+        private val SHUFFLE = SessionCommand("dev.nexfy.SHUFFLE", ON_WEAR)
 
         /** The cover handed to the session, in pixels a side. */
         private const val COVER_PX = 320
