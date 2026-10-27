@@ -2,8 +2,6 @@ package dev.nexfy.app.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExperimentalSharedTransitionApi
-import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandHorizontally
@@ -15,7 +13,9 @@ import androidx.compose.material.icons.rounded.ViewSidebar
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateDpAsState
@@ -26,6 +26,7 @@ import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.ui.draw.shadow
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -144,8 +145,6 @@ import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
 import dev.nexfy.app.ui.design.LocalPointer
-import dev.nexfy.app.ui.design.LocalScreenScope
-import dev.nexfy.app.ui.design.LocalSharedScope
 import dev.nexfy.app.ui.design.LocalShellHeader
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.PillSelector
@@ -247,7 +246,12 @@ private fun AppActions.nudgeVolume(delta: Float) {
 fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: WindowFrame? = null) {
     val c = MaterialTheme.colorScheme
     val dark = c.isDark
-    val nav = remember { NavState() }
+    // Every list keeps a screen's height of items composed either side of
+    // what shows. Scrolling the home page used to compose each shelf, a row
+    // of cards with their glass and effects, in the frame it came into view,
+    // and those frames were missed; now it is ready before it arrives.
+    @OptIn(ExperimentalFoundationApi::class)
+    val nav = remember { NavState().apply { cacheWindow = LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 1f) } }
     val scope = rememberCoroutineScope()
     val actions = remember { AppActions(services, nav, openBrowser, scope) }
     val snapshot by services.bridge.state.collectAsState()
@@ -262,6 +266,19 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     val searchFocus = remember { FocusRequester() }
 
     ShimmerDriver()
+    // A measuring run, only with -Dnexfy.perf=true (see PerfTour).
+    PerfTourRunner(
+        actions,
+        remember {
+            PerfControls(
+                setPanel = { open, tab ->
+                    panelTab = PanelTab.entries[tab]
+                    panelOpen = open
+                },
+                setNowPlaying = { nowPlaying = it },
+            )
+        },
+    )
     // The keyboard, for as long as this shell is up: the media keys, and the
     // shortcuts every desktop player answers (listed in the guide).
     DisposableEffect(actions) {
@@ -390,12 +407,15 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                     modifier = Modifier.width(sidebar).fillMaxHeight(),
                 )
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
-                // The song's column opens out from the page's edge rather than
-                // appearing whole, and folds back into it.
+                // The song's column slides in from the window's edge and back
+                // out to it. The page makes room once, at the start (or the
+                // end, on the way out), rather than being measured again on
+                // every frame of a width that grows: that cost the whole
+                // page's layout per frame, a shelf of cards each time.
                 AnimatedVisibility(
                     panelOpen,
-                    enter = expandHorizontally(Motion.standard(), Alignment.Start) + fadeIn(Motion.enter()),
-                    exit = shrinkHorizontally(Motion.standard(Motion.Short + 80), Alignment.Start) + fadeOut(Motion.exit()),
+                    enter = slideInHorizontally(Motion.enter()) { it / 3 } + fadeIn(Motion.enter()),
+                    exit = slideOutHorizontally(Motion.exit()) { it / 3 } + fadeOut(Motion.exit()),
                 ) {
                     SongPanel(
                         snapshot, actions, panelTab, { panelTab = it },
@@ -877,7 +897,6 @@ private val Reading = setOf(
 )
 
 /** The page itself, with the way back above it when there is one. */
-@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun Page(actions: AppActions, modifier: Modifier) {
     val nav = actions.nav
@@ -885,33 +904,31 @@ private fun Page(actions: AppActions, modifier: Modifier) {
         Panel(Modifier.weight(1f)) {
             // The phone's own page motion, inside the panel: a page opened
             // comes forward out of depth, Esc sends it back into it, and
-            // another tab slides in from its side. A card's cover travels to
-            // the header of the page it opens, as it does on the phone.
-            SharedTransitionLayout(Modifier.fillMaxSize()) {
-                CompositionLocalProvider(LocalSharedScope provides this) {
-                    AnimatedContent(
-                        nav.screen,
-                        Modifier.fillMaxSize(),
-                        transitionSpec = {
-                            when {
-                                initialState.tab != targetState.tab ->
-                                    Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
-                                targetState.depth < initialState.depth -> Motion.pageBack
-                                else -> Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
-                            }
-                        },
-                        label = "page",
-                    ) { screen ->
-                        CompositionLocalProvider(LocalScreenScope provides this) {
-                            val held = screen.route in Reading
-                            Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
-                                ScreenContent(
-                                    screen, actions,
-                                    if (held) Modifier.widthIn(max = 760.dp).fillMaxHeight() else Modifier.fillMaxSize(),
-                                )
-                            }
-                        }
+            // another tab slides in from its side.
+            //
+            // No shared cover morph here, unlike the phone: the layout behind
+            // it measures the whole page twice on every frame (a lookahead
+            // pass, then the real one), which was half the window's thread
+            // while a shelf of cards scrolled into view.
+            AnimatedContent(
+                nav.screen,
+                Modifier.fillMaxSize(),
+                transitionSpec = {
+                    when {
+                        initialState.tab != targetState.tab ->
+                            Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
+                        targetState.depth < initialState.depth -> Motion.pageBack
+                        else -> Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
                     }
+                },
+                label = "page",
+            ) { screen ->
+                val held = screen.route in Reading
+                Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+                    ScreenContent(
+                        screen, actions,
+                        if (held) Modifier.widthIn(max = 760.dp).fillMaxHeight() else Modifier.fillMaxSize(),
+                    )
                 }
             }
         }

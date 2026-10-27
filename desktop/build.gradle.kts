@@ -84,5 +84,9 @@ compose.desktop {
         // claiming a quarter of the computer's memory, which is what it does
         // unasked, and the covers' memory cache is sized from it.
         jvmArgs("-Xms96m", "-Xmx640m", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=20")
+        // `gradlew :desktop:run -Pperf`: the window times its own frames (PerfTour.kt).
+        if (project.hasProperty("perf")) jvmArgs("-Dnexfy.perf=true")
+        // `-PperfJfr=<file>`: a Flight Recorder profile of the same run, to see where the frames go.
+        (findProperty("perfJfr") as String?)?.let { jvmArgs("-XX:StartFlightRecording=duration=120s,settings=profile,filename=$it") }
     }
 }

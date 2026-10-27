@@ -42,6 +42,8 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Home
@@ -170,6 +172,7 @@ data class Peek(val title: String, val subtitle: String? = null, val imageUrl: S
 data class Screen(val tab: Tab, val route: Route?, val depth: Int = 0)
 
 /** Each tab keeps its own back stack and the scroll position of every screen. */
+@OptIn(ExperimentalFoundationApi::class)
 @Stable
 class NavState {
     var tab by mutableStateOf(Tab.Home)
@@ -214,7 +217,13 @@ class NavState {
         stacks[tab] = emptyList()
     }
 
-    fun list(key: String) = lists.getOrPut(key) { LazyListState() }
+    fun list(key: String) = lists.getOrPut(key) { cacheWindow?.let { LazyListState(it) } ?: LazyListState() }
+
+    /**
+     * How far past the visible part of every list its items are kept
+     * composed, where the platform asks for that (see the desktop shell).
+     */
+    var cacheWindow: LazyLayoutCacheWindow? = null
 }
 
 /** What every screen needs: the core, playback and navigation. */
