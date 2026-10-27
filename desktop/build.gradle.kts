@@ -69,6 +69,20 @@ compose.desktop {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "Nexfy"
             packageVersion = (findProperty("versionName") as String?) ?: "1.0.0"
+            windows {
+                // Drawn by icons/MakeIcons.java from the phone's launcher icon.
+                iconFile.set(project.file("icons/nexfy.ico"))
+                menuGroup = "Nexfy"
+                shortcut = true
+                perUserInstall = true
+                // Fixed for good: an installer with a new one would install a
+                // second Nexfy beside the first instead of updating it.
+                upgradeUuid = "6f1d9c2e-4b7a-4e8f-9a51-2c7e3d0b8a64"
+            }
         }
+        // A music player needs little heap: a ceiling keeps the JVM from
+        // claiming a quarter of the computer's memory, which is what it does
+        // unasked, and the covers' memory cache is sized from it.
+        jvmArgs("-Xms96m", "-Xmx640m", "-XX:+UseG1GC", "-XX:MaxGCPauseMillis=20")
     }
 }
