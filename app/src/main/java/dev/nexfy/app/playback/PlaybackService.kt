@@ -125,6 +125,28 @@ class PlaybackService : MediaSessionService() {
      * the core resolves itself, so they pass through unchanged.
      */
     private object SessionCallback : MediaSession.Callback {
+        /**
+         * Every controller may drive playback, not only read it. Media3 gives a
+         * controller that is not part of the system the read-only commands
+         * unless the app says otherwise, and the Galaxy Watch reaches the
+         * phone through such a controller (the watch plugin, an ordinary app):
+         * it found no play, pause or skip, told the watch so, and the watch
+         * greyed its buttons and dropped every press. Spotify, on the older
+         * session API, never met the cut.
+         */
+        private fun everything(session: MediaSession): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailablePlayerCommands(MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS)
+                .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS)
+                .build()
+
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo) = everything(session)
+
+        override fun onConnectAsync(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): ListenableFuture<MediaSession.ConnectionResult> = Futures.immediateFuture(everything(session))
+
         override fun onAddMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
