@@ -80,7 +80,14 @@ import uniffi.nexfy_core.RepeatMode
  * at the top left and the Esc key, as every other layer of this shell is.
  */
 @Composable
-internal fun NowPlaying(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier, onClose: () -> Unit) {
+internal fun NowPlaying(
+    s: PlaybackSnapshot,
+    actions: AppActions,
+    modifier: Modifier,
+    /** Opened from the panel's "Letra cheia": the words are up from the start. */
+    startWithLyrics: Boolean = false,
+    onClose: () -> Unit,
+) {
     val c = MaterialTheme.colorScheme
     val ink = artInk()
     val wash = artWash()
@@ -88,7 +95,7 @@ internal fun NowPlaying(s: PlaybackSnapshot, actions: AppActions, modifier: Modi
     // The player's own glass source: the buttons standing over the art refract
     // the living backdrop behind them, not the page they are covering.
     val backdrop = remember { GlassBackdrop() }
-    var lyrics by remember { mutableStateOf(false) }
+    var lyrics by remember { mutableStateOf(startWithLyrics) }
     var menu by remember { mutableStateOf(false) }
     // Nothing follows: the skip forward goes quiet rather than acting as if a
     // song would come. Another device keeps a queue of its own.

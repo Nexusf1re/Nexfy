@@ -76,6 +76,14 @@ data class TrackColumns(
     val date: Boolean,
     /** Several people add to this playlist and their faces are being shown. */
     val addedBy: Boolean = false,
+    /**
+     * The album has no room for a column of its own and is folded under the
+     * title instead, after the artists, with the header relabelled to say so:
+     * the date keeps its column rather than being the first thing to go.
+     */
+    val albumBelow: Boolean = false,
+    /** The date in its short form, "14/03/24", for a narrow page. */
+    val shortDate: Boolean = false,
 )
 
 // The fixed columns, in dp, and the share of the rest the album takes. The
@@ -89,6 +97,7 @@ private val FaceWidth = 34.dp
 // Wide enough for the long form, "24 de dez. de 2024": the title column has
 // room to give, and a date that reads "de 20…" says nothing at all.
 private val DateWidth = 152.dp
+private val ShortDateWidth = 96.dp
 private val DurationWidth = 72.dp
 private val ActionsWidth = 72.dp
 private val ColumnGap = 16.dp
@@ -101,12 +110,21 @@ private val CellInset = 8.dp
 private val brazil = Locale.forLanguageTag("pt-BR")
 private val dayMonth = DateTimeFormatter.ofPattern("d 'de' MMM", brazil)
 private val dayMonthYear = DateTimeFormatter.ofPattern("d 'de' MMM 'de' yyyy", brazil)
+private val shortDay = DateTimeFormatter.ofPattern("dd/MM/yy", brazil)
 
-/** "14 de mar.", with the year when it is not this one. */
-private fun addedLabel(ms: Long): String {
+/** "14 de mar.", with the year when it is not this one; [short], "14/03/24". */
+private fun addedLabel(ms: Long, short: Boolean = false): String {
     val day = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate()
-    return day.format(if (day.year == LocalDate.now().year) dayMonth else dayMonthYear)
+    return day.format(
+        when {
+            short -> shortDay
+            day.year == LocalDate.now().year -> dayMonth
+            else -> dayMonthYear
+        },
+    )
 }
+
+private val TrackColumns.dateWidth get() = if (shortDate) ShortDateWidth else DateWidth
 
 /**
  * The head of a track table: the column labels over the app's hairline.
@@ -124,11 +142,13 @@ fun TrackTable(columns: TrackColumns, modifier: Modifier = Modifier) {
             Label("#", Modifier.width(NumberWidth), TextAlign.Center)
             // Over the cover and the title, which share one cell.
             Spacer(Modifier.width(CoverSize + CoverGap))
-            Label("Título", Modifier.weight(1f))
+            Label(if (columns.albumBelow) "Título / Álbum" else "Título", Modifier.weight(1f))
             if (columns.album) Label("Álbum", Modifier.weight(AlbumWeight).padding(start = ColumnGap))
             // The faces need no word: the photo says who added it.
             if (columns.addedBy) Spacer(Modifier.width(FaceWidth))
-            if (columns.date) Label("Adicionada em", Modifier.width(DateWidth).padding(start = ColumnGap))
+            if (columns.date) {
+                Label(if (columns.shortDate) "Adicionada" else "Adicionada em", Modifier.width(columns.dateWidth).padding(start = ColumnGap))
+            }
             Label("Duração", Modifier.width(DurationWidth), TextAlign.End)
             Spacer(Modifier.width(ActionsWidth))
         }
@@ -220,8 +240,9 @@ fun TrackTableRow(
                 color = if (playing) accent else c.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
+            val artists = if (track.explicit) "🅴 ${track.artists}" else track.artists
             Text(
-                if (track.explicit) "🅴 ${track.artists}" else track.artists,
+                if (columns.albumBelow && track.album.isNotBlank()) "$artists · ${track.album}" else artists,
                 color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
         }
@@ -234,7 +255,10 @@ fun TrackTableRow(
             }
         }
         if (columns.date) {
-            Cell(track.addedAtMs?.let(::addedLabel).orEmpty(), Modifier.width(DateWidth).padding(start = ColumnGap))
+            Cell(
+                track.addedAtMs?.let { addedLabel(it, columns.shortDate) }.orEmpty(),
+                Modifier.width(columns.dateWidth).padding(start = ColumnGap),
+            )
         }
         Cell(durationLabel(track.durationMs.toLong()), Modifier.width(DurationWidth), TextAlign.End)
         // A quiet row shows neither glyph: a column of them down a long list

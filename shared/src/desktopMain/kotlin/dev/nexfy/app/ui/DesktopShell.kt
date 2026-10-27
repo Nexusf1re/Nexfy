@@ -7,6 +7,11 @@ import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.rounded.ViewSidebar
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
@@ -186,8 +191,9 @@ interface WindowFrame {
     fun DragArea(content: @Composable () -> Unit)
 }
 
-/** How tall the title strip is. */
-private val TitleHeight = 42.dp
+/** How tall the title strip is, and how wide its search field grows. */
+private val TitleHeight = 52.dp
+private val SearchMaxWidth = 520.dp
 
 /** How tall the playing bar is, and how much room the pages leave under them for it. */
 private val BarHeight = 84.dp
@@ -207,8 +213,11 @@ private const val SEEK_STEP_MS = 10_000L
 private const val HINT_DELAY_MS = 550
 private const val VOLUME_STEP = .05f
 
-/** The last volume asked of another device, which reports it back only a moment later. */
-private var remoteVolumeAsked: Pair<Long, Int>? = null
+/**
+ * The last volume asked of another device, which reports it back only a
+ * moment later: the slider shows it at once, and the next notch counts from it.
+ */
+private var remoteVolumeAsked by mutableStateOf<Pair<Long, Int>?>(null)
 
 /** The volume moved by [delta] (a fraction of the whole), here or on the device playing. */
 private fun AppActions.nudgeVolume(delta: Float) {
@@ -246,6 +255,8 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     var panelOpen by remember { mutableStateOf(false) }
     var panelTab by remember { mutableStateOf(PanelTab.Queue) }
     var nowPlaying by remember { mutableStateOf(false) }
+    // Whether Tocando agora opens on the words, when the panel asked for them.
+    var nowPlayingLyrics by remember { mutableStateOf(false) }
     // The strip's field is the one search box of the window, so the shortcut
     // that reaches for it is held here, beside the key dispatch that fires it.
     val searchFocus = remember { FocusRequester() }
@@ -368,7 +379,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 label = "nowPlaying",
             ) { full ->
             if (full) {
-                NowPlaying(snapshot, actions, Modifier.fillMaxSize()) { nowPlaying = false }
+                NowPlaying(snapshot, actions, Modifier.fillMaxSize(), startWithLyrics = nowPlayingLyrics) { nowPlaying = false }
             } else {
             Row(Modifier.fillMaxSize()) {
                 Sidebar(
@@ -386,7 +397,15 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                     enter = expandHorizontally(Motion.standard(), Alignment.Start) + fadeIn(Motion.enter()),
                     exit = shrinkHorizontally(Motion.standard(Motion.Short + 80), Alignment.Start) + fadeOut(Motion.exit()),
                 ) {
-                    SongPanel(snapshot, actions, panelTab, { panelTab = it }, Modifier.width(PanelWidth).fillMaxHeight())
+                    SongPanel(
+                        snapshot, actions, panelTab, { panelTab = it },
+                        onClose = { panelOpen = false },
+                        onFull = { lyrics ->
+                            nowPlayingLyrics = lyrics
+                            nowPlaying = true
+                        },
+                        modifier = Modifier.width(PanelWidth).fillMaxHeight(),
+                    )
                 }
             }
             }
@@ -401,11 +420,15 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 PlayingBar(
                     snapshot, actions,
                     panelOpen = panelOpen,
+                    panelTab = panelTab,
                     onPanel = { tab: PanelTab ->
                         panelOpen = !(panelOpen && panelTab == tab)
                         panelTab = tab
                     },
-                    onExpand = { nowPlaying = true },
+                    onExpand = {
+                        nowPlayingLyrics = false
+                        nowPlaying = true
+                    },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 )
             }
@@ -439,27 +462,30 @@ private fun TitleBar(actions: AppActions, frame: WindowFrame?, search: FocusRequ
     val nav = actions.nav
     Box(Modifier.fillMaxWidth().height(TitleHeight)) {
         if (frame != null) frame.DragArea { Box(Modifier.fillMaxSize()) }
-        Row(
-            Modifier.fillMaxSize().padding(horizontal = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // No wordmark here: the sidebar carries it, directly below, and
-            // the name twice within an inch of itself reads as a mistake.
-            //
-            // No arrow forward either: a tab's stack only ever loses its top,
-            // so there is never a page ahead to return to.
-            Spacer(Modifier.width(2.dp))
+        // No wordmark here: the sidebar carries it, directly below, and the
+        // name twice within an inch of itself reads as a mistake. No arrow
+        // forward either: a tab's stack only ever loses its top, so there is
+        // never a page ahead to return to.
+        Box(Modifier.align(Alignment.CenterStart).padding(start = 12.dp)) {
             BackButton(enabled = nav.stack().isNotEmpty()) { nav.pop() }
-            Spacer(Modifier.weight(1f))
-            SearchField(actions, search, Modifier.weight(1.6f))
-            Spacer(Modifier.weight(1f))
-            if (frame != null) {
+        }
+        // The field stands on the window's own centre line, whatever sits
+        // either side of it; it gives way only to the buttons at the edges.
+        SearchField(
+            actions, search,
+            Modifier.align(Alignment.Center).padding(horizontal = 160.dp).widthIn(max = SearchMaxWidth).fillMaxWidth(),
+        )
+        if (frame != null) {
+            Row(
+                Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 WindowButton(Icons.Rounded.Remove, "Minimizar", frame::minimize)
                 WindowButton(
                     if (frame.maximized) Icons.Rounded.FilterNone else Icons.Rounded.CropSquare,
                     if (frame.maximized) "Restaurar" else "Maximizar",
                     frame::toggleMaximize,
-                    glyph = 13.dp,
+                    glyph = 16.dp,
                 )
                 WindowButton(Icons.Rounded.Close, "Fechar", frame::close, danger = true)
             }
@@ -496,7 +522,7 @@ private fun SearchField(actions: AppActions, search: FocusRequester, modifier: M
         }
     }
     Row(
-        modifier.height(28.dp)
+        modifier.height(36.dp)
             .glassPane(CircleShape, c.surfaceVariant.copy(alpha = .6f), c.isDark)
             .drawWithContent {
                 drawContent()
@@ -508,13 +534,13 @@ private fun SearchField(actions: AppActions, search: FocusRequester, modifier: M
                     )
                 }
             }
-            .padding(start = 10.dp, end = 4.dp),
+            .padding(start = 14.dp, end = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Search, null, tint = icon, modifier = Modifier.size(15.dp))
+        Icon(Icons.Rounded.Search, null, tint = icon, modifier = Modifier.size(18.dp))
         BasicTextField(
             query, { query = it },
-            Modifier.weight(1f).padding(horizontal = 8.dp).focusRequester(search)
+            Modifier.weight(1f).padding(horizontal = 10.dp).focusRequester(search)
                 .onPreviewKeyEvent { event ->
                     val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
                     if (event.type == KeyEventType.KeyDown && enter) {
@@ -528,21 +554,24 @@ private fun SearchField(actions: AppActions, search: FocusRequester, modifier: M
             interactionSource = focus,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = c.onSurface),
             cursorBrush = SolidColor(c.onSurface),
+            // The hint and the text share one line, centred in the field's height.
             decorationBox = { field ->
-                if (query.isEmpty()) {
-                    Text(
-                        "O que queres ouvir?", color = c.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) {
+                        Text(
+                            "O que queres ouvir?", color = c.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    field()
                 }
-                field()
             },
         )
         if (query.isNotEmpty()) {
             Icon(
                 Icons.Rounded.Close, "Limpar busca", tint = c.onSurfaceVariant,
-                modifier = Modifier.clip(CircleShape).clickable { query = "" }.padding(4.dp).size(14.dp),
+                modifier = Modifier.clip(CircleShape).clickable { query = "" }.padding(5.dp).size(16.dp),
             )
         }
     }
@@ -558,9 +587,9 @@ private fun BackButton(enabled: Boolean, onBack: () -> Unit) {
     )
     Hint("Voltar (Esc)") {
         Box(
-            Modifier.size(30.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onBack),
+            Modifier.size(36.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onBack),
             Alignment.Center,
-        ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", tint = tint, modifier = Modifier.size(18.dp)) }
+        ) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", tint = tint, modifier = Modifier.size(20.dp)) }
     }
 }
 
@@ -571,7 +600,7 @@ private fun WindowButton(
     description: String,
     onClick: () -> Unit,
     danger: Boolean = false,
-    glyph: Dp = 15.dp,
+    glyph: Dp = 18.dp,
 ) {
     val c = MaterialTheme.colorScheme
     val hover = remember { MutableInteractionSource() }
@@ -590,7 +619,7 @@ private fun WindowButton(
     )
     Hint(description) {
         Box(
-            Modifier.padding(start = 4.dp).size(30.dp).clip(CircleShape).background(ground)
+            Modifier.padding(start = 6.dp).size(36.dp).clip(CircleShape).background(ground)
                 .hoverable(hover).clickable(onClick = onClick),
             Alignment.Center,
         ) { Icon(icon, description, tint = tint, modifier = Modifier.size(glyph)) }
@@ -612,7 +641,7 @@ private fun Sidebar(actions: AppActions, rail: Boolean, fold: (() -> Unit)?, mod
             if (rail) {
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowRight, "Expandir a biblioteca", it) }
+                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowRight, "Expandir a biblioteca", onClick = it) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                     NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
@@ -626,7 +655,7 @@ private fun Sidebar(actions: AppActions, rail: Boolean, fold: (() -> Unit)?, mod
                         "nexfy", Modifier.weight(1f),
                         style = MaterialTheme.typography.titleLarge, letterSpacing = (-1).sp,
                     )
-                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowLeft, "Recolher a biblioteca", it) }
+                    fold?.let { NavIcon(Icons.Rounded.KeyboardDoubleArrowLeft, "Recolher a biblioteca", onClick = it) }
                     NavIcon(Icons.Rounded.Settings, "Ajustes") { actions.open(Route.Settings) }
                 }
             }
@@ -690,12 +719,13 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Bo
 }
 
 @Composable
-private fun NavIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
+private fun NavIcon(icon: ImageVector, description: String, active: Boolean = false, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
+    val tint by animateColorAsState(if (active) accentColor() else c.onSurfaceVariant, Motion.standard(Motion.Short), label = "navIcon")
     Hint(description) {
         Icon(
-            icon, description, tint = c.onSurfaceVariant,
+            icon, description, tint = tint,
             modifier = Modifier.clip(CircleShape).clickable { haptics.tick(); onClick() }.padding(8.dp).size(20.dp),
         )
     }
@@ -901,12 +931,14 @@ private fun PlayingBar(
     s: PlaybackSnapshot,
     actions: AppActions,
     panelOpen: Boolean,
+    panelTab: PanelTab,
     onPanel: ((PanelTab) -> Unit)?,
     onExpand: () -> Unit,
     modifier: Modifier,
 ) {
     val c = MaterialTheme.colorScheme
     val dark = c.isDark
+    val haptics = rememberHaptics()
     val track = s.track
     val shape = RoundedCornerShape(22.dp)
     var menu by remember { mutableStateOf(false) }
@@ -940,7 +972,16 @@ private fun PlayingBar(
     ) {
         // The song.
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Cover(track?.coverUrl, Modifier.size(52.dp), radius = 12.dp)
+            // The cover opens the song's details beside the page, larger.
+            val details = onPanel?.let { open -> { haptics.tick(); open(PanelTab.Details) } }
+            Hint("Detalhes da música", shown = details != null) {
+                Cover(
+                    track?.coverUrl,
+                    Modifier.size(52.dp).clip(RoundedCornerShape(12.dp))
+                        .then(if (details != null) Modifier.clickable(onClick = details) else Modifier),
+                    radius = 12.dp,
+                )
+            }
             // A new song's name rises into place as the last one leaves, so a
             // skip reads as a change rather than a flicker.
             AnimatedContent(
@@ -987,13 +1028,18 @@ private fun PlayingBar(
         // Where it plays, and how loud.
         Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
             if (s.playing) PlayingBars(accentColor(), Modifier.size(16.dp).padding(end = 2.dp))
+            // The song's column, one button for each of its tabs: each opens it
+            // there, and closes it when that tab is the one already open. The
+            // one showing is lit, so the bar says what the column holds.
             onPanel?.let { open ->
-                NavIcon(Icons.Rounded.Lyrics, "Letra") { open(PanelTab.Lyrics) }
-                NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, "A seguir") { open(PanelTab.Queue) }
+                val lit = { tab: PanelTab -> panelOpen && panelTab == tab }
+                NavIcon(Icons.Rounded.ViewSidebar, "Detalhes da música", lit(PanelTab.Details)) { open(PanelTab.Details) }
+                NavIcon(Icons.Rounded.Lyrics, "Letra (Ctrl+L)", lit(PanelTab.Lyrics)) { open(PanelTab.Lyrics) }
+                NavIcon(Icons.AutoMirrored.Rounded.QueueMusic, "A seguir", lit(PanelTab.Queue)) { open(PanelTab.Queue) }
             }
             // The whole window for the song, the way the phone's bar pulls up
             // into the full player.
-            NavIcon(Icons.Rounded.OpenInFull, "Tocando agora", onExpand)
+            NavIcon(Icons.Rounded.OpenInFull, "Tocando agora", onClick = onExpand)
             NavIcon(Icons.Rounded.Devices, "Dispositivos") { actions.openDevices() }
             Volume(s, actions)
         }
@@ -1126,6 +1172,12 @@ internal fun Volume(s: PlaybackSnapshot, actions: AppActions) {
     var held by remember(remote?.id) {
         mutableFloatStateOf(if (remote == null) here.toFloat() else (remote.volume?.toInt() ?: 50) / 100f)
     }
+    // Another device's level, moved by the wheel or the keys rather than the
+    // slider, or reported back by the device, moves the slider with it.
+    val reported = remote?.volume?.toInt()
+    LaunchedEffect(reported) { if (reported != null) held = reported / 100f }
+    val asked = remoteVolumeAsked
+    LaunchedEffect(asked) { if (asked != null && remote != null) held = asked.second / 100f }
     val level = if (remote == null) here.toFloat() else held
     val icon = when {
         level <= 0.001f -> Icons.AutoMirrored.Rounded.VolumeOff
@@ -1148,30 +1200,52 @@ internal fun Volume(s: PlaybackSnapshot, actions: AppActions) {
 
 // -------------------------------------------------------------- song panel
 
-/** What the right-hand column is showing. */
+/**
+ * What the right-hand column is showing: the song itself (its cover, where
+ * it plays from and its facts, one tab as Lokal keeps them), its words, and
+ * what plays after it.
+ */
 private enum class PanelTab(val label: String) {
-    Art("Capa"),
     Details("Detalhes"),
-    Queue("A seguir"),
     Lyrics("Letra"),
+    Queue("A seguir"),
 }
 
 /**
- * The song's own column: its art, what plays after it, and the words. The
+ * The song's own column: the song, its words, and what plays after it. The
  * phone keeps all three behind the player's own gestures; a window has the
  * room to leave one of them standing open beside the page.
  */
 @Composable
-private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, onTab: (PanelTab) -> Unit, modifier: Modifier) {
+private fun SongPanel(
+    s: PlaybackSnapshot,
+    actions: AppActions,
+    tab: PanelTab,
+    onTab: (PanelTab) -> Unit,
+    onClose: () -> Unit,
+    onFull: (lyrics: Boolean) -> Unit,
+    modifier: Modifier,
+) {
     val c = MaterialTheme.colorScheme
     val track = s.track
     Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp, bottom = BarHeight + 16.dp)) {
         Panel(Modifier.weight(1f)) {
-            // The cover's own tab says all this and larger, so the strip of
-            // it stands down there rather than saying it twice.
-            if (tab != PanelTab.Art) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PillSelector(PanelTab.entries, tab, { it.label }, onTab, Modifier.weight(1f))
+                NavIcon(Icons.Rounded.KeyboardDoubleArrowRight, "Fechar o painel", onClick = onClose)
+            }
+            // The details carry the song larger, so the strip of it stands
+            // down there rather than saying it twice.
+            AnimatedVisibility(
+                tab != PanelTab.Details,
+                enter = expandVertically(Motion.standard(Motion.Short)) + fadeIn(Motion.enter()),
+                exit = shrinkVertically(Motion.standard(Motion.Short)) + fadeOut(Motion.exit()),
+            ) {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Cover(track?.coverUrl, Modifier.size(44.dp), radius = 10.dp)
@@ -1186,13 +1260,7 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
                         )
                     }
                 }
-            } else {
-                Spacer(Modifier.height(14.dp))
             }
-            PillSelector(
-                PanelTab.entries, tab, { it.label }, onTab,
-                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-            )
             // The next tab slides in from the side its pill stands on.
             AnimatedContent(
                 tab,
@@ -1201,8 +1269,7 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
                 label = "panelTab",
             ) { shown ->
                 when (shown) {
-                    PanelTab.Art -> CoverPane(s, Modifier.fillMaxSize())
-                    PanelTab.Details -> DetailsPane(s, actions, Modifier.fillMaxSize())
+                    PanelTab.Details -> DetailsPane(s, actions, onFull, Modifier.fillMaxSize())
                     PanelTab.Queue -> QueueList(s, actions, Modifier.fillMaxSize())
                     PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.fillMaxSize())
                 }
@@ -1212,80 +1279,87 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
 }
 
 /**
- * The cover alone, as large as the column allows, with the song named
- * under it. Nothing to read and nothing to do: the record sleeve, for
- * when the window is left on the second monitor.
+ * The song itself, as a record sleeve prints it: the cover as large as the
+ * column allows, its name, where it plays from, the two ways to give it the
+ * whole window, and its facts. The name of each fact is in the quiet column,
+ * what it says in the other; only what the core really carries is here, and
+ * a fact it does not carry leaves no row behind — a blank line reads as a
+ * fault, where a missing one reads as nothing. With nothing playing, the
+ * empty sleeve keeps the column's shape, as the playing bar does.
  */
 @Composable
-private fun CoverPane(s: PlaybackSnapshot, modifier: Modifier) {
-    val c = MaterialTheme.colorScheme
-    val track = s.track
-    Column(
-        modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Cover(track?.coverUrl, Modifier.fillMaxWidth().aspectRatio(1f), radius = 18.dp)
-        Spacer(Modifier.height(18.dp))
-        Text(
-            track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 19.sp,
-            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-        )
-        if (track != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                track.artists, color = c.onSurfaceVariant, fontSize = 14.sp,
-                maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-            )
-            if (track.album.isNotBlank() && track.album != track.title) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    track.album, color = c.onSurfaceVariant.copy(alpha = .7f), fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
-                )
-            }
-        }
-    }
-}
-
-/**
- * The song's own facts, the way a sleeve prints them: the name of each in
- * the quiet column, what it says in the other. Only what the core really
- * carries is here, and a fact it does not carry leaves no row behind — a
- * blank line reads as a fault, where a missing one reads as nothing.
- */
-@Composable
-private fun DetailsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modifier) {
+private fun DetailsPane(s: PlaybackSnapshot, actions: AppActions, onFull: (lyrics: Boolean) -> Unit, modifier: Modifier) {
     val c = MaterialTheme.colorScheme
     val info = s.track
-    if (info == null) {
-        Box(modifier.fillMaxWidth(), Alignment.Center) {
-            Text("Nada tocando", color = c.onSurfaceVariant, fontSize = 13.sp)
-        }
-        return
-    }
     // What plays carries only what the bar draws. The catalogue row behind it
     // knows which album the song belongs to, and the album knows the year it
     // came out and where the song stands in it; both are read from the cache
     // first, so the list is filled in the moment the tab is opened again.
-    val song by produceState<Track?>(null, info.uri) {
-        value = runCatching { actions.core.tracksInfo(listOf(info.uri)) }.getOrNull()?.firstOrNull()
+    val song by produceState<Track?>(null, info?.uri) {
+        val uri = info?.uri ?: return@produceState
+        value = runCatching { actions.core.tracksInfo(listOf(uri)) }.getOrNull()?.firstOrNull()
     }
     val albumId = song?.albumId
     val album by produceState<AlbumDetail?>(null, albumId) {
         val id = albumId ?: return@produceState
         value = runCatching { actions.core.album(id, false) }.getOrNull()
     }
-    val place = album?.tracks?.indexOfFirst { it.uri == info.uri }?.takeIf { it >= 0 }
-    Column(modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp)) {
-        DetailRow("Tocando de", playingFrom(s, info.album, actions))
+    val place = info?.let { t -> album?.tracks?.indexOfFirst { it.uri == t.uri }?.takeIf { it >= 0 } }
+    Column(
+        modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Cover(info?.coverUrl, Modifier.fillMaxWidth().aspectRatio(1f), radius = 18.dp)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            info?.title ?: "Nada tocando", Modifier.fillMaxWidth(), color = c.onSurface, fontSize = 19.sp,
+            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
+        if (info == null) return@Column
+        Text(
+            info.artists, Modifier.fillMaxWidth().padding(top = 2.dp), color = c.onSurfaceVariant, fontSize = 14.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
+        playingFrom(s, info.album, actions)?.let { from ->
+            Column(Modifier.fillMaxWidth().padding(top = 14.dp)) {
+                Text(
+                    "TOCANDO DE", color = c.onSurfaceVariant.copy(alpha = .7f), fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp,
+                )
+                Text(from, color = c.onSurface, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            PanelAction(Icons.Rounded.OpenInFull, "Tela cheia", Modifier.weight(1f)) { onFull(false) }
+            PanelAction(Icons.Rounded.Lyrics, "Letra cheia", Modifier.weight(1f)) { onFull(true) }
+        }
         DetailRow("Álbum", info.album.takeIf { it.isNotBlank() })
-        DetailRow("Artistas", info.artists.takeIf { it.isNotBlank() })
         DetailRow("Duração", durationLabel(info.durationMs.toLong()).takeIf { info.durationMs > 0u })
         DetailRow("Ano", album?.album?.year?.takeIf { it.isNotBlank() })
         DetailRow("Faixa", place?.let { i -> album?.let { "${i + 1} de ${it.tracks.size}" } })
     }
 }
+
+/** A quiet button of the details: an icon and a word on a soft ground. */
+@Composable
+private fun PanelAction(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val haptics = rememberHaptics()
+    Row(
+        modifier.clip(RoundedCornerShape(12.dp)).background(c.onSurface.copy(alpha = .07f))
+            .clickable { haptics.tick(); onClick() }
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = c.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Text(label, Modifier.padding(start = 6.dp), color = c.onSurface, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
 
 /** One fact, under a hairline that keeps the two columns reading as a list. */
 @Composable

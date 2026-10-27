@@ -304,13 +304,14 @@ fun CollectionScreen(
                 // a table, the way a window lists them. A finger, or a window
                 // this narrow, keeps the rows a phone is built around.
                 val table = LocalPointer.current && maxWidth >= TableWidth
-                // Narrowing the window, or opening the side panel, used to
-                // cost the whole table at once. It gives a column at a time
-                // instead, least telling first: the date, then the album.
+                // Narrowing the window, or opening the side panel, gives up
+                // room without giving up a fact: the album folds under the
+                // title first (as Lokal's table does), then the date takes its
+                // short form. Both used to vanish, the date first.
                 val columns = when {
                     maxWidth >= DateColumnWidth -> afforded
-                    maxWidth >= AlbumColumnWidth -> afforded.copy(date = false)
-                    else -> afforded.copy(date = false, album = false)
+                    maxWidth >= AlbumColumnWidth -> afforded.copy(album = false, albumBelow = afforded.album)
+                    else -> afforded.copy(album = false, albumBelow = afforded.album, shortDate = true)
                 }
                 // The table carries a heart on each row: one lookup answers
                 // the whole list, out of the saved set the core already keeps.
@@ -562,14 +563,13 @@ private const val MAX_FACES = 60
  */
 private val TableWidth = 440.dp
 
-/** Wide enough for the album column as well as the title's own share. */
+/** Below this the date takes its short form, beside the title with the album under it. */
 private val AlbumColumnWidth = 600.dp
 
 /**
- * Wide enough for the date too, which is the first thing a narrower page
- * drops. A 1100px window gives the page about 815dp with the sidebar open,
- * and the whole set reads cleanly there, so this sits below that and not at
- * it: the date should go when the panel opens, not while there is room.
+ * Wide enough for every column at its full size. A 1100px window gives the
+ * page about 815dp with the sidebar open, and the whole set reads cleanly
+ * there; below it, as when the panel opens, the album folds under the title.
  */
 private val DateColumnWidth = 760.dp
 
