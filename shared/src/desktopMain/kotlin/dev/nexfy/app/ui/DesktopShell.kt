@@ -1,6 +1,18 @@
 package dev.nexfy.app.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -69,6 +81,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -92,6 +105,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,6 +127,8 @@ import dev.nexfy.app.ui.design.LocalBottomSpace
 import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
 import dev.nexfy.app.ui.design.LocalPointer
+import dev.nexfy.app.ui.design.LocalScreenScope
+import dev.nexfy.app.ui.design.LocalSharedScope
 import dev.nexfy.app.ui.design.LocalShellHeader
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.PillSelector
@@ -133,6 +149,7 @@ import dev.nexfy.app.ui.theme.Hairline
 import dev.nexfy.app.ui.theme.accentColor
 import dev.nexfy.app.ui.theme.isDark
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.AlbumDetail
 import uniffi.nexfy_core.RepeatMode
@@ -168,6 +185,9 @@ private val PanelWidth = 332.dp
 /** The sidebar folded to covers alone, to make room for the song's panel. */
 private val RailWidth = 78.dp
 
+/** The seek line never steps faster than this, however long the window makes it. */
+private const val LINE_STEP_MIN_MS = 33L
+
 /**
  * The app on a computer: a column of the library on the left, the page in
  * the middle, what is playing along the bottom, and the song's own panel on
@@ -198,16 +218,17 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
     // The media keys, for as long as this shell is up.
     DisposableEffect(actions) {
         DesktopKeys.handler = { key, ctrl ->
+            val media = !DesktopKeys.systemMedia
             when {
-                key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause -> {
+                media && (key == Key.MediaPlayPause || key == Key.MediaPlay || key == Key.MediaPause) -> {
                     actions.playPause()
                     true
                 }
-                key == Key.MediaNext || (ctrl && key == Key.DirectionRight) -> {
+                (media && key == Key.MediaNext) || (ctrl && key == Key.DirectionRight) -> {
                     actions.next()
                     true
                 }
-                key == Key.MediaPrevious || (ctrl && key == Key.DirectionLeft) -> {
+                (media && key == Key.MediaPrevious) || (ctrl && key == Key.DirectionLeft) -> {
                     actions.previous()
                     true
                 }
@@ -259,10 +280,24 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
             // Tocando agora takes everything under the strip: the library, the
             // page and the bar step aside for it, and the strip itself stays so
             // an undecorated window can still be moved, minimised and closed.
-            if (nowPlaying) {
-                NowPlaying(snapshot, actions, Modifier.weight(1f).fillMaxWidth()) { nowPlaying = false }
+            // It rises out of the playing bar, the way the phone's player pulls
+            // up from its mini player, and sinks back into it on the way out.
+            AnimatedContent(
+                nowPlaying,
+                Modifier.weight(1f).fillMaxWidth(),
+                transitionSpec = {
+                    if (targetState) {
+                        Motion.playerRise togetherWith fadeOut(Motion.exit())
+                    } else {
+                        fadeIn(Motion.enter()) togetherWith Motion.playerSink
+                    }.using(SizeTransform(clip = false)).apply { targetContentZIndex = if (targetState) 1f else -1f }
+                },
+                label = "nowPlaying",
+            ) { full ->
+            if (full) {
+                NowPlaying(snapshot, actions, Modifier.fillMaxSize()) { nowPlaying = false }
             } else {
-            Row(Modifier.weight(1f).fillMaxWidth()) {
+            Row(Modifier.fillMaxSize()) {
                 Sidebar(
                     actions, rail,
                     // The fold is only ever in the way on a narrow window, so
@@ -271,13 +306,25 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                     modifier = Modifier.width(sidebar).fillMaxHeight(),
                 )
                 Page(actions, Modifier.weight(1f).fillMaxHeight().glassSource(backdrop))
-                if (panelOpen) {
+                // The song's column opens out from the page's edge rather than
+                // appearing whole, and folds back into it.
+                AnimatedVisibility(
+                    panelOpen,
+                    enter = expandHorizontally(Motion.standard(), Alignment.Start) + fadeIn(Motion.enter()),
+                    exit = shrinkHorizontally(Motion.standard(Motion.Short + 80), Alignment.Start) + fadeOut(Motion.exit()),
+                ) {
                     SongPanel(snapshot, actions, panelTab, { panelTab = it }, Modifier.width(PanelWidth).fillMaxHeight())
                 }
             }
             }
             }
-            if (!nowPlaying) {
+            }
+            AnimatedVisibility(
+                !nowPlaying,
+                Modifier.align(Alignment.BottomCenter),
+                enter = fadeIn(Motion.enter()) + slideInVertically(Motion.enter()) { it / 2 },
+                exit = fadeOut(Motion.exit()) + slideOutVertically(Motion.exit()) { it / 2 },
+            ) {
                 PlayingBar(
                     snapshot, actions,
                     panelOpen = panelOpen,
@@ -286,8 +333,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                         panelTab = tab
                     },
                     onExpand = { nowPlaying = true },
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                 )
             }
             NoticeBar(
@@ -681,18 +727,42 @@ private val Reading = setOf(
 )
 
 /** The page itself, with the way back above it when there is one. */
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 private fun Page(actions: AppActions, modifier: Modifier) {
     val nav = actions.nav
-    val screen = nav.screen
     Column(modifier.padding(start = 6.dp, top = 12.dp, end = 12.dp)) {
         Panel(Modifier.weight(1f)) {
-            val held = screen.route in Reading
-            Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
-                ScreenContent(
-                    screen, actions,
-                    if (held) Modifier.widthIn(max = 760.dp).fillMaxHeight() else Modifier.fillMaxSize(),
-                )
+            // The phone's own page motion, inside the panel: a page opened
+            // comes forward out of depth, Esc sends it back into it, and
+            // another tab slides in from its side. A card's cover travels to
+            // the header of the page it opens, as it does on the phone.
+            SharedTransitionLayout(Modifier.fillMaxSize()) {
+                CompositionLocalProvider(LocalSharedScope provides this) {
+                    AnimatedContent(
+                        nav.screen,
+                        Modifier.fillMaxSize(),
+                        transitionSpec = {
+                            when {
+                                initialState.tab != targetState.tab ->
+                                    Motion.tabSwitch(targetState.tab.ordinal - initialState.tab.ordinal)
+                                targetState.depth < initialState.depth -> Motion.pageBack
+                                else -> Motion.pageEnter togetherWith Motion.pageExit using SizeTransform(clip = false)
+                            }
+                        },
+                        label = "page",
+                    ) { screen ->
+                        CompositionLocalProvider(LocalScreenScope provides this) {
+                            val held = screen.route in Reading
+                            Box(Modifier.fillMaxSize(), Alignment.TopCenter) {
+                                ScreenContent(
+                                    screen, actions,
+                                    if (held) Modifier.widthIn(max = 760.dp).fillMaxHeight() else Modifier.fillMaxSize(),
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -743,15 +813,29 @@ private fun PlayingBar(
         // The song.
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Cover(track?.coverUrl, Modifier.size(52.dp), radius = 12.dp)
-            Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                Text(
-                    track?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    track?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+            // A new song's name rises into place as the last one leaves, so a
+            // skip reads as a change rather than a flicker.
+            AnimatedContent(
+                track,
+                Modifier.padding(start = 12.dp).weight(1f),
+                transitionSpec = {
+                    (fadeIn(Motion.enter()) + slideInVertically(Motion.enter()) { it / 3 }) togetherWith
+                        (fadeOut(Motion.exit()) + slideOutVertically(Motion.exit()) { -it / 3 })
+                },
+                contentAlignment = Alignment.CenterStart,
+                label = "barSong",
+                contentKey = { it?.uri },
+            ) { song ->
+                Column {
+                    Text(
+                        song?.title ?: "Nada tocando", color = c.onSurface, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        song?.artists.orEmpty(), color = c.onSurfaceVariant, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             if (track != null) {
                 NavIcon(Icons.Rounded.MoreHoriz, "Mais opções") { menu = true }
@@ -834,9 +918,25 @@ internal fun SeekLine(s: PlaybackSnapshot, actions: AppActions, modifier: Modifi
     // player takes over again.
     var dragging by remember { mutableStateOf(false) }
     var held by remember { mutableFloatStateOf(0f) }
-    val position by produceState(0L, s) {
+    var width by remember { mutableIntStateOf(0) }
+    // The clock shows whole seconds, so it changes once a second, and the line
+    // moves a pixel at a time: for a song of minutes, a few steps a second.
+    // Paused, neither ticks. Both used to follow every frame of the screen,
+    // repainting the whole window and the glass bar's blur at 60 or 144 Hz.
+    val position by produceState(s.currentPositionMs(), s) {
+        value = s.currentPositionMs()
+        if (!s.playing || s.loading) return@produceState
         while (true) {
-            withFrameMillis { }
+            delay(1_000 - value.mod(1_000L) + 5)
+            value = s.currentPositionMs()
+        }
+    }
+    val line by produceState(s.currentPositionMs(), s, width, duration) {
+        value = s.currentPositionMs()
+        if (!s.playing || s.loading || duration <= 0 || width <= 0) return@produceState
+        val step = (duration / width).coerceIn(LINE_STEP_MIN_MS, 1_000L)
+        while (true) {
+            delay(step)
             value = s.currentPositionMs()
         }
     }
@@ -846,13 +946,17 @@ internal fun SeekLine(s: PlaybackSnapshot, actions: AppActions, modifier: Modifi
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(durationLabel(shown), color = clock, fontSize = size)
         ThinSlider(
-            progress = { if (duration <= 0) 0f else (shown.toFloat() / duration).coerceIn(0f, 1f) },
+            // Read while drawing: the line's steps repaint it, never recompose.
+            progress = {
+                val at = if (dragging) (held * duration).toLong() else line
+                if (duration <= 0) 0f else (at.toFloat() / duration).coerceIn(0f, 1f)
+            },
             onChange = { dragging = true; held = it },
             onDone = {
                 dragging = false
                 if (duration > 0) actions.seek((held * duration).toLong())
             },
-            modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
+            modifier = Modifier.weight(1f).padding(horizontal = 10.dp).onSizeChanged { width = it.width },
             enabled = s.track != null,
             waiting = { s.loading },
             lit = s.playing,
@@ -942,11 +1046,19 @@ private fun SongPanel(s: PlaybackSnapshot, actions: AppActions, tab: PanelTab, o
                 PanelTab.entries, tab, { it.label }, onTab,
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
             )
-            when (tab) {
-                PanelTab.Art -> CoverPane(s, Modifier.weight(1f))
-                PanelTab.Details -> DetailsPane(s, actions, Modifier.weight(1f))
-                PanelTab.Queue -> QueueList(s, actions, Modifier.weight(1f))
-                PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.weight(1f))
+            // The next tab slides in from the side its pill stands on.
+            AnimatedContent(
+                tab,
+                Modifier.weight(1f),
+                transitionSpec = { Motion.tabSwitch(targetState.ordinal - initialState.ordinal) },
+                label = "panelTab",
+            ) { shown ->
+                when (shown) {
+                    PanelTab.Art -> CoverPane(s, Modifier.fillMaxSize())
+                    PanelTab.Details -> DetailsPane(s, actions, Modifier.fillMaxSize())
+                    PanelTab.Queue -> QueueList(s, actions, Modifier.fillMaxSize())
+                    PanelTab.Lyrics -> LyricsPane(s, actions, Modifier.fillMaxSize())
+                }
             }
         }
     }
@@ -1132,8 +1244,11 @@ internal fun LyricsPane(s: PlaybackSnapshot, actions: AppActions, modifier: Modi
             LyricsState.Failed
         }
     }
-    // Timed lines follow the song, so the position is read every frame.
-    val position by produceState(0L, s) {
+    // Timed lines follow the song, so the position is read every frame; a
+    // paused song is read once.
+    val position by produceState(s.currentPositionMs(), s) {
+        value = s.currentPositionMs()
+        if (!s.playing) return@produceState
         while (true) {
             withFrameMillis { }
             value = s.currentPositionMs()

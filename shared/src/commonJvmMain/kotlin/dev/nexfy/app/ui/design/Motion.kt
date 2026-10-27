@@ -20,6 +20,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -174,6 +175,29 @@ object Motion {
         } else {
             (fadeIn(tween(320, 40, Standard)) + slideInHorizontally(spring(1f, 300f)) { it / 10 }) togetherWith
                 fadeOut(tween(160, easing = EmphasizedAccelerate))
+        }
+
+    /**
+     * A window's full player rising out of the playing bar at its foot: it
+     * grows from a little smaller, anchored at the bottom, as it fades in.
+     */
+    val playerRise: EnterTransition
+        get() = if (reduced) {
+            fadeIn(tween(scaled(300), easing = Standard))
+        } else {
+            fadeIn(tween(260, easing = Standard)) +
+                scaleIn(spring(dampingRatio = 1f, stiffness = 300f), initialScale = .92f, transformOrigin = TransformOrigin(.5f, 1f)) +
+                slideInVertically(spring(dampingRatio = 1f, stiffness = 300f)) { it / 14 }
+        }
+
+    /** And sinking back into it. */
+    val playerSink: ExitTransition
+        get() = if (reduced) {
+            fadeOut(tween(scaled(220), easing = EmphasizedAccelerate))
+        } else {
+            fadeOut(tween(220, easing = EmphasizedAccelerate)) +
+                scaleOut(tween(300, easing = Standard), targetScale = .94f, transformOrigin = TransformOrigin(.5f, 1f)) +
+                slideOutVertically(tween(300, easing = Standard)) { it / 18 }
         }
 
     /** Tab switch: the new tab slides in from its side; the old one just fades. */
