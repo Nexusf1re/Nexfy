@@ -14,6 +14,7 @@ mod lyrics;
 mod offline;
 mod offline_play;
 mod playlist_edit;
+mod pulse;
 mod remote;
 mod session_reads;
 mod translate;
@@ -52,6 +53,7 @@ use webapi::WebApi;
 pub use offline::CacheInfo;
 pub use remote::{Device, RemoteCommand, RemoteState};
 pub use equalizer::{EqualizerPreset, EqualizerState};
+pub use pulse::AudioPulse;
 pub use sound::{AudioQuality, SoundSettings};
 
 uniffi::setup_scaffolding!();
@@ -251,6 +253,7 @@ struct Inner {
     levels: Arc<sound::Levels>,
     /// Runs on the player's output; the app changes it live.
     equalizer: Arc<equalizer::Equalizer>,
+    pulse: Arc<pulse::Pulse>,
     /// The quality chosen; what streams also depends on [Inner::metered].
     quality: Mutex<AudioQuality>,
     /// The phone is on mobile data: Auto streams at Normal.
@@ -282,6 +285,7 @@ impl NexfyCore {
                 offline: offline::Offline::new(&cache_dir, quality),
                 levels: Arc::new(sound::Levels::new(sound::load_normalize(&cache_dir))),
                 equalizer: Arc::new(equalizer::Equalizer::load(&cache_dir)),
+                pulse: Arc::new(pulse::Pulse::default()),
                 quality: Mutex::new(quality),
                 metered: AtomicBool::new(false),
                 cache: std::sync::OnceLock::new(),
@@ -1401,6 +1405,10 @@ impl NexfyCore {
         self.inner.levels.set_fade(gain)
     }
 
+    pub fn audio_pulse(&self) -> AudioPulse {
+        self.inner.pulse.at(std::time::Instant::now())
+    }
+
     pub fn queue_state(&self) -> QueueState {
         self.inner.queue.lock().unwrap().clone()
     }
@@ -1759,11 +1767,15 @@ impl Inner {
             .ok_or_else(|| CoreError::Playback("nenhuma saída de áudio".into()))?;
         let mixer = NexfyMixer::new(self.levels.clone());
         let equalizer = self.equalizer.clone();
+        let pulse = self.pulse.clone();
         let player = Player::new(
             sound::player_config(self.stream_quality(), &self.levels),
             session.clone(),
             mixer.get_soft_volume(),
-            move || Box::new(equalizer::EqSink::new(backend(None, AudioFormat::default()), equalizer)),
+            move || {
+                let equalized = Box::new(equalizer::EqSink::new(backend(None, AudioFormat::default()), equalizer));
+                Box::new(pulse::PulseSink::new(equalized, pulse))
+            },
         );
         tokio::spawn(run_events(Arc::downgrade(self), player.get_player_event_channel()));
         Ok(player)
