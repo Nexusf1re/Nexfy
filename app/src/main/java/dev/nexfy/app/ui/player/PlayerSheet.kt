@@ -125,6 +125,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -171,6 +172,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import uniffi.nexfy_core.Device
+import uniffi.nexfy_core.AudioPulse
 import uniffi.nexfy_core.Lyrics
 import uniffi.nexfy_core.LyricsTranslation
 import uniffi.nexfy_core.LyricsLine
@@ -240,6 +242,8 @@ interface PlayerControls {
 
     /** Play the radio of [seedUri] and open its playlist. */
     fun startRadio(seedUri: String)
+
+    fun audioPulse(): AudioPulse
 }
 
 /** A getter, so it follows [Motion.reduced]. */
@@ -582,6 +586,22 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                 scaleY = sc
             }
 
+            if (showFull) {
+                Ambilight(
+                    track.coverUrl,
+                    s.playing,
+                    controls::audioPulse,
+                    Rect(fullXPx, fullYPx, fullXPx + artFullPx, fullYPx + artFullPx),
+                    Modifier.graphicsLayer {
+                        val p = ((pf() - .4f) / .6f).coerceIn(0f, 1f)
+                        translationX = throwX.value
+                        val away = (1f - kotlin.math.abs(throwX.value) / fullW).coerceIn(0f, 1f)
+                        alpha = p * p * away * (1f - .45f * lyricsIn.value) * (1f - fullIn.value)
+                    },
+                    recede = { breath.value },
+                )
+            }
+
             Box(
                 Modifier.offset(fullX, fullY).size(artFull)
                     .graphicsLayer {
@@ -599,7 +619,7 @@ fun PlayerSheet(s: PlaybackSnapshot, controls: PlayerControls) {
                         // Corners and shadow compensate the scale: 12 dp mini, 28 dp full.
                         shape = RoundedCornerShape((lerp(12f, 28f, p) * density.density / k.coerceAtLeast(.05f)).coerceAtLeast(0f))
                         clip = true
-                        shadowElevation = lerp(0f, 24f, p) * density.density
+                        shadowElevation = lerp(0f, 10f, p) * density.density
                     }
                     .then(
                         if (throwable) {

@@ -44,7 +44,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /** Small software bitmap of [url] for colour extraction, or null. */
-private suspend fun smallBitmap(context: Context, url: String, size: Int): Bitmap? {
+internal suspend fun smallBitmap(context: Context, url: String, size: Int): Bitmap? {
     val request = ImageRequest.Builder(context).data(url).size(size).allowHardware(false).build()
     val result = SingletonImageLoader.get(context).execute(request) as? SuccessResult ?: return null
     return result.image.toBitmap()
