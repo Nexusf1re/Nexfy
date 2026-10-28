@@ -314,6 +314,8 @@ class AppActions(
     override fun startRadio(seedUri: String) =
         app.commands.startRadio(seedUri) { id -> open(Route.Playlist(id), Peek("Rádio")) }
 
+    override fun audioPulse() = core.audioPulse()
+
     /** The device playing elsewhere, if any: playback commands go to it. */
     private val remote get() = app.commands.remote
 
