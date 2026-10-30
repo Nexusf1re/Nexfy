@@ -98,23 +98,29 @@ impl CdnUrl {
     }
 
     pub fn try_get_urls(&self) -> Result<Vec<&str>, Error> {
+        Ok(self
+            .try_get_expiring_urls()?
+            .into_iter()
+            .map(|url| url.0.as_str())
+            .collect())
+    }
+
+    /// The URLs that have not expired, each with when it does. A download
+    /// that outlives the URL it started on (a long track, or one paused and
+    /// taken up much later) resolves the file again and goes on from a URL
+    /// this returns then; the CDN refuses every range on an expired one.
+    pub fn try_get_expiring_urls(&self) -> Result<Vec<&MaybeExpiringUrl>, Error> {
         if self.urls.is_empty() {
             return Err(CdnUrlError::Unresolved.into());
         }
 
         let now = Date::now_utc();
-        let urls: Vec<&str> = self
+        let urls: Vec<&MaybeExpiringUrl> = self
             .urls
             .iter()
-            .filter_map(|MaybeExpiringUrl(url, expiry)| match *expiry {
-                Some(expiry) => {
-                    if now < expiry {
-                        Some(url.as_str())
-                    } else {
-                        None
-                    }
-                }
-                None => Some(url.as_str()),
+            .filter(|MaybeExpiringUrl(_, expiry)| match *expiry {
+                Some(expiry) => now < expiry,
+                None => true,
             })
             .collect();
 

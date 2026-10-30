@@ -12,7 +12,9 @@ use hyper::StatusCode;
 use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, oneshot};
 
-use librespot_core::{Error, http_client::HttpClient, session::Session};
+use librespot_core::{
+    Error, cdn_url::CdnUrl, date::Date, http_client::HttpClient, session::Session,
+};
 
 use crate::range_set::{Range, RangeSet};
 
@@ -34,6 +36,7 @@ enum ReceivedData {
 
 const ONE_SECOND: Duration = Duration::from_secs(1);
 const DOWNLOAD_STATUS_POISON_MSG: &str = "audio download status mutex should not be poisoned";
+const CDN_URL_POISON_MSG: &str = "audio CDN URL mutex should not be poisoned";
 
 async fn receive_data(
     shared: Arc<AudioFileShared>,
@@ -175,7 +178,40 @@ impl AudioFileFetch {
         self.shared.download_slots.available_permits() > 0
     }
 
-    fn download_range(&mut self, offset: usize, mut length: usize) -> AudioFileResult {
+    /// The URL to request ranges from. A CDN URL stops being accepted after
+    /// an hour or so, long before a track that is paused and taken up later
+    /// (or simply a long one) is downloaded: the file is resolved again
+    /// then, and the download goes on from the URL that answers. Without
+    /// this every later range is refused, and the song, which holds only a
+    /// few seconds of sound ahead of where it stopped, falls silent there.
+    async fn cdn_url(&self) -> Result<String, Error> {
+        let current = self
+            .shared
+            .cdn_url
+            .lock()
+            .expect(CDN_URL_POISON_MSG)
+            .clone();
+        let expired = match current.1 {
+            Some(expiry) => Date::now_utc() >= expiry,
+            None => false,
+        };
+        if !expired {
+            return Ok(current.0);
+        }
+
+        let file_id = self.shared.file_id;
+        let resolved = CdnUrl::new(file_id).resolve_audio(&self.session).await?;
+        let fresh = match resolved.try_get_expiring_urls()?.first() {
+            Some(url) => (*url).clone(),
+            None => return Ok(current.0),
+        };
+        debug!("CDN URL for {file_id} had expired, resolved the file again");
+        *self.shared.cdn_url.lock().expect(CDN_URL_POISON_MSG) = fresh.clone();
+
+        Ok(fresh.0)
+    }
+
+    async fn download_range(&mut self, offset: usize, mut length: usize) -> AudioFileResult {
         if length < self.params.minimum_download_size {
             length = self.params.minimum_download_size;
         }
@@ -191,6 +227,11 @@ impl AudioFileFetch {
         if offset + length > self.shared.file_size {
             length = self.shared.file_size - offset;
         }
+
+        // Before the lock below: the download status cannot be held across
+        // the resolve this may have to wait for.
+        let cdn_url = self.cdn_url().await?;
+
         let mut ranges_to_request = RangeSet::new();
         ranges_to_request.add_range(&Range::new(offset, length));
 
@@ -206,14 +247,11 @@ impl AudioFileFetch {
         ranges_to_request.subtract_range_set(&download_status.downloaded);
         ranges_to_request.subtract_range_set(&download_status.requested);
 
-        // TODO : refresh cdn_url when the token expired
-
         for range in ranges_to_request.iter() {
-            let streamer = self.session.spclient().stream_from_cdn(
-                &self.shared.cdn_url,
-                range.start,
-                range.length,
-            )?;
+            let streamer =
+                self.session
+                    .spclient()
+                    .stream_from_cdn(&cdn_url, range.start, range.length)?;
 
             download_status.requested.add_range(range);
 
@@ -234,7 +272,7 @@ impl AudioFileFetch {
         Ok(())
     }
 
-    fn pre_fetch_more_data(&mut self, bytes: usize) -> AudioFileResult {
+    async fn pre_fetch_more_data(&mut self, bytes: usize) -> AudioFileResult {
         // determine what is still missing
         let mut missing_data = RangeSet::new();
         missing_data.add_range(&Range::new(0, self.shared.file_size));
@@ -261,13 +299,13 @@ impl AudioFileFetch {
             let range = tail_end.get_range(0);
             let offset = range.start;
             let length = min(range.length, bytes);
-            self.download_range(offset, length)?;
+            self.download_range(offset, length).await?;
         } else if !missing_data.is_empty() {
             // ok, the tail is downloaded, download something fom the beginning.
             let range = missing_data.get_range(0);
             let offset = range.start;
             let length = min(range.length, bytes);
-            self.download_range(offset, length)?;
+            self.download_range(offset, length).await?;
         }
 
         Ok(())
@@ -387,13 +425,13 @@ impl AudioFileFetch {
         Ok(ControlFlow::Continue)
     }
 
-    fn handle_stream_loader_command(
+    async fn handle_stream_loader_command(
         &mut self,
         cmd: StreamLoaderCommand,
     ) -> Result<ControlFlow, Error> {
         match cmd {
             StreamLoaderCommand::Fetch(request) => {
-                self.download_range(request.start, request.length)?
+                self.download_range(request.start, request.length).await?
             }
             StreamLoaderCommand::Close => return Ok(ControlFlow::Break),
         }
@@ -467,7 +505,7 @@ pub(super) async fn audio_file_fetch(
             cmd = stream_loader_command_rx.recv() => {
                 match cmd {
                         Some(cmd) => {
-                            if fetch.handle_stream_loader_command(cmd)? == ControlFlow::Break {
+                            if fetch.handle_stream_loader_command(cmd).await? == ControlFlow::Break {
                                 break;
                             }
                         }
@@ -512,7 +550,9 @@ pub(super) async fn audio_file_fetch(
             );
 
             if bytes_pending < desired_pending_bytes {
-                fetch.pre_fetch_more_data(desired_pending_bytes - bytes_pending)?;
+                fetch
+                    .pre_fetch_more_data(desired_pending_bytes - bytes_pending)
+                    .await?;
             }
         }
     }

@@ -20,7 +20,10 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
-use librespot_core::{Error, FileId, Session, cdn_url::CdnUrl};
+use librespot_core::{
+    Error, FileId, Session,
+    cdn_url::{CdnUrl, MaybeExpiringUrl},
+};
 
 use self::receive::audio_file_fetch;
 
@@ -323,7 +326,10 @@ struct AudioFileDownloadStatus {
 }
 
 struct AudioFileShared {
-    cdn_url: String,
+    file_id: FileId,
+    /// The URL ranges are requested from, with when it expires. The fetch
+    /// task resolves the file again and replaces it once it has.
+    cdn_url: Mutex<MaybeExpiringUrl>,
     file_size: usize,
     bytes_per_second: usize,
     cond: Condvar,
@@ -446,7 +452,7 @@ impl AudioFileStreaming {
         let minimum_download_size = AudioFetchParams::get().minimum_download_size;
 
         let mut response_streamer_url = None;
-        let urls = cdn_url.try_get_urls()?;
+        let urls = cdn_url.try_get_expiring_urls()?;
         for url in &urls {
             // When the audio file is really small, this `download_size` may turn out to be
             // larger than the audio file we're going to stream later on. This is OK; requesting
@@ -455,7 +461,7 @@ impl AudioFileStreaming {
             let mut streamer =
                 session
                     .spclient()
-                    .stream_from_cdn(*url, 0, minimum_download_size)?;
+                    .stream_from_cdn(&url.0, 0, minimum_download_size)?;
 
             // Get the first chunk with the headers to get the file size.
             // The remainder of that chunk with possibly also a response body is then
@@ -472,10 +478,11 @@ impl AudioFileStreaming {
                     break;
                 }
                 Ok(r) => warn!(
-                    "Fetching {url} returned {} (expected 206 Partial Content), trying next",
+                    "Fetching {} returned {} (expected 206 Partial Content), trying next",
+                    url.0,
                     r.status()
                 ),
-                Err(e) => warn!("Fetching {url} failed with error {e:?}, trying next"),
+                Err(e) => warn!("Fetching {} failed with error {e:?}, trying next", url.0),
             }
         }
 
@@ -486,7 +493,7 @@ impl AudioFileStreaming {
             )));
         };
 
-        trace!("Streaming from {url}");
+        trace!("Streaming from {}", url.0);
 
         let header_value = response
             .headers()
@@ -506,7 +513,8 @@ impl AudioFileStreaming {
         };
 
         let shared = Arc::new(AudioFileShared {
-            cdn_url: url.to_string(),
+            file_id,
+            cdn_url: Mutex::new((**url).clone()),
             file_size,
             bytes_per_second,
             cond: Condvar::new(),

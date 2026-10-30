@@ -1249,11 +1249,14 @@ impl NexfyCore {
         self.inner.with_spirc(|spirc| spirc.activate().and_then(|_| spirc.play()))
     }
 
-    /// Play again what the screen shows, with nothing in the player behind it.
-    /// Resuming then went nowhere: the counter ran with no sound, or the song
-    /// loaded for ever, until another song was tapped. The player is emptied
-    /// when the connection comes back and the server's copy of the playback
-    /// lacks the current song. With the song still loaded, an ordinary resume.
+    /// Play again what the screen shows, with nothing in the player behind it
+    /// or nothing behind the song still in it. Resuming then went nowhere:
+    /// the counter ran with no sound, or the song loaded for ever, until
+    /// another song was tapped. The player is emptied when the connection
+    /// comes back and the server's copy of the playback lacks the current
+    /// song; and a song paused for long keeps its place in the player while
+    /// the stream feeding it dies with the session, so playing it again from
+    /// there is silence. Loading it anew is what sounds in both cases.
     pub async fn resume_from(
         &self,
         track_uri: String,
@@ -1262,10 +1265,31 @@ impl NexfyCore {
         position_ms: u32,
         shuffle: bool,
     ) -> Result<(), CoreError> {
-        if self.inner.loaded.load(Ordering::Relaxed) || self.inner.offline_play().is_some() {
+        if self.inner.offline_play().is_some() {
             return self.resume().await;
         }
-        log::info!("resume with nothing loaded: loading {track_uri} again at {position_ms} ms");
+        if self.inner.loaded.load(Ordering::Relaxed) {
+            // Songs on the phone play with no session, and a short pause
+            // outlives none: the player goes on where it stopped.
+            if self.inner.web.is_offline() || !self.inner.paused_long() {
+                return self.inner.with_player(|player| player.play());
+            }
+            match self.inner.renew_session().await {
+                // The song came over to the new session, which loaded it
+                // again where it was: play it there.
+                Ok(true) => return self.inner.with_spirc(|spirc| spirc.play()),
+                // Nothing came over (the Connect device had already lost the
+                // song with its session): load it again below.
+                Ok(false) => log::info!("long pause, nothing carried over"),
+                // No new session, so none to load over: the song may be on
+                // the phone, and then it plays from where it stopped.
+                Err(error) => {
+                    log::warn!("session not renewed ({error}): playing what is loaded");
+                    return self.inner.with_player(|player| player.play());
+                }
+            }
+        }
+        log::info!("resume: loading {track_uri} again at {position_ms} ms");
         let request = match context_uri.filter(|uri| !uri.is_empty()) {
             Some(context) => {
                 let mut options = self.inner.load_options(Some(PlayingTrack::Uri(track_uri)), shuffle);
@@ -1999,11 +2023,14 @@ impl Inner {
             .map(|connected| connected.spirc.clone())
             .ok_or_else(|| CoreError::Session("não conectado".into()))?;
         // Asked of the old Connect device, which still runs here with its
-        // session gone; not waited on for long.
+        // session gone; not waited on for long. Its loop ends with the
+        // session it listens on, and it then answers nothing: the playback
+        // it kept on the way out is what carries the song over.
         let snapshot = tokio::time::timeout(std::time::Duration::from_secs(2), old_spirc.playback_snapshot())
             .await
             .ok()
-            .flatten();
+            .flatten()
+            .or_else(|| old_spirc.disconnected_playback());
         log::info!("renewing the session after a long pause (song carried over: {})", snapshot.is_some());
         let restored = self.replace_session(old_spirc, snapshot).await?;
         // A fresh session: the pause counts from now, or a resume right after
