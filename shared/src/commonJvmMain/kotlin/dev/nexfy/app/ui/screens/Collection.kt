@@ -226,9 +226,13 @@ fun CollectionScreen(
     val keepKey = source?.takeIf { it.startsWith("pl:") || it.startsWith("al:") }
     val kept = keepKey != null && keepKey in keptAll
     var onPhone by remember { mutableIntStateOf(0) }
+    // Songs no file plays for the account: the list is whole without them.
+    var unplayable by remember { mutableIntStateOf(0) }
     LaunchedEffect(kept, all.size) {
         while (kept && all.isNotEmpty()) {
-            onPhone = actions.core.cachedCount(all.map { it.uri }).toInt()
+            val uris = all.map { it.uri }
+            onPhone = actions.core.cachedCount(uris).toInt()
+            unplayable = actions.core.unavailableCount(uris).toInt()
             delay(4_000)
             awaitShown()
         }
@@ -457,7 +461,7 @@ fun CollectionScreen(
                             }
                             if (kept && all.isNotEmpty()) {
                                 Text(
-                                    if (onPhone >= all.size) "Todas no aparelho" else "$onPhone de ${all.size} no aparelho · baixando no Wi-Fi",
+                                    if (onPhone >= all.size - unplayable) "Todas no aparelho" else "$onPhone de ${all.size - unplayable} no aparelho · baixando",
                                     Modifier.padding(top = 10.dp),
                                     color = ink.copy(.7f), fontSize = 12.sp,
                                 )

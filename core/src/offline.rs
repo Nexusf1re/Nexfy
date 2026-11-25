@@ -44,6 +44,10 @@ pub struct Offline {
     /// When the last audio key was asked, and until when none is: Spotify
     /// refuses keys asked in a burst.
     keys: Mutex<KeyPace>,
+    /// Songs with no file this account can play (removed, or not in its
+    /// country), and when that was seen: not asked again for a while, and
+    /// not counted as missing from a kept list.
+    unavailable: Mutex<HashMap<String, u64>>,
 }
 
 #[derive(Default)]
@@ -54,16 +58,14 @@ struct KeyPace {
 
 impl Offline {
     pub fn new(cache_dir: &Path, quality: AudioQuality) -> Self {
-        let kept = std::fs::read(cache_dir.join(KEPT))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let kept = read_json(&cache_dir.join(KEPT));
         Self {
             dir: cache_dir.to_owned(),
             quality: Mutex::new(quality.downloading()),
             files: Mutex::new(load_files(cache_dir, quality)),
             kept: Mutex::new(kept),
             keys: Mutex::default(),
+            unavailable: Mutex::new(read_json(&cache_dir.join(UNAVAILABLE))),
         }
     }
 
@@ -165,32 +167,91 @@ impl Offline {
             .count() as u32
     }
 
-    /// The file `uri` plays from, asking Spotify the first time. Reading the
-    /// song's metadata keeps it in the cache, for playing it offline.
-    async fn file_for(&self, session: &Session, uri: &SpotifyUri) -> Result<FileId> {
-        let key = uri.to_uri();
-        let kept_meta = session.cache().is_some_and(|cache| cache.metadata(&key).is_some());
-        if let Some(file) = self.known_file(&key).filter(|_| kept_meta) {
-            return Ok(file);
+    /// How many of `uris` no file can play for this account: a kept list
+    /// is complete without them.
+    pub fn unavailable_count(&self, uris: &[String]) -> u32 {
+        let unavailable = self.unavailable.lock().unwrap();
+        uris.iter().filter(|uri| unavailable.contains_key(*uri)).count() as u32
+    }
+
+    /// Whether `uri` was found unplayable lately: not asked again yet.
+    fn known_unavailable(&self, uri: &str) -> bool {
+        let seen = self.unavailable.lock().unwrap().get(uri).copied();
+        seen.is_some_and(|at| now_secs().saturating_sub(at) < UNAVAILABLE_RECHECK.as_secs())
+    }
+
+    fn mark_unavailable(&self, uri: &str, unavailable: bool) {
+        let mut all = self.unavailable.lock().unwrap();
+        let changed = if unavailable {
+            all.insert(uri.to_owned(), now_secs());
+            true
+        } else {
+            all.remove(uri).is_some()
+        };
+        if changed {
+            if let Ok(json) = serde_json::to_vec(&*all) {
+                let _ = std::fs::write(self.dir.join(UNAVAILABLE), json);
+            }
         }
-        let item = AudioItem::get_file(session, uri.clone()).await.map_err(|e| anyhow!("{e}"))?;
+    }
+
+    /// The file `uri` plays from and the song it belongs to, asking Spotify
+    /// the first time; None when no file can play for this account. A song
+    /// relinked to another release plays that one's file, as the player
+    /// does. Reading the songs' metadata keeps it in the cache, for playing
+    /// them offline.
+    async fn file_for(&self, session: &Session, uri: &SpotifyUri) -> Result<Option<(FileId, SpotifyUri)>> {
+        let key = uri.to_uri();
+        let cache = session.cache();
+        let kept_meta = cache.is_some_and(|cache| cache.metadata(&key).is_some());
+        if let Some(file) = self.known_file(&key).filter(|_| kept_meta) {
+            // With its key there, nothing else is needed; without, the song
+            // the file belongs to is found again below, for asking the key.
+            if cache.is_some_and(|cache| cache.audio_key(file).is_some()) {
+                return Ok(Some((file, uri.clone())));
+            }
+        }
+        let item = match AudioItem::get_file(session, uri.clone()).await {
+            Ok(item) => item,
+            Err(e) if e.kind == librespot_core::error::ErrorKind::Unavailable => return Ok(None),
+            Err(e) => return Err(anyhow!("{e}")),
+        };
         let quality = *self.quality.lock().unwrap();
-        let file = quality
-            .formats()
-            .iter()
-            .find_map(|format| item.files.get(format).copied())
-            .ok_or_else(|| anyhow!("sem arquivo de áudio para {key}"))?;
-        self.remember(&key, file);
-        Ok(file)
+        let pick = |item: &AudioItem| quality.formats().iter().find_map(|format| item.files.get(format).copied());
+        let mut found = pick(&item).filter(|_| item.availability.is_ok()).map(|file| (file, uri.clone()));
+        if found.is_none() && item.availability.is_ok() {
+            for alternative in item.alternatives.iter().flat_map(|alternatives| alternatives.0.iter()) {
+                let Ok(other) = AudioItem::get_file(session, alternative.clone()).await else { continue };
+                if other.availability.is_ok() {
+                    if let Some(file) = pick(&other) {
+                        found = Some((file, alternative.clone()));
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some((file, _)) = &found {
+            self.remember(&key, *file);
+        }
+        Ok(found)
     }
 
     /// Put `uri` in the audio cache, with what playing it offline needs (its
     /// metadata and audio key); true if the audio was downloaded now.
     pub async fn download(&self, session: &Session, uri: &str) -> Result<bool> {
+        if self.known_unavailable(uri) {
+            return Ok(false);
+        }
         let parsed = SpotifyUri::from_uri(uri).map_err(|e| anyhow!("{e}"))?;
-        let file = self.file_for(session, &parsed).await?;
+        let Some((file, owner)) = self.file_for(session, &parsed).await? else {
+            self.mark_unavailable(uri, true);
+            return Err(anyhow!("{uri} does not play for this account"));
+        };
+        self.mark_unavailable(uri, false);
         let cache = session.cache().ok_or_else(|| anyhow!("sem cache de áudio"))?;
-        if let SpotifyUri::Track { id } = &parsed {
+        // The key belongs to the song whose file it is: a relinked one's
+        // comes from the release it plays.
+        if let SpotifyUri::Track { id } = &owner {
             if cache.audio_key(file).is_none() {
                 self.fetch_key(session, *id, file, uri).await;
             }
@@ -254,19 +315,49 @@ pub async fn playable_offline(session: &Session, uri: &str) -> bool {
     let Ok(track) = librespot_metadata::Track::get(session, &parsed).await else {
         return false;
     };
-    track.files.values().any(|&file| {
-        cache.audio_key(file).is_some() && cache.file_path(file).is_some_and(|path| path.exists())
-    })
+    let here = |files: &librespot_metadata::audio::AudioFiles| {
+        files.values().any(|&file| {
+            cache.audio_key(file).is_some() && cache.file_path(file).is_some_and(|path| path.exists())
+        })
+    };
+    if here(&track.files) {
+        return true;
+    }
+    // A song relinked to another release plays that one's file.
+    for alternative in &track.alternatives.0 {
+        if let Ok(other) = librespot_metadata::Track::get(session, alternative).await {
+            if here(&other.files) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Where the kept songs are listed.
 const KEPT: &str = "kept_songs.json";
 
-fn load_files(dir: &Path, quality: AudioQuality) -> HashMap<String, String> {
-    std::fs::read(dir.join(files_name(quality)))
+/// Where the songs found unplayable are listed, and how long until one is
+/// asked again (it may come back, or the account move country).
+const UNAVAILABLE: &str = "unavailable_songs.json";
+const UNAVAILABLE_RECHECK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+}
+
+fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    std::fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
+}
+
+fn load_files(dir: &Path, quality: AudioQuality) -> HashMap<String, String> {
+    read_json(&dir.join(files_name(quality)))
 }
 
 /// Each quality plays other files, so each keeps its own song → file map.

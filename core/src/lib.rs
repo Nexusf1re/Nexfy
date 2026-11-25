@@ -1498,6 +1498,12 @@ impl NexfyCore {
             .unwrap_or(0)
     }
 
+    /// How many of these songs no file plays for this account (removed, or
+    /// not in its country): a kept list is complete without them.
+    pub fn unavailable_count(&self, uris: Vec<String>) -> u32 {
+        self.inner.offline.unavailable_count(&uris)
+    }
+
     /// Download songs into the audio cache, one at a time with a pause
     /// between downloads, like a listener would fetch them. Returns how
     /// many were downloaded now.

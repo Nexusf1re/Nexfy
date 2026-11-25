@@ -67,6 +67,8 @@ private data class Kept(
     val peek: Peek,
     val total: Int,
     val onPhone: Int,
+    /** Songs no file plays for the account: not counted as missing. */
+    val unavailable: Int,
 )
 
 private fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_000_000_000.0).replace('.', ',')
@@ -88,14 +90,18 @@ fun DownloadsScreen(actions: AppActions, list: LazyListState, modifier: Modifier
     val albums = rememberLoaded("dl-al") { core.savedAlbums(it) }
 
     var info by remember { mutableStateOf(core.cacheInfo()) }
-    var counts by remember { mutableStateOf<Map<String, Pair<Int, Int>>>(emptyMap()) }
+    var counts by remember { mutableStateOf<Map<String, Triple<Int, Int, Int>>>(emptyMap()) }
     // Downloads fill in the background: keep the numbers live while open.
     LaunchedEffect(kept) {
         while (true) {
             info = core.cacheInfo()
             counts = kept.associateWith { key ->
                 val uris = runCatching { app.keptTracks(key) }.getOrDefault(emptyList())
-                uris.size to runCatching { core.cachedCount(uris).toInt() }.getOrDefault(0)
+                Triple(
+                    uris.size,
+                    runCatching { core.cachedCount(uris).toInt() }.getOrDefault(0),
+                    runCatching { core.unavailableCount(uris).toInt() }.getOrDefault(0),
+                )
             }
             delay(4_000)
             awaitShown()
@@ -106,13 +112,14 @@ fun DownloadsScreen(actions: AppActions, list: LazyListState, modifier: Modifier
     val albumById = albums.state.value.orEmpty().associateBy { it.id }
     val rows = kept.mapNotNull { key ->
         val id = key.substringAfter(':')
-        val (total, onPhone) = counts[key] ?: (0 to 0)
+        val (all, onPhone, unavailable) = counts[key] ?: Triple(0, 0, 0)
+        val total = all - unavailable
         when {
             key.startsWith("pl:") -> byId[id]?.let {
-                Kept(key, it.name, "Playlist", it.imageUrl, Route.Playlist(id), Peek(it.name, it.owner, it.imageUrl), total, onPhone)
+                Kept(key, it.name, "Playlist", it.imageUrl, Route.Playlist(id), Peek(it.name, it.owner, it.imageUrl), total, onPhone, unavailable)
             }
             key.startsWith("al:") -> albumById[id]?.let {
-                Kept(key, it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(id), Peek(it.name, it.artists, it.imageUrl), total, onPhone)
+                Kept(key, it.name, "Álbum · ${it.artists}", it.imageUrl, Route.Album(id), Peek(it.name, it.artists, it.imageUrl), total, onPhone, unavailable)
             }
             else -> null
         }
@@ -186,7 +193,8 @@ private fun KeptRow(row: Kept, onClick: () -> Unit) {
                     Text("${row.onPhone}/${row.total}", color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-            Text(row.subtitle, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val note = if (row.unavailable > 0) " · ${row.unavailable} indisponíve${if (row.unavailable == 1) "l" else "is"}" else ""
+            Text(row.subtitle + note, color = c.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!done) {
                 val share = if (row.total > 0) row.onPhone.toFloat() / row.total else 0f
                 val shown by animateFloatAsState(share, Motion.settle(), label = "kept")
