@@ -35,6 +35,10 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.node.requireLayoutCoordinates
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
@@ -49,8 +53,6 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -281,29 +283,39 @@ fun Modifier.closesMenus(): Modifier {
  * gesture is offered the press. A touchscreen reports no second button, so
  * on a phone this never fires.
  */
-@Composable
-fun Modifier.secondaryClickAt(onMenu: (Offset) -> Unit): Modifier {
-    val at = rememberUpdatedState(onMenu)
-    // Not state: where the surface sits changes on every scroll, and no one
-    // needs to recompose for it.
-    val place = remember { Place() }
-    return onGloballyPositioned { place.coords = it }.pointerInput(Unit) {
-        awaitPointerEventScope {
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                if (event.type == PointerEventType.Press && event.buttons.isSecondaryPressed) {
-                    val local = event.changes.firstOrNull()?.position ?: Offset.Zero
-                    event.changes.forEach { it.consume() }
-                    val coords = place.coords
-                    at.value(if (coords != null && coords.isAttached) coords.localToWindow(local) else local)
-                }
-            }
-        }
+fun Modifier.secondaryClickAt(onMenu: (Offset) -> Unit): Modifier = this then SecondaryClickElement(onMenu)
+
+/**
+ * The node behind [secondaryClickAt]. It asks for its own place only when
+ * the button is pressed, rather than being told it on every move: a table
+ * row used to be called back with its position on each frame of a scroll,
+ * every row on screen, for a menu almost never opened.
+ */
+private class SecondaryClickElement(val onMenu: (Offset) -> Unit) : ModifierNodeElement<SecondaryClickNode>() {
+    override fun create() = SecondaryClickNode(onMenu)
+
+    override fun update(node: SecondaryClickNode) {
+        node.onMenu = onMenu
     }
+
+    // A new lambda each composition does the same thing: only the node's
+    // callback is swapped, never the node.
+    override fun equals(other: Any?) = other is SecondaryClickElement
+
+    override fun hashCode() = 1
 }
 
-private class Place {
-    var coords: LayoutCoordinates? = null
+private class SecondaryClickNode(var onMenu: (Offset) -> Unit) : Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass != PointerEventPass.Initial) return
+        if (pointerEvent.type != PointerEventType.Press || !pointerEvent.buttons.isSecondaryPressed) return
+        val local = pointerEvent.changes.firstOrNull()?.position ?: Offset.Zero
+        pointerEvent.changes.forEach { it.consume() }
+        val coords = requireLayoutCoordinates()
+        onMenu(if (coords.isAttached) coords.localToWindow(local) else local)
+    }
+
+    override fun onCancelPointerInput() = Unit
 }
 
 /**

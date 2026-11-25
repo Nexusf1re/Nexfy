@@ -1,16 +1,12 @@
 package dev.nexfy.app.ui.design
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -34,7 +29,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,11 +39,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.PointerInputScope
-import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
@@ -198,27 +190,27 @@ fun TrackTableRow(
 ) {
     val c = MaterialTheme.colorScheme
     val accent = accentColor()
-    val press = remember { MutableInteractionSource() }
-    val hover = remember { MutableInteractionSource() }
-    val over by hover.collectIsHoveredAsState()
-    val ground by animateColorAsState(
-        when {
-            playing -> accent.copy(.12f)
-            over -> c.onSurface.copy(.06f)
-            else -> Color.Transparent
-        },
-        label = "trackRowGround",
-    )
+    var over by remember { mutableStateOf(false) }
     Row(
         modifier.fillMaxWidth().height(RowHeight)
-            .weightedPress(press, 10.dp).clip(RoundedCornerShape(10.dp)).background(ground)
-            .hoverable(hover)
+            // The band, the lift under the pointer and the press, in one node
+            // that draws them: no layer and no coroutine for a row until the
+            // pointer reaches it. A long list composes dozens of rows in a
+            // frame of a fast scroll, and the three modifiers this replaces
+            // each started a coroutine and the press and the clip each took a
+            // layer, per row.
+            .pointerFeedback(
+                corner = 10.dp,
+                ground = if (playing) accent.copy(.12f) else Color.Transparent,
+                lift = c.onSurface.copy(.06f),
+                onHover = { over = it },
+            )
             // Outside the click, so the right button is answered on the way
             // in and the row never plays as well. Not even installed where a
             // finger drives the UI, which has no second button to press.
             .then(if (LocalPointer.current) Modifier.secondaryClickAt(onMenu) else Modifier)
-            .clickable(press, null, onClick = onClick)
-            .alpha(if (track.playable) 1f else .4f)
+            .clickable(null, null, onClick = onClick)
+            .then(if (track.playable) Modifier else Modifier.alpha(.4f))
             .padding(horizontal = CellInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -256,7 +248,7 @@ fun TrackTableRow(
         }
         if (columns.date) {
             Cell(
-                track.addedAtMs?.let { addedLabel(it, columns.shortDate) }.orEmpty(),
+                remember(track.addedAtMs, columns.shortDate) { track.addedAtMs?.let { addedLabel(it, columns.shortDate) }.orEmpty() },
                 Modifier.width(columns.dateWidth).padding(start = ColumnGap),
             )
         }
@@ -303,12 +295,22 @@ private fun RowAction(shown: Boolean, content: @Composable () -> Unit) = Box(
     Modifier.size(32.dp),
     contentAlignment = Alignment.Center,
 ) {
-    AnimatedVisibility(
-        shown,
-        enter = fadeIn(Motion.enter(Motion.Short)) + scaleIn(Motion.enter(Motion.Short), initialScale = .85f),
-        exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = .85f),
-        label = "rowAction",
-    ) { content() }
+    // Still, the glyph is simply there or not: the animation's machinery is
+    // composed only while it moves. A list of liked songs shows a heart on
+    // every row, and each row of a fast scroll used to build that machinery
+    // for a glyph that was not going anywhere.
+    val state = remember { MutableTransitionState(shown) }
+    state.targetState = shown
+    if (state.isIdle && state.currentState == shown) {
+        if (shown) content()
+    } else {
+        AnimatedVisibility(
+            state,
+            enter = fadeIn(Motion.enter(Motion.Short)) + scaleIn(Motion.enter(Motion.Short), initialScale = .85f),
+            exit = fadeOut(Motion.exit()) + scaleOut(Motion.exit(), targetScale = .85f),
+            label = "rowAction",
+        ) { content() }
+    }
 }
 
 /** A small round button at the end of a row. */
@@ -342,4 +344,3 @@ private fun MenuIcon(icon: ImageVector, description: String, tint: Color, onClic
         contentAlignment = Alignment.Center,
     ) { Icon(icon, description, tint = tint, modifier = Modifier.size(18.dp)) }
 }
-
