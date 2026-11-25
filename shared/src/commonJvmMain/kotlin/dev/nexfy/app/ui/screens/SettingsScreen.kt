@@ -536,6 +536,7 @@ private fun StorageSection(actions: AppActions) {
     var confirmClear by remember { mutableStateOf(false) }
     val prefetch by library.prefetchQueue.collectAsState()
     val mobile by library.mobileDownloads.collectAsState()
+    val pointer = LocalPointer.current
     // Downloads fill it in the background: keep the numbers live.
     LaunchedEffect(Unit) {
         while (true) {
@@ -566,7 +567,10 @@ private fun StorageSection(actions: AppActions) {
             info = core.cacheInfo()
         }, Modifier.fillMaxWidth())
         Toggle("Baixar as próximas da fila", null, prefetch, library::setPrefetchQueue)
-        Toggle("Baixar também nos dados móveis", "Sem isso, só no Wi-Fi. Gasta o plano de dados.", mobile, library::setMobileDownloads)
+        // A computer has no mobile data to spare.
+        if (!LocalPointer.current) {
+            Toggle("Baixar também nos dados móveis", "Sem isso, só no Wi-Fi. Gasta o plano de dados.", mobile, library::setMobileDownloads)
+        }
         PillButton("Apagar músicas baixadas", { confirmClear = true }, filled = false)
         HorizontalDivider(color = c.outline.copy(alpha = .5f))
         StorageLine("Capas", "Voltam a baixar quando aparecem.", covers) {
@@ -583,7 +587,10 @@ private fun StorageSection(actions: AppActions) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Apagar músicas baixadas?") },
-            text = { Text("Libera ${size(info.usedBytes.toLong())}. As playlists mantidas no aparelho voltam a baixar no Wi-Fi.") },
+            text = {
+                val again = if (pointer) "voltam a baixar" else "voltam a baixar no Wi-Fi"
+                Text("Libera ${size(info.usedBytes.toLong())}. As playlists mantidas no aparelho $again.")
+            },
             confirmButton = {
                 TextButton({
                     core.clearAudioCache()

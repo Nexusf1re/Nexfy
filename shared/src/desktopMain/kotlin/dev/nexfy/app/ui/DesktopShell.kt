@@ -69,6 +69,7 @@ import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CropSquare
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FilterNone
 import androidx.compose.material.icons.rounded.Home
@@ -790,6 +791,7 @@ private fun LibraryList(actions: AppActions, rail: Boolean = false) {
     val recent = rememberLoaded("home-recent") { actions.core.recentlyPlayed(it) }
     val pinned by library.pinned.collectAsState()
     val plays by library.plays.collectAsState()
+    val kept by library.kept.collectAsState()
     // What is played most stands at the top, with anything pinned above it:
     // the order the library page and the home page already use.
     val scores = playScores(plays, recent.state.value.orEmpty())
@@ -812,6 +814,16 @@ private fun LibraryList(actions: AppActions, rail: Boolean = false) {
         }
         item {
             ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite, rail) { actions.open(Route.Liked) }
+        }
+        // What plays with no connection, once anything is kept: the phone puts
+        // it atop its library page, the window beside the likes.
+        if (kept.isNotEmpty()) {
+            item(key = "downloads") {
+                val lists = if (kept.size == 1) "1 lista" else "${kept.size} listas"
+                ShelfRow(null, "Neste computador", "$lists sem internet", Icons.Rounded.DownloadDone, rail) {
+                    actions.open(Route.Downloads)
+                }
+            }
         }
         items(orderedPlaylists.orEmpty(), key = { "pl:${it.id}" }) { p ->
             ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}", rail = rail) {

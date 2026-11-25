@@ -451,7 +451,12 @@ fun CollectionScreen(
                                         haptics.press()
                                         actions.services.library.toggleKept(keepKey)
                                         actions.services.toast(
-                                            if (kept) "Não fica mais no aparelho" else "Mantida no aparelho: baixa no Wi-Fi",
+                                            when {
+                                                kept -> "Não fica mais no aparelho"
+                                                // A computer has no metered network to wait out.
+                                                pointer -> "Mantida neste computador: baixando"
+                                                else -> "Mantida no aparelho: baixa no Wi-Fi"
+                                            },
                                         )
                                     }, enabled = all.isNotEmpty(), light = !dark)
                                 }

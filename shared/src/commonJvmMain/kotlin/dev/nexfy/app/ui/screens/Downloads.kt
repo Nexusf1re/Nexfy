@@ -48,6 +48,8 @@ import dev.nexfy.app.ui.Route
 import dev.nexfy.app.ui.design.Cover
 import dev.nexfy.app.ui.design.EmptyState
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.LocalPointer
+import dev.nexfy.app.ui.design.LocalShellHeader
 import dev.nexfy.app.ui.design.Motion
 import dev.nexfy.app.ui.design.RoundIconButton
 import dev.nexfy.app.ui.design.SectionTitle
@@ -72,6 +74,10 @@ private data class Kept(
 )
 
 private fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_000_000_000.0).replace('.', ',')
+
+/** What the page is called: where the songs are kept, phone or computer. */
+@Composable
+private fun keptHere() = if (LocalPointer.current) "Neste computador" else "No celular"
 
 /**
  * "No celular": the lists marked to keep and how far their download got,
@@ -132,10 +138,13 @@ fun DownloadsScreen(actions: AppActions, list: LazyListState, modifier: Modifier
     ) {
         item(key = "header") {
             Column {
-                Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RoundIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", { actions.back() }, container = c.background)
+                // A window's title strip carries the way back.
+                if (!LocalShellHeader.current) {
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RoundIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Voltar", { actions.back() }, container = c.background)
+                    }
                 }
-                Text("No celular", Modifier.padding(top = 14.dp), fontSize = 34.sp, lineHeight = 40.sp, style = MaterialTheme.typography.headlineLarge)
+                Text(keptHere(), Modifier.padding(top = 14.dp), fontSize = 34.sp, lineHeight = 40.sp, style = MaterialTheme.typography.headlineLarge)
                 Text("O que toca sem internet", color = c.onSurfaceVariant, fontSize = 14.sp)
             }
         }
@@ -148,7 +157,9 @@ fun DownloadsScreen(actions: AppActions, list: LazyListState, modifier: Modifier
                     Box(Modifier.fillMaxWidth(shown).fillMaxHeight().clip(CircleShape).background(accentColor()))
                 }
                 Text(
-                    if (prefetch) "As próximas da fila também baixam, no Wi-Fi." else "O download das próximas da fila está desligado.",
+                    if (prefetch) {
+                        if (LocalPointer.current) "As próximas da fila também baixam." else "As próximas da fila também baixam, no Wi-Fi."
+                    } else "O download das próximas da fila está desligado.",
                     color = c.onSurfaceVariant, fontSize = 13.sp,
                 )
             }
@@ -158,7 +169,11 @@ fun DownloadsScreen(actions: AppActions, list: LazyListState, modifier: Modifier
                 EmptyState(
                     Icons.Rounded.CloudOff,
                     "Nada guardado ainda",
-                    "Abre uma playlist ou um álbum e toca em baixar: ele fica no celular e toca sem internet.",
+                    if (LocalPointer.current) {
+                        "Abre uma playlist ou um álbum e clica em baixar: ele fica neste computador e toca sem internet."
+                    } else {
+                        "Abre uma playlist ou um álbum e toca em baixar: ele fica no celular e toca sem internet."
+                    },
                     Modifier.padding(top = 24.dp),
                 )
             }
@@ -188,7 +203,7 @@ private fun KeptRow(row: Kept, onClick: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(row.title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (done) {
-                    Icon(Icons.Rounded.DownloadDone, "Toda no celular", tint = accent, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Rounded.DownloadDone, "Toda ${keptHere().lowercase()}", tint = accent, modifier = Modifier.size(18.dp))
                 } else {
                     Text("${row.onPhone}/${row.total}", color = c.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -220,7 +235,7 @@ fun DownloadsShortcut(lists: Int, onClick: () -> Unit) {
     ) {
         Icon(Icons.Rounded.DownloadDone, null, tint = accentColor(), modifier = Modifier.size(20.dp))
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text("No celular", color = c.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(keptHere(), color = c.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(
                 if (lists == 1) "1 lista toca sem internet" else "$lists listas tocam sem internet",
                 color = c.onSurfaceVariant, fontSize = 12.sp,

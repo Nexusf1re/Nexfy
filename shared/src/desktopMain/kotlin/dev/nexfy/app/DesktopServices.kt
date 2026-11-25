@@ -198,13 +198,15 @@ class DesktopServices(
                 if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
             }
         }
-        // Whole kept collections, only while nothing plays here: downloading
-        // them alongside a song starved its stream on the phone, and the
-        // same single core feeds both.
+        // Whole kept collections, as soon as they are kept and again each time
+        // the network comes back. The phone waits for nothing to play, since
+        // a download beside a song starved its stream on mobile data; a
+        // computer's line carries both, and a window that plays all day
+        // would otherwise never get to download at all. The core takes the
+        // songs one at a time with a pause between them.
         scope.launch {
-            val playing = bridge.local.map { it.playing }.distinctUntilChanged()
-            combine(library.kept, playing) { kept, busy -> if (busy) emptySet() else kept }.collectLatest { kept ->
-                if (!awaitConnected()) return@collectLatest
+            combine(library.kept, Connectivity.online) { kept, online -> kept to online }.collectLatest { (kept, online) ->
+                if (!online || !awaitConnected()) return@collectLatest
                 // Every kept song first, so the audio cache never makes room by
                 // dropping one (and ones no longer kept can go again).
                 val songs = kept.associateWith { key -> runCatching { keptTracks(key) }.getOrNull() }
@@ -212,7 +214,8 @@ class DesktopServices(
                     core.setKeptSongs(songs.values.flatMap { it.orEmpty() }.distinct())
                 }
                 if (kept.isEmpty()) return@collectLatest
-                delay(10_000)
+                // A moment for the page that kept it, or the start, to settle.
+                delay(3_000)
                 for (tracks in songs.values) {
                     if (tracks == null) continue
                     runCatching { core.cacheTracks(tracks) }
