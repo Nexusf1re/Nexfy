@@ -27,7 +27,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.utf16CodePoint
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -219,6 +223,24 @@ private const val VOLUME_STEP = .05f
  */
 private var remoteVolumeAsked by mutableStateOf<Pair<Long, Int>?>(null)
 
+/** The level the volume was at before Ctrl+M silenced it, to go back to. */
+private var mutedFrom: Float? = null
+
+/** Silence, or back to the level before it, here or on the device playing. */
+private fun AppActions.toggleMute() {
+    val remote = services.bridge.state.value.remote
+    val now = remote?.let { (remoteVolumeAsked?.second ?: it.volume?.toInt() ?: 50) / 100f }
+        ?: services.output.volume.value.toFloat()
+    val back = mutedFrom
+    if (now > 0.001f || back == null) {
+        mutedFrom = now.takeIf { it > 0.001f } ?: back
+        nudgeVolume(-now)
+    } else {
+        mutedFrom = null
+        nudgeVolume(back)
+    }
+}
+
 /** The volume moved by [delta] (a fraction of the whole), here or on the device playing. */
 private fun AppActions.nudgeVolume(delta: Float) {
     val remote = services.bridge.state.value.remote
@@ -290,6 +312,7 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
             val key = event.key
             val ctrl = event.isCtrlPressed
             val shift = event.isShiftPressed
+            val alt = event.isAltPressed
             val media = !DesktopKeys.systemMedia
             val s = services.bridge.state.value
             if (first) {
@@ -312,8 +335,19 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                         runCatching { searchFocus.requestFocus() }
                         true
                     }
+                    // Alt+← is back in every browser and file window.
+                    alt && key == Key.DirectionLeft -> DesktopBack.pressed()
                     else -> false
                 }
+            }
+            // A letter or a digit typed with nothing focused to take it starts
+            // a search with it, as Lokal does: the strip's field takes the
+            // caret with the letter already in it, and the rest follow there.
+            val typed = event.utf16CodePoint.takeIf { !ctrl && !alt && it > ' '.code }?.let { Char(it) }
+            if (typed != null && typed.isLetterOrDigit()) {
+                actions.nav.searchQuery = typed.toString()
+                runCatching { searchFocus.requestFocus() }
+                return@handler true
             }
             when {
                 key == Key.Spacebar && !ctrl && !shift -> actions.playPause()
@@ -326,6 +360,28 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
                 ctrl && key == Key.DirectionUp -> actions.nudgeVolume(VOLUME_STEP)
                 ctrl && key == Key.DirectionDown -> actions.nudgeVolume(-VOLUME_STEP)
                 ctrl && key == Key.S -> actions.setShuffle(!s.queue.shuffle)
+                ctrl && key == Key.R -> actions.setRepeat(
+                    when (s.queue.repeat) {
+                        RepeatMode.OFF -> RepeatMode.ALL
+                        RepeatMode.ALL -> RepeatMode.ONE
+                        RepeatMode.ONE -> RepeatMode.OFF
+                    },
+                )
+                ctrl && key == Key.M -> actions.toggleMute()
+                // The three places of the sidebar, in its order.
+                ctrl && (key == Key.One || key == Key.Two || key == Key.Three) -> {
+                    nowPlaying = false
+                    actions.nav.tab = when (key) {
+                        Key.One -> Tab.Home
+                        Key.Two -> Tab.Search
+                        else -> Tab.Library
+                    }
+                    actions.nav.popToRoot()
+                }
+                key == Key.F11 -> {
+                    nowPlayingLyrics = false
+                    nowPlaying = !nowPlaying
+                }
                 ctrl && key == Key.L -> {
                     panelOpen = !(panelOpen && panelTab == PanelTab.Lyrics)
                     panelTab = PanelTab.Lyrics
@@ -531,6 +587,11 @@ private fun SearchField(actions: AppActions, search: FocusRequester, modifier: M
     // The Buscar screen's field is this same query (see NavState.searchQuery),
     // so whichever one is typed in, both read it and one search runs.
     var query by nav::searchQuery
+    // The field's own value, caret and all. Words that arrive from elsewhere
+    // (a letter typed on the page, the Buscar screen's field) put the caret
+    // after them, so typing goes on where they end.
+    var typed by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+    val value = if (typed.text == query) typed else TextFieldValue(query, TextRange(query.length))
     val focus = remember { MutableInteractionSource() }
     val focused by focus.collectIsFocusedAsState()
     // The same accent ring the Buscar screen's field lights up with, at the
@@ -563,7 +624,10 @@ private fun SearchField(actions: AppActions, search: FocusRequester, modifier: M
     ) {
         Icon(Icons.Rounded.Search, null, tint = icon, modifier = Modifier.size(18.dp))
         BasicTextField(
-            query, { query = it },
+            value, {
+                typed = it
+                query = it.text
+            },
             Modifier.weight(1f).padding(horizontal = 10.dp).focusRequester(search)
                 .onPreviewKeyEvent { event ->
                     val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
