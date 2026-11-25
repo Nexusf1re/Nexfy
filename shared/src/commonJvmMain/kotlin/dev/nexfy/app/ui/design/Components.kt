@@ -500,18 +500,32 @@ fun CoverCard(
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
-    val source = remember { MutableInteractionSource() }
     val haptics = rememberHaptics()
-    val play = onPlay?.takeIf { LocalPointer.current }
-    val hovered by source.collectIsHoveredAsState()
+    val pointer = LocalPointer.current
+    val play = onPlay?.takeIf { pointer }
+    // Under a pointer the press and the hover are one node that does nothing
+    // until the pointer comes: a shelf scrolled into view composes a row of
+    // cards in one frame, and each used to start two coroutines for them.
+    // A finger keeps the clickable's interactions, which know a scroll from a tap.
+    val source = if (pointer) null else remember { MutableInteractionSource() }
+    var hovered by remember { mutableStateOf(false) }
+    // The play button is composed the first time the pointer comes, not for
+    // every card on every shelf.
+    var reached by remember { mutableStateOf(false) }
     // A pane of glass tinted by the cover; the text stays in the theme's ink on it.
     val pane = if (circle) Color.Transparent else tileColor(imageUrl, key).copy(alpha = if (c.isDark) .3f else .36f)
     val ink = c.onSurface
     val width = LocalCardWidth.current ?: CardWidth
     Column(
-        Modifier.carouselDepth().width(width).weightedPress(source, 16.dp)
+        Modifier.carouselDepth().width(width)
+            .then(
+                if (source != null) {
+                    Modifier.weightedPress(source, 16.dp)
+                } else {
+                    Modifier.pointerFeedback(16.dp, onHover = { now -> hovered = now; if (now) reached = true })
+                },
+            )
             .then(if (circle) Modifier.clip(RoundedCornerShape(16.dp)) else Modifier.glassPane(RoundedCornerShape(16.dp), pane, c.isDark))
-            .then(if (play != null) Modifier.hoverable(source) else Modifier)
             .combinedClickable(
                 source, null,
                 onClick = {
@@ -529,7 +543,7 @@ fun CoverCard(
     ) {
         Box(Modifier.size(width)) {
             Cover(imageUrl, Modifier.fillMaxSize(), if (circle) width / 2 else 14.dp, sharedKey = shared)
-            if (play != null) HoverPlay(hovered, play, Modifier.align(Alignment.BottomEnd).padding(10.dp))
+            if (play != null && reached) HoverPlay(hovered, play, Modifier.align(Alignment.BottomEnd).padding(10.dp))
         }
         Spacer(Modifier.height(8.dp))
         Column(Modifier.padding(horizontal = if (circle) 0.dp else 10.dp)) {

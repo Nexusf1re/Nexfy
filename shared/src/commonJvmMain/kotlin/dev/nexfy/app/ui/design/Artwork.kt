@@ -116,8 +116,11 @@ object Tint {
 fun rememberDominant(url: String?, key: String): Color {
     val context = LocalPlatformContext.current
     var color by remember(url, key) { mutableStateOf(url?.let { DominantCache[it] } ?: Tint.seeded(key)) }
+    // A colour already worked out needs no effect at all: every card on a
+    // shelf asks, and starting one per card only to return cost a frame.
+    if (url.isNullOrBlank()) return color
+    DominantCache[url]?.let { return it }
     LaunchedEffect(url) {
-        if (url.isNullOrBlank() || DominantCache.containsKey(url)) return@LaunchedEffect
         try {
             val pixels = coverPixels(context, url, 64) ?: return@LaunchedEffect
             val swatches = withContext(Dispatchers.Default) { quantize(pixels, 12) }

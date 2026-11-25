@@ -293,8 +293,17 @@ private fun <T> LazyListScope.homeRow(
     item(key = key) {
         Column(Modifier.animateItem(fadeInSpec = skeletonFade(), placementSpec = null, fadeOutSpec = null)) {
             SectionTitle(title, onOpenAll = openAll)
-            AnimatedContent(data != null, transitionSpec = { Motion.arrive using SizeTransform(clip = false) }, label = key) { loaded ->
-                if (loaded && data != null) content(data) else CarouselSkeleton(circle)
+            // A row that was already loaded when it came into view has nothing
+            // to cross-fade from: its cards stand there, without the layout
+            // that animates between two contents measuring them on every pass.
+            // That is every row scrolled to after the page has loaded.
+            val arrivedLoaded = remember { data != null }
+            if (arrivedLoaded && data != null) {
+                content(data)
+            } else {
+                AnimatedContent(data != null, transitionSpec = { Motion.arrive using SizeTransform(clip = false) }, label = key) { loaded ->
+                    if (loaded && data != null) content(data) else CarouselSkeleton(circle)
+                }
             }
         }
     }
