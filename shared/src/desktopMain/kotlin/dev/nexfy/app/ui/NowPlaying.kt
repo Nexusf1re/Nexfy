@@ -103,7 +103,10 @@ internal fun NowPlaying(
     if (menu && track != null) {
         TrackActionsSheet(track, actions, onNavigate = { menu = false; onClose() }) { menu = false }
     }
-    Box(modifier) {
+    // The playing bar, whose wheel is the volume, steps aside for this view,
+    // so the view takes the wheel over: anywhere on it while the art shows,
+    // and over the controls while the words, which scroll, are up.
+    Box(modifier.wheelVolume(actions, enabled = !lyrics)) {
         Box(Modifier.fillMaxSize().glassSource(backdrop)) {
             LivingArtwork(track?.coverUrl, Modifier.fillMaxSize(), dim = .2f, pale = !c.isDark)
             // The wash gathers at the foot, under the words.
@@ -180,7 +183,7 @@ internal fun NowPlaying(
                 }
             }
             Column(
-                Modifier.widthIn(max = 560.dp).fillMaxWidth(),
+                Modifier.widthIn(max = 560.dp).fillMaxWidth().wheelVolume(actions),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Spacer(Modifier.height(18.dp))

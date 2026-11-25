@@ -242,6 +242,26 @@ private fun AppActions.toggleMute() {
     }
 }
 
+/**
+ * The wheel over this surface is the volume, as over the playing bar: a
+ * notch is five per cent, up for louder. A wheel something inside already
+ * answered (a list scrolling) is left to it, and one answered here is
+ * consumed, so a surface inside another never moves the volume twice.
+ */
+internal fun Modifier.wheelVolume(actions: AppActions, enabled: Boolean = true): Modifier =
+    if (!enabled) this else pointerInput(actions) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent()
+                if (event.type != PointerEventType.Scroll || event.changes.any { it.isConsumed }) continue
+                val notches = event.changes.sumOf { it.scrollDelta.y.toDouble() }.toFloat()
+                if (notches == 0f) continue
+                actions.nudgeVolume(-notches * VOLUME_STEP)
+                event.changes.forEach { it.consume() }
+            }
+        }
+    }
+
 /** The volume moved by [delta] (a fraction of the whole), here or on the device playing. */
 private fun AppActions.nudgeVolume(delta: Float) {
     val remote = services.bridge.state.value.remote
