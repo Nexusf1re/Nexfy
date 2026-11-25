@@ -30,6 +30,10 @@ private const val WARM_MAX_TRACKS = 200
 /** The pauses before kept songs still missing are asked for again; then it waits for the next start or network. */
 private val KEEP_RETRY_MS = listOf(60_000L, 5 * 60_000L, 20 * 60_000L, 60 * 60_000L)
 
+/** A song playing here has the network to itself this long from its start; after that, this gap between downloads. */
+private const val QUIET_AFTER_START_MS = 15_000L
+private const val PLAYING_GAP_MS = 3_000L
+
 /** How often the route to the internet is looked at; the look costs no traffic. */
 private const val NETWORK_CHECK_MS = 3_000L
 
@@ -202,11 +206,10 @@ class DesktopServices(
             }
         }
         // Whole kept collections, as soon as they are kept and again each time
-        // the network comes back. The phone waits for nothing to play, since
-        // a download beside a song starved its stream on mobile data; a
-        // computer's line carries both, and a window that plays all day
-        // would otherwise never get to download at all. The core takes the
-        // songs one at a time with a pause between them.
+        // the network comes back: every song still missing, one at a time.
+        // Also while a song plays, paced around it as on the phone: never in
+        // its first seconds, while its own stream is still coming in, and
+        // with a gap between downloads after that.
         scope.launch {
             combine(library.kept, Connectivity.online) { kept, online -> kept to online }.collectLatest { (kept, online) ->
                 if (!online || !awaitConnected()) return@collectLatest
@@ -222,14 +225,21 @@ class DesktopServices(
                 val all = songs.values.flatMap { it.orEmpty() }.distinct()
                 // A song can be refused for a while (Spotify turns down audio
                 // keys asked in a burst), so what is still missing is asked
-                // again later, a few times, further apart each time.
+                // again later, a few times, further apart each time. A song
+                // the core knows cannot play is not missing.
                 for (attempt in 0..KEEP_RETRY_MS.size) {
                     if (attempt > 0) delay(KEEP_RETRY_MS[attempt - 1])
-                    for (tracks in songs.values) {
-                        if (tracks == null) continue
-                        runCatching { core.cacheTracks(tracks) }
+                    val missing = withContext(Dispatchers.IO) {
+                        all.filter { uri ->
+                            val one = listOf(uri)
+                            core.cachedCount(one) == 0u && core.unavailableCount(one) == 0u
+                        }
                     }
-                    if (runCatching { core.cachedCount(all).toInt() }.getOrDefault(0) >= all.size) break
+                    if (missing.isEmpty()) break
+                    for (uri in missing) {
+                        awaitQuietPlayer()
+                        runCatching { core.cacheTracks(listOf(uri)) }
+                    }
                 }
             }
         }
@@ -265,6 +275,23 @@ class DesktopServices(
                         library.setShuffle(now.second)
                     }
                 }
+        }
+    }
+
+    /**
+     * While a song plays here, let it have the network first: wait out its
+     * loading and its first seconds, then leave a gap between downloads.
+     */
+    private suspend fun awaitQuietPlayer() {
+        while (true) {
+            val s = bridge.local.value
+            if (!s.playing && !s.loading) return
+            val wait = if (s.loading) 2_000L else QUIET_AFTER_START_MS - s.currentPositionMs()
+            if (wait <= 0) {
+                delay(PLAYING_GAP_MS)
+                return
+            }
+            delay(wait.coerceAtMost(5_000))
         }
     }
 
