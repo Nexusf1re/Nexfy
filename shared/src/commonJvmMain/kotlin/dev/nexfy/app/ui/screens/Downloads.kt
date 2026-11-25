@@ -73,7 +73,9 @@ private data class Kept(
     val unavailable: Int,
 )
 
-private fun gb(bytes: Long) = "%.1f GB".format(bytes / 1_000_000_000.0).replace('.', ',')
+// In the units the storage settings choose the limit in, so the same limit
+// reads the same on both pages ("5 GB" there was "5,4 GB" here).
+private fun gb(bytes: Long) = "%.1f GB".format(bytes / (1024.0 * 1024 * 1024)).replace('.', ',')
 
 /** What the page is called: where the songs are kept, phone or computer. */
 @Composable
