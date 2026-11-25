@@ -1,6 +1,8 @@
 package dev.nexfy.app.ui.design
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.layout.LayoutCoordinates
 
 /**
  * The glass lens, as a runtime shader over the blurred backdrop: near the
@@ -66,3 +68,14 @@ interface Lens {
 
 /** Null where the platform has no runtime shaders: Android before 13. */
 expect fun newLens(): Lens?
+
+/**
+ * Where a piece of glass, or the backdrop it bends, stands: measured the
+ * same way for both, so their difference is what lines the two up.
+ *
+ * On a computer that is the window: every pane of glass is drawn in the
+ * one window, and the screen position cost a call into the system on each
+ * frame anything moved, which was a tenth of the window's thread through a
+ * change of tab. On a phone a sheet is a window of its own, so the screen.
+ */
+expect fun LayoutCoordinates.glassOrigin(): Offset

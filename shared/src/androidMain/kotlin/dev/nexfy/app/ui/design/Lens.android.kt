@@ -6,6 +6,9 @@ import android.graphics.Shader
 import android.os.Build
 import androidx.compose.ui.graphics.RenderEffect
 import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.positionOnScreen
 
 private class AgslLens(private val shader: RuntimeShader) : Lens {
     override fun effect(
@@ -35,3 +38,6 @@ private class AgslLens(private val shader: RuntimeShader) : Lens {
 /** RuntimeShader arrived in Android 13; before it the glass is a plain blur. */
 actual fun newLens(): Lens? =
     if (Build.VERSION.SDK_INT >= 33) AgslLens(RuntimeShader(LENS)) else null
+
+/** A sheet is a window of its own here, so glass and backdrop meet on the screen. */
+actual fun LayoutCoordinates.glassOrigin(): Offset = positionOnScreen()

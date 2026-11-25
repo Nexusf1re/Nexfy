@@ -1,6 +1,9 @@
 package dev.nexfy.app.ui.design
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.RenderEffect
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import org.jetbrains.skia.FilterTileMode
 import org.jetbrains.skia.ImageFilter
@@ -39,3 +42,6 @@ private class SkslLens(source: String) : Lens {
 
 /** Every desktop Skia build runs SkSL, so the lens is always on here. */
 actual fun newLens(): Lens? = SkslLens(LENS)
+
+/** Every pane of glass is drawn in the one window; see the declaration. */
+actual fun LayoutCoordinates.glassOrigin(): Offset = positionInWindow()

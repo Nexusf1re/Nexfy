@@ -10,7 +10,6 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.unit.IntSize
 import dev.chrisbanes.haze.HazeInputScale
 import androidx.compose.foundation.background
@@ -20,7 +19,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.CacheDrawScope
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.runtime.State
@@ -60,7 +61,7 @@ class GlassBackdrop {
 val LocalHaze = staticCompositionLocalOf<GlassBackdrop?> { null }
 
 fun Modifier.glassSource(backdrop: GlassBackdrop?) = if (backdrop != null) {
-    onGloballyPositioned { backdrop.origin = it.positionOnScreen() }.hazeSource(backdrop.haze)
+    onGloballyPositioned { backdrop.origin = it.glassOrigin() }.hazeSource(backdrop.haze)
 } else {
     this
 }
@@ -112,13 +113,59 @@ fun Modifier.liquidGlass(shape: Shape, dark: Boolean, level: GlassLevel = GlassL
             drawContent()
         }
     }
-    return blurred.drawWithContent {
-        val outline = shape.createOutline(size, layoutDirection, this)
-        // The sheen goes under what sits on the glass, only the rim over it.
-        glassSheen(outline, dark)
-        drawContent()
-        glassRim(outline, dark)
+    return blurred.drawWithCache {
+        val light = glassLight(shape, dark)
+        onDrawWithContent {
+            // The sheen goes under what sits on the glass, only the rim over it.
+            drawSheen(light)
+            drawContent()
+            drawRim(light)
+        }
     }
+}
+
+/**
+ * The light on a pane of glass, worked out once for its size: the outline
+ * and the three gradients of [glassSheen] and [glassRim]. Built on every
+ * drawing, they were a new outline and three new shaders per pane per
+ * frame, and a shelf of cards is a dozen panes.
+ */
+private class GlassLight(val outline: Outline, val sheen: Brush, val glow: Brush, val rim: Brush, val rimWidth: Float)
+
+private fun CacheDrawScope.glassLight(shape: Shape, dark: Boolean) = GlassLight(
+    outline = shape.createOutline(size, layoutDirection, this),
+    sheen = Brush.verticalGradient(
+        0f to Color.White.copy(if (dark) .10f else .35f),
+        .35f to Color.Transparent,
+        .8f to Color.Transparent,
+        1f to Color.Black.copy(if (dark) .22f else .08f),
+        startY = 0f,
+        endY = size.height,
+    ),
+    glow = Brush.radialGradient(
+        listOf(Color.White.copy(if (dark) .09f else .2f), Color.Transparent),
+        center = Offset(size.width * .3f, 0f),
+        radius = (size.width * .45f).coerceAtLeast(1f),
+    ),
+    rim = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(if (dark) .38f else .9f),
+            Color.White.copy(.06f),
+            Color.White.copy(if (dark) .16f else .4f),
+        ),
+        startY = 0f,
+        endY = size.height,
+    ),
+    rimWidth = 1.dp.toPx(),
+)
+
+private fun DrawScope.drawSheen(light: GlassLight) {
+    drawOutline(light.outline, light.sheen)
+    drawOutline(light.outline, light.glow)
+}
+
+private fun DrawScope.drawRim(light: GlassLight) {
+    drawOutline(light.outline, light.rim, style = Stroke(light.rimWidth))
 }
 
 /** Light on the glass body: brighter towards the top, a soft shade at the bottom, a highlight up left. */
@@ -176,7 +223,7 @@ private fun Modifier.refracted(
     // Plain, not snapshot state: written while drawing.
     val built = remember { arrayOf(Size.Zero) }
     val fallback = (if (dark) Color(0xFF1C1C20) else Color.White).copy(alpha = .9f)
-    return onGloballyPositioned { origin.value = it.positionOnScreen() }.drawWithContent {
+    return onGloballyPositioned { origin.value = it.glassOrigin() }.drawWithContent {
         val source = backdrop.haze.areas.firstOrNull()?.contentLayer
         if (source == null || size.isEmpty()) {
             drawRect(fallback)
@@ -263,10 +310,12 @@ fun Modifier.ambientGlow(background: Color, accent: State<Color>, dark: Boolean)
  * refracted: [tint] over the page, the glass sheen, and the lit rim over
  * the content.
  */
-fun Modifier.glassPane(shape: Shape, tint: Color, dark: Boolean): Modifier = clip(shape).drawWithContent {
-    val outline = shape.createOutline(size, layoutDirection, this)
-    drawOutline(outline, tint)
-    glassSheen(outline, dark)
-    drawContent()
-    glassRim(outline, dark)
+fun Modifier.glassPane(shape: Shape, tint: Color, dark: Boolean): Modifier = clip(shape).drawWithCache {
+    val light = glassLight(shape, dark)
+    onDrawWithContent {
+        drawOutline(light.outline, tint)
+        drawSheen(light)
+        drawContent()
+        drawRim(light)
+    }
 }
