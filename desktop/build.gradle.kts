@@ -98,6 +98,8 @@ compose.desktop {
         jvmArgs("-XX:+AutoCreateSharedArchive", "-XX:SharedArchiveFile=\$APPDIR/nexfy.jsa")
         // `gradlew :desktop:run -Pperf`: the window times its own frames (PerfTour.kt).
         if (project.hasProperty("perf")) jvmArgs("-Dnexfy.perf=true")
+        // `-PperfStacks` with it: where the window's thread spends each step, appended to the report.
+        if (project.hasProperty("perfStacks")) jvmArgs("-Dnexfy.perf.stacks=true")
         // `-PperfJfr=<file>`: a Flight Recorder profile of the same run, to see where the frames go.
         (findProperty("perfJfr") as String?)?.let { jvmArgs("-XX:StartFlightRecording=duration=120s,settings=profile,filename=$it") }
     }

@@ -10,6 +10,7 @@ import java.lang.management.ManagementFactory
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.system.exitProcess
 
 /**
@@ -25,6 +26,86 @@ import kotlin.system.exitProcess
  */
 internal object PerfTour {
     val enabled: Boolean = System.getProperty("nexfy.perf") == "true"
+
+    /** With `-Dnexfy.perf.stacks=true`, the window's thread is sampled too (see [EdtSampler]). */
+    val stacks: Boolean = System.getProperty("nexfy.perf.stacks") == "true"
+}
+
+/**
+ * Where the window's thread spends a step: its stack read every millisecond
+ * while the step runs, and the frames counted. Flight Recorder barely samples
+ * this thread on Windows, and the frames are composed, measured and recorded
+ * on it, so this is the profile that names the code a missed frame ran.
+ *
+ * Reading a stack stops the thread at a safepoint, so a sampled run's frame
+ * times are a little worse than a plain one's: it is for finding, not for
+ * the before-and-after numbers.
+ */
+private class EdtSampler(private val edt: Thread) {
+    @Volatile var step: String? = null
+    private val busy = HashMap<String, Int>()
+    private val inclusive = HashMap<String, HashMap<String, Int>>()
+    private val leaves = HashMap<String, HashMap<String, Int>>()
+    private val chains = HashMap<String, HashMap<String, Int>>()
+
+    init {
+        Thread({
+            while (true) {
+                val name = step
+                if (name != null) take(name, edt.stackTrace)
+                // Spun rather than slept: Windows wakes a sleeping thread on
+                // its 15.6 ms tick, which left a missed frame a sample or two.
+                val until = System.nanoTime() + 1_000_000
+                while (System.nanoTime() < until) Thread.onSpinWait()
+            }
+        }, "perf-edt-sampler").apply { isDaemon = true }.start()
+    }
+
+    private fun take(name: String, stack: Array<StackTraceElement>) {
+        val top = stack.firstOrNull() ?: return
+        // Waiting for the next event or frame is not work.
+        if (top.methodName == "park" || top.methodName == "wait" || top.methodName == "wait0" ||
+            top.className.endsWith("EventQueue") && top.methodName == "getNextEvent"
+        ) return
+        synchronized(this) {
+            busy.merge(name, 1, Int::plus)
+            val seen = HashSet<String>()
+            val incl = inclusive.getOrPut(name) { HashMap() }
+            var leaf: String? = null
+            for (frame in stack) {
+                val app = frame.className.startsWith("dev.nexfy")
+                val key = if (app) "${frame.className.substringAfterLast('.')}.${frame.methodName}:${frame.lineNumber}"
+                else "${frame.className}.${frame.methodName}"
+                if (app && leaf == null) leaf = key
+                if (seen.add(key)) incl.merge(key, 1, Int::plus)
+            }
+            leaves.getOrPut(name) { HashMap() }.merge(leaf ?: "${top.className}.${top.methodName}", 1, Int::plus)
+            // What ran (the top few frames) and which of the app's code it ran
+            // under (its innermost frames): who asked for the work, not only what it was.
+            fun StackTraceElement.short() = "${className.substringAfterLast('.')}.$methodName:$lineNumber"
+            val under = stack.filter { it.className.startsWith("dev.nexfy") }.take(6).map { it.short() }
+            val chain = (stack.take(2).map { it.short() } + "..." + under).joinToString("\n        ")
+            chains.getOrPut(name) { HashMap() }.merge(chain, 1, Int::plus)
+        }
+    }
+
+    fun report(out: StringBuilder) = synchronized(this) {
+        for ((name, total) in busy) {
+            out.appendLine()
+            out.appendLine("== $name: $total samples (about a millisecond each) busy on the window's thread")
+            out.appendLine("-- innermost app frame")
+            leaves[name].orEmpty().entries.sortedByDescending { it.value }.take(14)
+                .forEach { out.appendLine("%5d  %s".format(it.value, it.key)) }
+            out.appendLine("-- hottest stacks")
+            chains[name].orEmpty().entries.sortedByDescending { it.value }.take(10)
+                .forEach { out.appendLine("%5d  %s".format(it.value, it.key)) }
+            out.appendLine("-- inclusive")
+            inclusive[name].orEmpty().entries.sortedByDescending { it.value }
+                .filter { (k, _) -> k.contains("nexfy") || k.contains("compose.ui") || k.contains("compose.foundation") || k.contains("skia") }
+                .take(40)
+                .forEach { out.appendLine("%5d  %s".format(it.value, it.key)) }
+        }
+    }
 }
 
 /** What the tour may move in the shell. */
@@ -34,6 +115,9 @@ internal class PerfControls(
     /** Tocando agora reopened on its words. */
     val setLyrics: (Boolean) -> Unit,
 )
+
+/** The longest a step may take before the tour moves on without it. */
+private const val STEP_LIMIT_MS = 30_000L
 
 /** What the tour searches for: an artist anyone's catalogue has. */
 private const val PERF_QUERY = "daft punk"
@@ -46,6 +130,8 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
         val refresh = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.displayMode.refreshRate
             .takeIf { it > 0 } ?: 60
         val report = StringBuilder()
+        // The composition runs on the window's thread, so this is it.
+        val sampler = if (PerfTour.stacks) EdtSampler(Thread.currentThread()) else null
         report.appendLine("Nexfy desktop, frame timing. Screen ${refresh} Hz (a frame every ${"%.1f".format(1000.0 / refresh)} ms)")
         report.appendLine("step                          frames   fps   p50 ms  p95 ms  p99 ms  max ms  missed  cpu%  1st ms")
         // Let the first page and its covers settle before anything is timed.
@@ -60,6 +146,8 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
             val gaps = ArrayList<Double>(2048)
             val cpu0 = processCpuNanos()
             val wall0 = System.nanoTime()
+            sampler?.step = name
+            println("perf: $name")
             coroutineScope {
                 val clock = launch {
                     var last = -1L
@@ -70,9 +158,12 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
                         }
                     }
                 }
-                run()
+                // A step that never ends (a window minimised stops the frames a
+                // scroll waits for) is reported as such rather than hanging the run.
+                if (withTimeoutOrNull(STEP_LIMIT_MS) { run() } == null) report.appendLine("$name: did not finish in ${STEP_LIMIT_MS / 1000}s")
                 clock.cancel()
             }
+            sampler?.step = null
             val wall = System.nanoTime() - wall0
             val cpu = (processCpuNanos() - cpu0).toDouble() / wall * 100 / Runtime.getRuntime().availableProcessors()
             report.appendLine(line(name, gaps, refresh, cpu))
@@ -237,6 +328,7 @@ internal fun PerfTourRunner(actions: AppActions, controls: PerfControls) {
         report.appendLine(if (playedAll) "com música tocando: ${bridge.state.value.track?.title}" else "sem música tocando")
         val heap = Runtime.getRuntime().let { (it.totalMemory() - it.freeMemory()) / (1024 * 1024) }
         report.appendLine("heap em uso no fim: $heap MB")
+        sampler?.report(report)
         val text = report.toString()
         println(text)
         runCatching { nexfyDataDir().resolve("perf.txt").writeText(text) }
