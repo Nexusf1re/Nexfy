@@ -17,6 +17,12 @@ import uniffi.nexfy_core.RepeatMode
 /** Long enough for a reconnect, short enough that a dead network never leaves a tap hanging. */
 private const val COMMAND_TIMEOUT_MS = 12_000L
 
+/**
+ * A play with songs on the phone to fall back on waits less for a weak
+ * network: past this, what is downloaded plays instead.
+ */
+private const val FALLBACK_TIMEOUT_MS = 7_000L
+
 /** How long a song may load before the wait is explained. */
 private const val LOADING_PATIENCE_MS = 8_000L
 
@@ -41,17 +47,28 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
     /**
      * Run a command off the main thread. On failure [undo] takes back what
      * was shown ahead and the refusal is told in words a person reads.
+     * With a [fallback] (play the songs on the phone), a weak or dead
+     * connection plays those instead of failing; it returns whether any did.
      */
-    fun run(undo: () -> Unit = {}, connect: Boolean = true, action: suspend () -> Unit) {
+    fun run(
+        undo: () -> Unit = {},
+        connect: Boolean = true,
+        fallback: (suspend () -> Boolean)? = null,
+        action: suspend () -> Unit,
+    ) {
         scope.launch(Dispatchers.IO) {
             try {
-                withTimeout(COMMAND_TIMEOUT_MS) {
+                withTimeout(if (fallback != null) FALLBACK_TIMEOUT_MS else COMMAND_TIMEOUT_MS) {
                     // The widget can wake the app with no session yet. Offline
                     // there is none to start: the songs on the phone play without.
                     if (connect && online() && !core.isConnected()) core.restoreSession()
                     action()
                 }
             } catch (e: Exception) {
+                if (fallback != null && runCatching { fallback() }.getOrDefault(false)) {
+                    app.edits.tell("Conexão fraca: tocando o que está no aparelho")
+                    return@launch
+                }
                 undo()
                 refuse(e)
             }

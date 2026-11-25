@@ -302,8 +302,10 @@ class AppActions(
             )
         }
         // Shuffled, the start is the random song the caller picked (a new one
-        // each time) and librespot shuffles the rest with a fresh seed.
-        services.commands.run(undo) {
+        // each time) and librespot shuffles the rest with a fresh seed. A
+        // network too weak to start it plays the list's songs on the phone.
+        val onPhone: suspend () -> Boolean = { core.playOffline(tracks.map { it.uri }, start.toUInt(), shuffle) > 0u }
+        services.commands.run(undo, fallback = onPhone) {
             if (contextUri != null) {
                 core.playContext(contextUri, tracks[start].uri, shuffle)
             } else {
