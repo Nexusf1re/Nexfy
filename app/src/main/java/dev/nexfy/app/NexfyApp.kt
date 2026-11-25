@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -49,6 +50,11 @@ import uniffi.nexfy_core.NexfyCore
 private const val WARM_EVERY_MS = 86_400_000L
 private const val WARM_PER_DAY = 12
 private const val WARM_MAX_TRACKS = 200
+
+/** While a song plays, downloads wait this far into it, and this long between each other. */
+private const val QUIET_AFTER_START_MS = 15_000L
+private const val PLAYING_GAP_MS = 3_000L
+private const val RETRY_PASS_MS = 20 * 60_000L
 
 class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -222,11 +228,13 @@ class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
                 if (next.isNotEmpty() && awaitConnected()) runCatching { core.cacheTracks(next) }
             }
         }
+        // Kept playlists and albums: every song still missing comes down, one
+        // at a time, under a foreground service with its progress, so leaving
+        // the screen no longer freezes it part of the way. Also while a song
+        // plays, paced around it: never during its first seconds, when its own
+        // stream is still coming in.
         scope.launch {
-            // Whole collections only while nothing plays here: downloading them
-            // alongside a song starved its stream (the player gave up mid song).
-            val playing = bridge.local.map { it.playing }.distinctUntilChanged()
-            combine(library.kept, downloadable, playing) { kept, wifi, busy -> if (wifi && !busy) kept else emptySet() }.collectLatest { kept ->
+            combine(library.kept, downloadable) { kept, ok -> if (ok) kept else emptySet() }.collectLatest { kept ->
                 if (!awaitConnected()) return@collectLatest
                 // Every kept song first, so the audio cache never makes room by
                 // dropping one (and ones no longer kept can go again).
@@ -235,11 +243,34 @@ class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
                 }
                 if (songs.values.none { it == null }) core.setKeptSongs(songs.values.flatMap { it.orEmpty() }.distinct())
                 if (kept.isEmpty()) return@collectLatest
-                delay(10_000)
-                for ((key, tracks) in songs) {
-                    if (tracks == null) continue
-                    runCatching { core.cacheTracks(tracks) }
-                        .onFailure { Log.d("Nexfy", "keep $key: ${it.message}") }
+                // A pass leaves what failed (a dropped connection, Spotify
+                // refusing a burst) for the next one, a while later.
+                while (true) {
+                    val missing = withContext(Dispatchers.IO) {
+                        songs.values.flatMap { it.orEmpty() }.distinct().filter { uri ->
+                            val one = listOf(uri)
+                            core.cachedCount(one) == 0u && core.unavailableCount(one) == 0u
+                        }
+                    }
+                    if (missing.isEmpty()) return@collectLatest
+                    delay(3_000)
+                    DownloadService.during(this@NexfyApp) { report ->
+                        var failures = 0
+                        missing.forEachIndexed { done, uri ->
+                            report(KeepProgress(done, missing.size))
+                            awaitQuietPlayer()
+                            val result = runCatching { core.cacheTracks(listOf(uri)) }
+                            if (result.isFailure) {
+                                Log.d("Nexfy", "keep $uri: ${result.exceptionOrNull()?.message}")
+                                // No session to download with: try again on the next pass.
+                                if (++failures >= 5) return@during
+                                delay(10_000)
+                            } else {
+                                failures = 0
+                            }
+                        }
+                    }
+                    delay(RETRY_PASS_MS)
                 }
             }
         }
@@ -359,6 +390,26 @@ class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
             connectivity.registerDefaultNetworkCallback(callback)
             awaitClose { connectivity.unregisterNetworkCallback(callback) }
         }.distinctUntilChanged().stateIn(scope, SharingStarted.Eagerly, false)
+    }
+
+    /**
+     * While a song plays here, let it have the network first: wait out its
+     * loading and its first seconds, then leave a gap between downloads.
+     */
+    private suspend fun awaitQuietPlayer() {
+        while (true) {
+            val s = bridge.local.value
+            if (!s.playing && !s.loading) return
+            val wait = when {
+                s.loading -> 2_000L
+                else -> QUIET_AFTER_START_MS - s.currentPositionMs()
+            }
+            if (wait <= 0) {
+                delay(PLAYING_GAP_MS)
+                return
+            }
+            delay(wait.coerceAtMost(5_000))
+        }
     }
 
     /** Wait for the Spotify session (restored at start); false if it never comes. */
