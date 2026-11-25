@@ -256,7 +256,13 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
         return bridge.optimistic { it.copy(playing = playing, positionMs = it.currentPositionMs(now), positionAt = now) }
     }
 
+    /** A skip forward with no song after: the current one goes on, and that is said. */
+    fun tellNothingNext() = app.edits.tell("Nada a seguir na fila")
+
     fun next() {
+        // The songs after this one, before the skip moves them: on a weak
+        // network the next of them on the phone plays.
+        val after = bridge.local.value.queue.next.map { it.uri }
         val undo = bridge.preview(forward = true)
         if (remote != null) return remote(RemoteCommand.Next)
         run(undo) { core.next() }

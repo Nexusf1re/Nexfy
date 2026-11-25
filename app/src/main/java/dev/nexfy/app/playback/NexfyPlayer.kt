@@ -268,6 +268,12 @@ class NexfyPlayer(
             }
         }
         val (entries, current) = entries()
+        // Next with nothing after: Media3 turns it into "this song, from its
+        // default position", which restarted the song. It goes on instead.
+        val nextAsked = seekCommand == COMMAND_SEEK_TO_NEXT || seekCommand == COMMAND_SEEK_TO_NEXT_MEDIA_ITEM
+        if (nextAsked && (mediaItemIndex == C.INDEX_UNSET || mediaItemIndex == current)) {
+            return runCore { commands.tellNothingNext() }
+        }
         return runCore {
             when {
                 mediaItemIndex == C.INDEX_UNSET || mediaItemIndex == current -> core.seek(target)
