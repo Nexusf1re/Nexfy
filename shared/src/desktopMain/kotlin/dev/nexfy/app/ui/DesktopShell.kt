@@ -281,6 +281,8 @@ fun NexfyDesktop(services: NexfyServices, openBrowser: (String) -> Unit, frame: 
             )
         },
     )
+    // Playing a kept list with the network gone, only with -Dnexfy.offlineCheck (see OfflineCheck).
+    OfflineCheckRunner(actions)
     // The keyboard, for as long as this shell is up: the media keys, and the
     // shortcuts every desktop player answers (listed in the guide).
     DisposableEffect(actions) {

@@ -100,6 +100,8 @@ compose.desktop {
         if (project.hasProperty("perf")) jvmArgs("-Dnexfy.perf=true")
         // `-PperfStacks` with it: where the window's thread spends each step, appended to the report.
         if (project.hasProperty("perfStacks")) jvmArgs("-Dnexfy.perf.stacks=true")
+        // `-PofflineCheck=pl:<id>`: plays that kept list once the network goes, and logs it (OfflineCheck.kt).
+        (findProperty("offlineCheck") as String?)?.let { jvmArgs("-Dnexfy.offlineCheck=$it") }
         // `-PperfJfr=<file>`: a Flight Recorder profile of the same run, to see where the frames go.
         (findProperty("perfJfr") as String?)?.let { jvmArgs("-XX:StartFlightRecording=duration=120s,settings=profile,filename=$it") }
     }

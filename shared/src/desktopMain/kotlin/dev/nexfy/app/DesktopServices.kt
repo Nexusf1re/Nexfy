@@ -27,6 +27,9 @@ private const val WARM_EVERY_MS = 86_400_000L
 private const val WARM_PER_DAY = 12
 private const val WARM_MAX_TRACKS = 200
 
+/** The pauses before kept songs still missing are asked for again; then it waits for the next start or network. */
+private val KEEP_RETRY_MS = listOf(60_000L, 5 * 60_000L, 20 * 60_000L, 60 * 60_000L)
+
 /** How often the route to the internet is looked at; the look costs no traffic. */
 private const val NETWORK_CHECK_MS = 3_000L
 
@@ -216,9 +219,17 @@ class DesktopServices(
                 if (kept.isEmpty()) return@collectLatest
                 // A moment for the page that kept it, or the start, to settle.
                 delay(3_000)
-                for (tracks in songs.values) {
-                    if (tracks == null) continue
-                    runCatching { core.cacheTracks(tracks) }
+                val all = songs.values.flatMap { it.orEmpty() }.distinct()
+                // A song can be refused for a while (Spotify turns down audio
+                // keys asked in a burst), so what is still missing is asked
+                // again later, a few times, further apart each time.
+                for (attempt in 0..KEEP_RETRY_MS.size) {
+                    if (attempt > 0) delay(KEEP_RETRY_MS[attempt - 1])
+                    for (tracks in songs.values) {
+                        if (tracks == null) continue
+                        runCatching { core.cacheTracks(tracks) }
+                    }
+                    if (runCatching { core.cachedCount(all).toInt() }.getOrDefault(0) >= all.size) break
                 }
             }
         }
