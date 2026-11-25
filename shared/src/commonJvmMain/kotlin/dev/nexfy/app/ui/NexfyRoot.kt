@@ -312,7 +312,7 @@ class AppActions(
                 core.playTracks(tracks.map { it.uri }, start.toUInt(), shuffle)
             }
         }
-        services.commands.watchLoading()
+        services.commands.watchLoading(onPhone)
     }
 
     /**

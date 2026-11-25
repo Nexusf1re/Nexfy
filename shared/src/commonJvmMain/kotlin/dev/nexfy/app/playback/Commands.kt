@@ -140,17 +140,22 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
     private var loadingWatch: Job? = null
 
     /**
-     * A skip the core accepts can still hang: with no network the song
-     * never arrives and the player waits without an error. Say so once it
-     * has loaded too long; it still starts if the network comes back.
+     * A play or skip the core accepts can still hang: on a network too weak
+     * to carry it the song never arrives and the player waits without an
+     * error. With a [fallback] (the songs on the phone) that plays instead
+     * once it has loaded too long; without, the wait is explained, and the
+     * song still starts if the network comes back.
      */
-    fun watchLoading() {
+    fun watchLoading(fallback: (suspend () -> Boolean)? = null) {
         loadingWatch?.cancel()
-        loadingWatch = scope.launch {
-            delay(LOADING_PATIENCE_MS)
-            if (remote == null && bridge.local.value.loading) {
-                refuse(if (online()) "A música está demorando para carregar" else "Sem conexão: essa música não está baixada")
+        loadingWatch = scope.launch(Dispatchers.IO) {
+            delay(if (fallback != null) FALLBACK_TIMEOUT_MS else LOADING_PATIENCE_MS)
+            if (remote != null || !bridge.local.value.loading) return@launch
+            if (fallback != null && runCatching { fallback() }.getOrDefault(false)) {
+                app.edits.tell("Conexão fraca: tocando o que está no aparelho")
+                return@launch
             }
+            refuse(if (online()) "A música está demorando para carregar" else "Sem conexão: essa música não está baixada")
         }
     }
 
@@ -266,8 +271,12 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
         val undo = bridge.preview(forward = true)
         if (remote != null) return remote(RemoteCommand.Next)
         run(undo) { core.next() }
-        watchLoading()
+        watchLoading(onPhone(after))
     }
+
+    /** Play the first of [uris] on the phone, and those after it; null with none to try. */
+    private fun onPhone(uris: List<String>): (suspend () -> Boolean)? =
+        uris.takeIf { it.isNotEmpty() }?.let { { core.playOffline(it, 0u, false) > 0u } }
 
     fun previous() {
         val undo = bridge.preview(forward = false)
