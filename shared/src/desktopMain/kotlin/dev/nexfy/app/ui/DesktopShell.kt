@@ -147,6 +147,7 @@ import dev.nexfy.app.ui.design.GlassBackdrop
 import dev.nexfy.app.ui.design.artInk
 import dev.nexfy.app.ui.design.GlassLevel
 import dev.nexfy.app.ui.design.LocalBottomSpace
+import dev.nexfy.app.ui.design.pointerFeedback
 import dev.nexfy.app.ui.design.LocalHaze
 import dev.nexfy.app.ui.design.LocalPlaying
 import dev.nexfy.app.ui.design.LocalPointer
@@ -782,13 +783,15 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Bo
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
     val accent = accentColor()
-    val tint = if (selected) accent else c.onSurfaceVariant
+    // The light moves from the section left to the one opened instead of
+    // jumping, in the same breath as the page changing beside it.
+    val tint by animateColorAsState(if (selected) accent else c.onSurfaceVariant, Motion.standard(Motion.Short), label = "navTint")
+    val words by animateColorAsState(if (selected) c.onSurface else c.onSurfaceVariant, Motion.standard(Motion.Short), label = "navWords")
     Hint(label, shown = rail) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(if (selected) accent.copy(.12f) else Color.Transparent)
-                .clickable { haptics.tick(); onClick() }
+                .pointerFeedback(12.dp, ground = if (selected) accent.copy(.12f) else Color.Transparent, lift = c.onSurface.copy(.05f))
+                .clickable(null, null) { haptics.tick(); onClick() }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
@@ -797,7 +800,7 @@ private fun NavRow(icon: ImageVector, label: String, selected: Boolean, rail: Bo
             if (!rail) {
                 Text(
                     label, Modifier.padding(start = 14.dp),
-                    color = if (selected) c.onSurface else c.onSurfaceVariant,
+                    color = words,
                     fontSize = 15.sp,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 )
@@ -858,6 +861,8 @@ private fun LibraryList(actions: AppActions, rail: Boolean = false) {
     val pinned by library.pinned.collectAsState()
     val plays by library.plays.collectAsState()
     val kept by library.kept.collectAsState()
+    // The page on show, so its row in the column says it is the one open.
+    val open = actions.nav.screen.route
     // What is played most stands at the top, with anything pinned above it:
     // the order the library page and the home page already use.
     val scores = playScores(plays, recent.state.value.orEmpty())
@@ -879,25 +884,25 @@ private fun LibraryList(actions: AppActions, rail: Boolean = false) {
             }
         }
         item {
-            ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite, rail) { actions.open(Route.Liked) }
+            ShelfRow(null, "Curtidas", "Músicas", Icons.Rounded.Favorite, rail, open = open == Route.Liked) { actions.open(Route.Liked) }
         }
         // What plays with no connection, once anything is kept: the phone puts
         // it atop its library page, the window beside the likes.
         if (kept.isNotEmpty()) {
             item(key = "downloads") {
                 val lists = if (kept.size == 1) "1 lista" else "${kept.size} listas"
-                ShelfRow(null, "Neste computador", "$lists sem internet", Icons.Rounded.DownloadDone, rail) {
+                ShelfRow(null, "Neste computador", "$lists sem internet", Icons.Rounded.DownloadDone, rail, open = open == Route.Downloads) {
                     actions.open(Route.Downloads)
                 }
             }
         }
         items(orderedPlaylists.orEmpty(), key = { "pl:${it.id}" }) { p ->
-            ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}", rail = rail) {
+            ShelfRow(p.imageUrl, p.name, "Playlist · ${p.owner}", rail = rail, open = open == Route.Playlist(p.id)) {
                 actions.open(Route.Playlist(p.id), Peek(p.name, p.owner, p.imageUrl))
             }
         }
         items(orderedAlbums.orEmpty(), key = { "al:${it.id}" }) { a ->
-            ShelfRow(a.imageUrl, a.name, "Álbum · ${a.artists}", rail = rail) {
+            ShelfRow(a.imageUrl, a.name, "Álbum · ${a.artists}", rail = rail, open = open == Route.Album(a.id)) {
                 actions.open(Route.Album(a.id), Peek(a.name, a.artists, a.imageUrl))
             }
         }
@@ -912,10 +917,12 @@ private fun ShelfRow(
     icon: ImageVector? = null,
     rail: Boolean = false,
     place: Int? = null,
+    /** This row's list is the page on show. */
+    open: Boolean = false,
     onClick: () -> Unit,
 ) {
     // Folded to its cover, the row says its name under the pointer.
-    Hint(title, shown = rail) { ShelfRowContent(art, title, subtitle, icon, rail, place, onClick) }
+    Hint(title, shown = rail) { ShelfRowContent(art, title, subtitle, icon, rail, place, open, onClick) }
 }
 
 @Composable
@@ -926,13 +933,17 @@ private fun ShelfRowContent(
     icon: ImageVector?,
     rail: Boolean,
     place: Int?,
+    open: Boolean,
     onClick: () -> Unit,
 ) {
     val c = MaterialTheme.colorScheme
     val haptics = rememberHaptics()
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = if (rail) 3.dp else 1.dp)
-            .clip(RoundedCornerShape(12.dp)).clickable { haptics.tick(); onClick() }
+            // Lit while its list is open, lifted under the pointer, both
+            // drawn by one node that costs a row nothing until either happens.
+            .pointerFeedback(12.dp, ground = if (open) accentColor().copy(.12f) else Color.Transparent, lift = c.onSurface.copy(.05f))
+            .clickable(null, null) { haptics.tick(); onClick() }
             .padding(horizontal = if (rail) 6.dp else 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = if (rail) Arrangement.Center else Arrangement.Start,
