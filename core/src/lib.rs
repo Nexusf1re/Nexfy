@@ -1332,6 +1332,14 @@ impl NexfyCore {
             play.skip(false, true);
             return Ok(());
         }
+        // Nothing after this song: Spirc would stop and go back to the
+        // context's first song, which looked like a skip undone.
+        {
+            let queue = self.inner.queue.lock().unwrap();
+            if queue.current.is_some() && queue.next.is_empty() && queue.repeat == RepeatMode::Off {
+                return Err(CoreError::Playback("Nada a seguir na fila".into()));
+            }
+        }
         self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.prev())
     }
@@ -2191,6 +2199,11 @@ const QUEUE_AHEAD: usize = 100;
 const PAUSED_LONG: std::time::Duration = std::time::Duration::from_secs(9 * 60);
 const QUEUE_BEHIND: usize = 20;
 
+/// A song Spirc can move to: not a placeholder, not one it marked unplayable.
+fn playable_entry(track: &QueueTrack) -> bool {
+    !track.uri.starts_with("spotify:delimiter") && track.provider != "unavailable"
+}
+
 fn entry(track: QueueTrack) -> QueueEntry {
     QueueEntry {
         // Spotify's own queue ("Na fila") reports this provider.
@@ -2291,12 +2304,17 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                 // With repeat on, librespot fills the queue by going round the
                 // context again: stop where it comes back to this song, so a lone
                 // song shows alone instead of a hundred copies of itself.
+                // Spirc's list holds placeholders (the end of a context) and songs
+                // it will skip: shown, the screens offered a next song that the
+                // skip never reached, and the current one came back.
                 queue.next = next_tracks
                     .into_iter()
+                    .filter(playable_entry)
                     .take(QUEUE_AHEAD)
                     .map(entry)
                     .take_while(|next| Some(&next.uri) != current_uri.as_ref())
                     .collect();
+                let prev_tracks: Vec<QueueTrack> = prev_tracks.into_iter().filter(playable_entry).collect();
                 let skip = prev_tracks.len().saturating_sub(QUEUE_BEHIND);
                 queue.previous = prev_tracks.into_iter().skip(skip).map(entry).collect();
             }),

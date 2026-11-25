@@ -298,8 +298,9 @@ class NexfyApp : Application(), SingletonImageLoader.Factory, NexfyServices {
                 .distinctUntilChanged()
                 .collect { (next, previous) ->
                     val uris = listOfNotNull(next, previous)
-                    if (uris.isEmpty()) return@collect
-                    runCatching { core.tracksInfo(uris) }.onSuccess { tracks ->
+                    // None, or unknown: a stale neighbour would preview the wrong song.
+                    if (uris.isEmpty()) return@collect bridge.setNeighbours(null, null)
+                    runCatching { core.tracksInfo(uris) }.onFailure { bridge.setNeighbours(null, null) }.onSuccess { tracks ->
                         bridge.setNeighbours(tracks.find { it.uri == next }, tracks.find { it.uri == previous })
                         // Their covers too, so a skip shows the new art at once.
                         val images = SingletonImageLoader.get(this@NexfyApp)
