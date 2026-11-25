@@ -478,8 +478,29 @@ impl Sink for EqSink {
     fn write(&mut self, mut packet: AudioPacket, converter: &mut Converter) -> SinkResult<()> {
         if let AudioPacket::Samples(samples) = &mut packet {
             self.dsp.process(samples);
+            if !samples.is_empty() {
+                LAST_AUDIO_MS.store(clock_ms(), std::sync::atomic::Ordering::Relaxed);
+            }
         }
         self.inner.write(packet, converter)
+    }
+}
+
+/// When audio last went to the output, on [clock_ms]'s clock: a player that
+/// says it plays but writes nothing is heard as silence, and this tells it.
+static LAST_AUDIO_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn clock_ms() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    // From 1, so a write in the very first millisecond still counts as one.
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// How long since audio last went to the output; None if it never has.
+pub fn audio_idle_ms() -> Option<u64> {
+    match LAST_AUDIO_MS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        last => Some(clock_ms().saturating_sub(last)),
     }
 }
 

@@ -327,12 +327,16 @@ class PlaybackService : MediaSessionService() {
     private fun requestFocus() {
         if (hasFocus) return
         hasFocus = audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        // Granted at once, no GAIN callback comes: a duck left from before
+        // would keep the music quiet for good.
+        if (hasFocus) (application as NexfyApp).core.setDucked(false)
     }
 
     private fun abandonFocus() {
         if (!hasFocus) return
         audioManager.abandonAudioFocusRequest(focusRequest)
         hasFocus = false
+        (application as NexfyApp).core.setDucked(false)
     }
 
     private fun onAudioFocusChange(change: Int) {

@@ -29,6 +29,10 @@ private const val LOADING_PATIENCE_MS = 8_000L
 /** Songs after the current one loaded with it, when it has to be loaded again without its playlist. */
 private const val RELOAD_AHEAD = 100
 
+/** Silence this long while the player says it plays is a dead stream, checked this often. */
+private const val SILENCE_MS = 6_000L
+private const val SILENCE_CHECK_MS = 2_000L
+
 /** How long a resume may take to sound, a renewed session included, before the button goes back. */
 private const val PLAYING_PATIENCE_MS = 10_000L
 
@@ -40,6 +44,48 @@ private const val PLAYING_PATIENCE_MS = 10_000L
 class Commands(private val app: NexfyServices, private val scope: CoroutineScope) {
     private val core get() = app.core
     private val bridge get() = app.bridge
+
+    init {
+        watchSilence()
+    }
+
+    /**
+     * The player can say it plays while nothing comes out: its stream died
+     * with a session, or stalled on a network that changed. The clock then
+     * ran in silence until another song was tapped. Silence that long loads
+     * the song again where it was, once a song; a second time it is said.
+     */
+    private fun watchSilence() = scope.launch(Dispatchers.IO) {
+        var reloaded: String? = null
+        var told: String? = null
+        while (true) {
+            delay(SILENCE_CHECK_MS)
+            val s = bridge.local.value
+            val track = s.track ?: continue
+            if (remote != null || !s.playing || s.loading || !core.isPlaying()) continue
+            // Since the player said it plays: none of its silence before counts.
+            val since = elapsedRealtimeMs() - s.positionAt
+            if (since < SILENCE_MS || core.audioIdleMs() < SILENCE_MS.toULong()) continue
+            when (track.uri) {
+                told -> continue
+                reloaded -> {
+                    told = track.uri
+                    refuse(if (online()) "Sem som: a conexão não deu conta. Tente de novo" else "Sem conexão: essa música não está baixada")
+                    showPlaying(false)
+                    runCatching { core.pause() }
+                }
+                else -> {
+                    reloaded = track.uri
+                    val position = s.currentPositionMs().coerceAtLeast(0)
+                    runCatching {
+                        withTimeout(COMMAND_TIMEOUT_MS) {
+                            core.reloadFrom(track.uri, s.queue.contextUri, s.queue.next.take(RELOAD_AHEAD).map { it.uri }, position.toUInt(), s.queue.shuffle)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /** The device playing elsewhere, if any: commands go to it. */
     val remote get() = bridge.state.value.remote
@@ -163,7 +209,6 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
         }
         val undo = showPlaying(!playing)
         run(undo) { if (playing) core.pause() else resume() }
-        if (!playing) watchPlaying()
     }
 
     /**
@@ -172,6 +217,8 @@ class Commands(private val app: NexfyServices, private val scope: CoroutineScope
      * playback with the server's copy, which can lack the song).
      */
     suspend fun resume() {
+        // From any button (the notification, a headset, a watch): checked it sounds.
+        watchPlaying()
         val s = bridge.local.value
         val track = s.track ?: return core.resume()
         val position = if (s.stopped) 0 else s.currentPositionMs().coerceAtLeast(0)

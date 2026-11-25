@@ -260,6 +260,10 @@ struct Inner {
     cache: std::sync::OnceLock<Cache>,
     /// Songs on the phone, playing with no connection.
     offline_play: Mutex<Option<Arc<offline_play::OfflinePlay>>>,
+    /// The player holds a song from a session replaced without carrying it
+    /// over: its stream is gone and the new Connect device ignores it, so
+    /// playing it again means loading it again.
+    orphaned: AtomicBool,
 }
 
 #[derive(uniffi::Object)]
@@ -287,6 +291,7 @@ impl NexfyCore {
                 metered: AtomicBool::new(false),
                 cache: std::sync::OnceLock::new(),
                 offline_play: Mutex::new(None),
+                orphaned: AtomicBool::new(false),
                 cache_dir,
                 device_name,
                 pending_login: Mutex::new(None),
@@ -1243,6 +1248,11 @@ impl NexfyCore {
                     return self.inner.with_spirc(|spirc| spirc.play());
                 }
             }
+            if self.inner.orphaned.load(Ordering::Relaxed) {
+                // The song is left over from a session that is gone: playing
+                // it there is silence. Only loading it again sounds.
+                return Err(CoreError::Playback("Toque a música de novo".into()));
+            }
             return self.inner.with_player(|player| player.play());
         }
         self.inner.ensure_session().await?;
@@ -1268,7 +1278,10 @@ impl NexfyCore {
         if self.inner.offline_play().is_some() {
             return self.resume().await;
         }
-        if self.inner.loaded.load(Ordering::Relaxed) {
+        // A song left over from a session renewed without it: its stream died
+        // with that session, so it loads again below.
+        let orphaned = self.inner.orphaned.load(Ordering::Relaxed);
+        if self.inner.loaded.load(Ordering::Relaxed) && !orphaned {
             // Songs on the phone play with no session, and a short pause
             // outlives none: the player goes on where it stopped.
             if self.inner.web.is_offline() || !self.inner.paused_long() {
@@ -1289,6 +1302,35 @@ impl NexfyCore {
                 }
             }
         }
+        self.load_again(track_uri, context_uri, next_uris, position_ms, shuffle).await
+    }
+
+    /// Load the song shown again where it is, whatever the player holds: it
+    /// says it plays but no sound comes out (a stream that died under it).
+    pub async fn reload_from(
+        &self,
+        track_uri: String,
+        context_uri: Option<String>,
+        next_uris: Vec<String>,
+        position_ms: u32,
+        shuffle: bool,
+    ) -> Result<(), CoreError> {
+        if self.inner.offline_play().is_some() {
+            return self.resume().await;
+        }
+        self.load_again(track_uri, context_uri, next_uris, position_ms, shuffle).await
+    }
+}
+
+impl NexfyCore {
+    async fn load_again(
+        &self,
+        track_uri: String,
+        context_uri: Option<String>,
+        next_uris: Vec<String>,
+        position_ms: u32,
+        shuffle: bool,
+    ) -> Result<(), CoreError> {
         log::info!("resume: loading {track_uri} again at {position_ms} ms");
         let request = match context_uri.filter(|uri| !uri.is_empty()) {
             Some(context) => {
@@ -1308,7 +1350,10 @@ impl NexfyCore {
         };
         self.inner.load(request).await
     }
+}
 
+#[uniffi::export(async_runtime = "tokio")]
+impl NexfyCore {
     /// Toggles from what the player is doing, not what the screen last showed.
     pub async fn play_pause(&self) -> Result<(), CoreError> {
         if self.inner.playing.load(Ordering::Relaxed) {
@@ -1323,6 +1368,14 @@ impl NexfyCore {
             play.skip(true, true);
             return Ok(());
         }
+        // Nothing after this song: Spirc would stop and go back to the
+        // context's first song, which looked like a skip undone.
+        {
+            let queue = self.inner.queue.lock().unwrap();
+            if queue.current.is_some() && queue.next.is_empty() && queue.repeat == RepeatMode::Off {
+                return Err(CoreError::Playback("Nada a seguir na fila".into()));
+            }
+        }
         self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.next())
     }
@@ -1331,14 +1384,6 @@ impl NexfyCore {
         if let Some(play) = self.inner.offline_play() {
             play.skip(false, true);
             return Ok(());
-        }
-        // Nothing after this song: Spirc would stop and go back to the
-        // context's first song, which looked like a skip undone.
-        {
-            let queue = self.inner.queue.lock().unwrap();
-            if queue.current.is_some() && queue.next.is_empty() && queue.repeat == RepeatMode::Off {
-                return Err(CoreError::Playback("Nada a seguir na fila".into()));
-            }
         }
         self.inner.ensure_session().await?;
         self.inner.with_spirc(|spirc| spirc.prev())
@@ -1562,6 +1607,12 @@ impl NexfyCore {
             old.player.stop();
         }
         Ok(count)
+    }
+
+    /// How long since audio last reached the output, in ms (u64::MAX if it
+    /// never has): while the player says it plays, a long gap is silence.
+    pub fn audio_idle_ms(&self) -> u64 {
+        equalizer::audio_idle_ms().unwrap_or(u64::MAX)
     }
 
     /// Whether this phone's player is playing, as its last event said.
@@ -2087,6 +2138,7 @@ impl Inner {
             connected.session = session;
             connected.spirc = spirc;
         }
+        self.orphaned.store(!restored && self.loaded.load(Ordering::Relaxed), Ordering::Relaxed);
         Ok(restored)
     }
 
@@ -2279,8 +2331,12 @@ async fn run_events(inner: Weak<Inner>, mut events: PlayerEventChannel) {
                     CoreEvent::Paused { position_ms }
                 })
             }
-            PlayerEvent::Loading { .. } => inner.emit(CoreEvent::Loading),
+            PlayerEvent::Loading { .. } => {
+                inner.orphaned.store(false, Ordering::Relaxed);
+                inner.emit(CoreEvent::Loading)
+            }
             PlayerEvent::Stopped { .. } => {
+                inner.orphaned.store(false, Ordering::Relaxed);
                 inner.loaded.store(false, Ordering::Relaxed);
                 inner.playing.store(false, Ordering::Relaxed);
                 inner.emit(CoreEvent::Stopped);
