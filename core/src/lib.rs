@@ -1544,11 +1544,11 @@ impl NexfyCore {
         self.inner.web.clear_cache()
     }
 
-    /// How many of these songs are on the phone already.
+    /// How many of these songs are on the phone already. Read from the
+    /// cache alone: with no session (no network, or not yet signed in) a
+    /// kept list showed none of its songs on the phone.
     pub fn cached_count(&self, uris: Vec<String>) -> u32 {
-        self.inner
-            .with_session(|session| self.inner.offline.cached_count(session, &uris))
-            .unwrap_or(0)
+        self.inner.cache().map(|cache| self.inner.offline.cached_count(&cache, &uris)).unwrap_or(0)
     }
 
     /// How many of these songs no file plays for this account (removed, or

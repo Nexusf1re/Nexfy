@@ -159,8 +159,7 @@ impl Offline {
     }
 
     /// How many of `uris` are on the phone, from what is known locally.
-    pub fn cached_count(&self, session: &Session, uris: &[String]) -> u32 {
-        let Some(cache) = session.cache() else { return 0 };
+    pub fn cached_count(&self, cache: &Cache, uris: &[String]) -> u32 {
         uris.iter()
             .filter_map(|uri| self.known_file(uri))
             .filter(|&file| cache.file_path(file).is_some_and(|path| path.exists()))
