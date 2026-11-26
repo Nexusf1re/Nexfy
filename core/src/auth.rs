@@ -47,6 +47,10 @@ pub const WEB_SCOPES: &[&str] = &[
 ];
 
 const REDIRECT_PATH: &str = "/login";
+/// Where ncspot, which owns the shared Web API app, has it redirect now:
+/// Spotify refuses that app's sign-in sent anywhere else ("redirect_uri:
+/// Not matching configuration"). Any loopback port is accepted.
+const SHARED_REDIRECT_PATH: &str = "/ncspot_login";
 const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -60,6 +64,8 @@ pub struct Grant {
     pub client_id: String,
     pub port: u16,
     pub scopes: &'static [&'static str],
+    /// The redirect's path, as the app is registered with Spotify.
+    pub path: &'static str,
 }
 
 impl Grant {
@@ -68,6 +74,7 @@ impl Grant {
             client_id: PLAYBACK_CLIENT_ID.to_owned(),
             port: PLAYBACK_REDIRECT_PORT,
             scopes: PLAYBACK_SCOPES,
+            path: REDIRECT_PATH,
         }
     }
 
@@ -76,11 +83,12 @@ impl Grant {
             client_id: client_id.to_owned(),
             port: WEB_REDIRECT_PORT,
             scopes: WEB_SCOPES,
+            path: if client_id == SHARED_WEB_CLIENT_ID { SHARED_REDIRECT_PATH } else { REDIRECT_PATH },
         }
     }
 
     fn redirect_uri(&self) -> String {
-        format!("http://127.0.0.1:{}{REDIRECT_PATH}", self.port)
+        format!("http://127.0.0.1:{}{}", self.port, self.path)
     }
 }
 
@@ -89,6 +97,8 @@ pub struct Flow {
     pub url: String,
     verifier: String,
     state: String,
+    /// The path the redirect comes back on.
+    path: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,7 +131,7 @@ pub fn begin(grant: &Grant) -> Flow {
         urlencoding::encode(&grant.redirect_uri()),
         urlencoding::encode(&grant.scopes.join(" ")),
     );
-    Flow { url, verifier, state }
+    Flow { url, verifier, state, path: grant.path }
 }
 
 /// Bind the callback port before the browser opens, so a busy port fails
@@ -139,7 +149,7 @@ pub async fn wait_for_code(listener: TcpListener, flow: &Flow) -> Result<String>
     tokio::time::timeout(LOGIN_TIMEOUT, async {
         loop {
             let (stream, _) = listener.accept().await?;
-            match answer_redirect(stream, &flow.state).await {
+            match answer_redirect(stream, &flow.state, flow.path).await {
                 Ok(code) => return Ok(code),
                 // A favicon request or a stale tab is not the redirect.
                 Err(error) => log::debug!("ignored request on redirect listener: {error}"),
@@ -150,7 +160,7 @@ pub async fn wait_for_code(listener: TcpListener, flow: &Flow) -> Result<String>
     .map_err(|_| anyhow!("tempo esgotado esperando o login"))?
 }
 
-async fn answer_redirect(mut stream: tokio::net::TcpStream, expected_state: &str) -> Result<String> {
+async fn answer_redirect(mut stream: tokio::net::TcpStream, expected_state: &str, expected_path: &str) -> Result<String> {
     let mut request_line = String::new();
     BufReader::new(&mut stream).read_line(&mut request_line).await?;
     let target = request_line
@@ -158,7 +168,7 @@ async fn answer_redirect(mut stream: tokio::net::TcpStream, expected_state: &str
         .nth(1)
         .ok_or_else(|| anyhow!("malformed request"))?;
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path != REDIRECT_PATH {
+    if path != expected_path {
         bail!("unexpected path {path}");
     }
 
